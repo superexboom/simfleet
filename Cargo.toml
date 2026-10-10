@@ -1,0 +1,42 @@
+[package]
+name = "simfleet"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+authors = ["superexboom"]
+repository = "https://github.com/superexboom/simfleet"
+readme = "README.md"
+description = "A small volunteer compute client for WFSim's board orders and riven gains — runs the engine wfsim.app serves, outside the browser. Unofficial; based on WFSim."
+
+[dependencies]
+anyhow = "1"
+crossterm = "0.29"
+getrandom = "0.3"
+libloading = "0.8"
+rpassword = "7"
+serde = { version = "1", features = ["derive"] }
+# `float_roundtrip`: a number read back is the number that was written (the
+# engine's own requirement, WFSim Cargo.toml). `preserve_order`: an object keeps
+# the key order the engine wrote, as a browser's JSON.parse does.
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
+sha2 = "0.10"
+toml = "0.9"
+unicode-width = "0.2"
+ureq = { version = "3", features = ["gzip"] }
+wasmtime = { version = "49", default-features = false, features = ["cranelift", "runtime", "gc", "gc-drc", "std"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_System_Power",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
+opt-level = "s"

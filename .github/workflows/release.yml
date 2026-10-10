@@ -1,0 +1,38 @@
+# A tag v* builds simfleet.exe from this source on GitHub's Windows runner and
+# attaches the zip to that tag's release. The native engine is never included
+# (NOTICE.md).
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --release --locked
+      - run: powershell -ExecutionPolicy Bypass -File tools/package.ps1
+      - name: Publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          sha=$(sha256sum dist/*.zip | cut -d' ' -f1)
+          cat > notes.md <<NOTES
+          simfleet ${tag} — WFSim 志愿计算客户端（Windows x64，单文件，无需安装 Rust 或运行库）。
+
+          - 解压后双击 \`simfleet.exe\`，第一次运行会询问是否同意计算和核心预算。
+          - 引擎在运行时从 wfsim.app 下载（WFSim 官方发布的 wasm），网站更新后自动跟上。
+          - 原生引擎不随发布分发，需要的话用 \`tools/build-native-engine.ps1\` 自行编译。
+
+          源码：https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_SHA}（AGPL-3.0-or-later）
+          基于 WFSim（https://github.com/magenie33/wfsim ，AGPL-3.0-or-later），非官方项目，与 WFSim、Digital Extremes 无关联。署名与第三方许可见压缩包内 NOTICE.md 与 THIRD-PARTY-LICENSES.md。
+
+          SHA-256: \`${sha}\`
+          NOTES
+          sed -i 's/^          //' notes.md
+          gh release create "$tag" dist/*.zip --title "simfleet $tag" --notes-file notes.md

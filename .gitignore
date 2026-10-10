@@ -1,0 +1,9 @@
+/target
+/.bench-*
+/.wfsim-src
+/cache
+/engines
+simfleet.toml
+/.devrun
+/dist
+/native-engine/Cargo.lock

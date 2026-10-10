@@ -1,0 +1,28 @@
+# Third-party licences
+
+simfleet.exe contains the following open-source crates. Each is listed with the
+licence it is used under and that licence's full text, as those licences require
+for a binary distribution. (simfleet itself is AGPL-3.0-or-later; see LICENSE.)
+
+## Overview
+
+{{#each overview}}
+- **{{{name}}}** ({{count}} {{#if (eq count 1)}}crate{{else}}crates{{/if}})
+{{/each}}
+
+{{#each licenses}}
+---
+
+## {{{name}}}
+
+Used by:
+
+{{#each used_by}}
+- [{{{crate.name}}} {{{crate.version}}}]({{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}})
+{{/each}}
+
+```
+{{{text}}}
+```
+
+{{/each}}

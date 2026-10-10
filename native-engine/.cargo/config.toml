@@ -1,0 +1,4 @@
+# The C runtime linked in, so simfleet.exe runs on a Windows without the
+# Visual C++ redistributable.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

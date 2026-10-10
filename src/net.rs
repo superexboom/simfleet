@@ -1,0 +1,112 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//! The site's endpoints, over one keep-alive agent. Every answer is read the
+//! way a browser holds it (`jsnum::parse`), since what the server hands out is
+//! fed to the engine.
+
+use anyhow::{anyhow, bail, Result};
+use serde_json::Value;
+use std::io::Read;
+use std::time::Duration;
+
+pub const USER_AGENT: &str = concat!("simfleet/", env!("CARGO_PKG_VERSION"), " (volunteer compute client for wfsim.app)");
+
+#[derive(Clone)]
+pub struct Net {
+    agent: ureq::Agent,
+    pub base: String,
+    pub session: Option<String>,
+}
+
+pub struct Reply {
+    pub status: u16,
+    pub body: Value,
+    pub set_cookies: Vec<String>,
+}
+
+impl Net {
+    pub fn new(base: &str, session: Option<String>) -> Net {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(30)))
+            .http_status_as_error(false)
+            .user_agent(USER_AGENT)
+            .build()
+            .into();
+        Net { agent, base: base.trim_end_matches('/').to_string(), session: session.filter(|s| !s.is_empty()) }
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}{}", self.base, path)
+    }
+
+    /// POST JSON; `Err` only when the network failed or the answer was not JSON.
+    pub fn post(&self, path: &str, body: &Value) -> Result<Reply> {
+        let mut req = self.agent.post(&self.url(path)).header("Content-Type", "application/json");
+        if let Some(s) = &self.session {
+            req = req.header("Cookie", &format!("wfsim_session={s}"));
+        }
+        let mut resp = req.send(body.to_string())?;
+        Self::reply(&mut resp)
+    }
+
+    pub fn get(&self, path: &str) -> Result<Reply> {
+        let mut req = self.agent.get(&self.url(path)).header("Cache-Control", "no-store");
+        if let Some(s) = &self.session {
+            req = req.header("Cookie", &format!("wfsim_session={s}"));
+        }
+        let mut resp = req.call()?;
+        Self::reply(&mut resp)
+    }
+
+    fn reply(resp: &mut ureq::http::Response<ureq::Body>) -> Result<Reply> {
+        let status = resp.status().as_u16();
+        let set_cookies = resp
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|v| v.to_str().ok().map(String::from))
+            .collect();
+        let text = resp.body_mut().with_config().limit(16 << 20).read_to_string()?;
+        let body = crate::jsnum::parse(&text).map_err(|e| anyhow!("HTTP {status}: not JSON ({e})"))?;
+        Ok(Reply { status, body, set_cookies })
+    }
+
+    /// POST and take the body of an `ok` answer; `None` for anything else, the
+    /// way the page's `postBoardWork` reads a failure.
+    pub fn post_ok(&self, path: &str, body: &Value) -> Option<Value> {
+        match self.post(path, body) {
+            Ok(r) if (200..300).contains(&r.status) => Some(r.body),
+            _ => None,
+        }
+    }
+
+    /// A file, read whole, with `progress(got, total)` as it arrives.
+    pub fn download(&self, path: &str, mut progress: impl FnMut(u64, u64)) -> Result<Vec<u8>> {
+        let mut resp = self
+            .agent
+            .get(&self.url(path))
+            .config()
+            .timeout_global(Some(Duration::from_secs(600)))
+            .build()
+            .call()?;
+        if resp.status().as_u16() != 200 {
+            bail!("GET {path}: HTTP {}", resp.status().as_u16());
+        }
+        let total = resp
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok()?.parse::<u64>().ok())
+            .unwrap_or(0);
+        let mut out = Vec::with_capacity(total as usize);
+        let mut reader = resp.body_mut().with_config().limit(256 << 20).reader();
+        let mut buf = vec![0u8; 64 << 10];
+        loop {
+            let n = reader.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            out.extend_from_slice(&buf[..n]);
+            progress(out.len() as u64, total);
+        }
+        Ok(out)
+    }
+}

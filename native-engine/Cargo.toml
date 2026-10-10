@@ -1,0 +1,21 @@
+# The WFSim engine built natively, as a library simfleet loads for board
+# orders. Built by tools/build-native-engine.ps1 against a WFSim checkout in
+# ../.wfsim-src whose engine id matches the one wfsim.app serves.
+[package]
+name = "simfleet-native-engine"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wfsim-webapi = { path = "../.wfsim-src/webapi" }
+serde_json = { version = "1", features = ["raw_value", "float_roundtrip"] }
+
+[profile.release]
+codegen-units = 1
+strip = true
+
+[workspace]
