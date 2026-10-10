@@ -309,12 +309,14 @@ pub struct Pool {
     done_tx: mpsc::Sender<Done>,
     done_rx: mpsc::Receiver<Done>,
     tag: u64,
+    /// Engine time the lanes have spent, all of it (the utilisation meter).
+    pub busy_ms: f64,
 }
 
 impl Pool {
     pub fn new(code: Arc<Code>) -> Pool {
         let (done_tx, done_rx) = mpsc::channel();
-        Pool { code, lanes: Vec::new(), pending: Vec::new(), done_tx, done_rx, tag: 0 }
+        Pool { code, lanes: Vec::new(), pending: Vec::new(), done_tx, done_rx, tag: 0, busy_ms: 0.0 }
     }
     pub fn code(&self) -> &Arc<Code> {
         &self.code
@@ -372,6 +374,7 @@ impl Pool {
     }
     pub fn recv(&mut self, wait: Duration) -> Option<Done> {
         let d = self.done_rx.recv_timeout(wait).ok()?;
+        self.busy_ms += d.ms;
         if let Some(p) = self.pending.get_mut(d.lane) {
             *p = p.saturating_sub(1);
         }

@@ -13,6 +13,7 @@
 mod account;
 mod config;
 mod engine;
+mod fleet;
 mod jsnum;
 mod net;
 mod sys;
@@ -121,22 +122,42 @@ fn default_idle(cores: usize) -> usize {
 
 /// FIRST RUN: the statement, the budget, and an optional sign-in. Nothing is
 /// computed without the yes, and the yes is what every ask for work carries.
-fn wizard(paths: &Paths, old: Option<Config>) -> Result<Option<Config>> {
+/// THE STATEMENT, number `config::CONSENT_V`: WFSim's own (73-compute.js
+/// `computeAskHtml`, statement 3) said of this program instead of a page — what
+/// it computes, how a result counts, what it takes and costs the machine, and
+/// that it is voluntary and unpaid.
+fn statement(idle_cores: usize, cores: usize) -> String {
+    format!(
+        "开启后，这台电脑会和其他志愿者一起，为所有玩家运行 WFSim 的模拟和优化任务（排行榜分数、紫卡增益）。\n\
+         只有两位志愿者分别算出完全相同的答案，结果才算数，你的电脑就是其中之一。\n\n\
+         只在 simfleet 运行时计算。离开电脑时用的核心数默认约 30%，现在设为本机 {cores} 个里的 {idle_cores} 个；\n\
+         你在用电脑时留 1 个核心，进程以最低优先级运行；这些都可以在下一步或 simfleet.toml 里改。\n\
+         用电池时暂停（可在 simfleet.toml 里改）。运行时电脑耗电更多、温度更高；按 P 暂停，按 Q 退出。\n\n\
+         这是自愿贡献：算出的一切对所有玩家免费，WFSim 不靠它赚钱，你也没有报酬。\n\
+         贡献记在本机；登录后可以记到你的账号名下，是否在贡献者排行榜上显示名字由你决定。\n"
+    )
+}
+
+/// `full`: the budget questions too. A yes given to an older statement is
+/// asked again alone, keeping the budget and the sign-in.
+fn wizard(paths: &Paths, old: Option<Config>, full: bool) -> Result<Option<Config>> {
     let cores = sys::cores();
+    let renewing = old.as_ref().is_some_and(|c| !c.consent_at.is_empty() && !c.consented());
     let mut c = old.unwrap_or_else(|| Config::fresh(default_idle(cores)));
     println!("\n{C_OK}simfleet{C_END} — WFSim 志愿计算客户端（非官方，基于 WFSim 引擎）\n");
-    println!("这台电脑会为 wfsim.app 计算排行榜分数和紫卡增益，结果免费给所有人用：");
-    println!("  · 只在 simfleet 运行时计算，进程以最低优先级运行，不和你抢 CPU；");
-    println!("  · 你在用电脑时只占 1 个核心（可设为暂停），离开一分钟后最多占你设定的核心数；");
-    println!("  · 用电池时暂停；运行中按 P 暂停、按 Q 退出；");
-    println!("  · 计算结果不出售，你也不会得到报酬；贡献记在本机，登录后记到你的账号名下。");
-    println!("  · 每份结果都要另一台不同主人、不同网络的电脑算出同样的数才算数，服务器还会抽查。\n");
-    if !yes("同意并开启计算吗？[Y/n] ", true) {
+    if renewing {
+        println!("{C_INFO}同意书有更新（第 {} 版），请再确认一次；你的预算和登录都不变。{C_END}\n", config::CONSENT_V);
+    }
+    print!("{}", statement(c.idle_cores, cores));
+    if !yes("\n加入计算吗？[Y/n] ", true) {
         println!("好的，没有开启。随时运行 simfleet 再来。");
         return Ok(None);
     }
-    if c.consent_at.is_empty() {
-        c.consent_at = sys::iso(sys::now_ms());
+    c.consent_at = sys::iso(sys::now_ms());
+    c.consent_v = config::CONSENT_V;
+    if renewing && !full {
+        paths.save(&c)?;
+        return Ok(Some(c));
     }
     let a = ask(&format!(
         "\n离开电脑时用几个核心？本机 {cores} 个逻辑核心，回车 = {}（30%）。可填数字或百分比（如 8 或 50%）：",
@@ -216,7 +237,7 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<(
     ));
     let painter = ui.clone().run(ctl.clone());
     let started = Instant::now();
-    let result = (|| -> Result<work::Fleet> {
+    let result = (|| -> Result<fleet::Fleet> {
         let rel = loop {
             match work::fetch_release(&net) {
                 Ok(r) => break r,
@@ -233,15 +254,20 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<(
         };
         ui.log(format!("{C_INFO}[引擎]{C_END} 网站引擎 {} · wasm {}", rel.engine, rel.wasm));
         let code = work::load_code(&net, &paths, &cfg, &ui, &rel)?;
-        Ok(work::Fleet::new(net.clone(), cfg.clone(), paths_clone(&paths), ctl.clone(), ui.clone(), rel, code))
+        Ok(fleet::Fleet::new(net.clone(), cfg.clone(), paths_clone(&paths), ctl.clone(), ui.clone(), rel, code))
     })();
     let mut summary = None;
     match result {
         Ok(mut fleet) => {
             fleet.run();
+            if let Some(u) = fleet.utilisation_summary() {
+                ui.log(u);
+            }
             if fleet.session_dropped {
                 cfg.account = Default::default();
             }
+            // The ids groups were opened with, so the next run keeps them.
+            cfg.extra_verifiers = fleet.cfg.extra_verifiers.clone();
             summary = Some(ui.snapshot());
         }
         Err(e) if e.to_string() == "quit" => {}
@@ -260,6 +286,9 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<(
             s.session_tasks,
             ui::points(s.session_work)
         );
+        if let Some(u) = s.utilisation_total {
+            println!("本次核心利用率 {:.0}%（引擎实际计算时间 ÷ 预算允许的核心时间）。", u * 100.0);
+        }
     }
     Ok(())
 }
@@ -270,11 +299,13 @@ fn paths_clone(p: &Paths) -> Paths {
 
 fn status(cfg: &Config) -> Result<()> {
     let net = net::Net::new(&cfg.server, Some(cfg.account.session.clone()));
-    let p = net.post("/api/board/points", &serde_json::json!({ "verifier": cfg.verifier, "since": sys::local_midnight_utc_hour() }))?;
-    println!("本机 id {}…", &cfg.verifier[..6]);
-    println!("  未归属账号的点数 {} · 近 30 天 {} · 近 7 天 {} · 已绑定账号: {}", p.body["points"], p.body["recent"], p.body["week"], p.body["claimed"]);
-    if let Some(t) = p.body.get("today") {
-        println!("  今天 {} 个任务 · {} 分", t["tasks"], t["points"]);
+    for (i, v) in std::iter::once(&cfg.verifier).chain(&cfg.extra_verifiers).enumerate() {
+        let p = net.post("/api/board/points", &serde_json::json!({ "verifier": v, "since": sys::local_midnight_utc_hour() }))?;
+        println!("第 {} 路 · 本机 id {}…", i + 1, &v[..6]);
+        println!("  未归属账号的点数 {} · 近 30 天 {} · 近 7 天 {} · 已绑定账号: {}", p.body["points"], p.body["recent"], p.body["week"], p.body["claimed"]);
+        if let Some(t) = p.body.get("today") {
+            println!("  今天 {} 个任务 · {} 分", t["tasks"], t["points"]);
+        }
     }
     if net.session.is_some() {
         match account::devices(&net) {
@@ -503,12 +534,12 @@ fn main() {
                 }
             }
             "setup" => {
-                wizard(&paths, paths.load()?)?;
+                wizard(&paths, paths.load()?, true)?;
             }
             "login" => {
                 let mut c = match paths.load()? {
                     Some(c) => c,
-                    None => match wizard(&paths, None)? {
+                    None => match wizard(&paths, None, true)? {
                         Some(c) => c,
                         None => return Ok(()),
                     },
@@ -550,7 +581,7 @@ fn main() {
                     active_cores: AtomicUsize::new(lanes),
                     max_cores: lanes,
                 });
-                let mut f = work::Fleet::new(net, cfg, paths_clone(&paths), ctl, ui, rel, code);
+                let mut f = fleet::Fleet::new(net, cfg, paths_clone(&paths), ctl, ui, rel, code);
                 f.replay(&w)?;
             }
             "check-native" => check_native(&paths, flag("--engine"), flag("--wasm"), flag("--boards"))?,
@@ -561,7 +592,7 @@ fn main() {
             "run" => {
                 let cfg = match paths.load()? {
                     Some(c) if c.consented() => c,
-                    other => match wizard(&paths, other)? {
+                    other => match wizard(&paths, other, false)? {
                         Some(c) => c,
                         None => return Ok(()),
                     },

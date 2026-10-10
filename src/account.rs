@@ -51,7 +51,14 @@ pub fn display_name(acct: &Value) -> String {
 
 /// Join this machine's computer id to the signed-in account.
 pub fn claim(net: &Net, verifier: &str) -> Result<()> {
-    let label: String = format!("simfleet · {}", crate::sys::hostname()).chars().take(40).collect();
+    claim_as(net, verifier, 0)
+}
+
+/// …the `group`-th of this machine's ids, named so the account's device list
+/// tells them apart ("simfleet · HOST #2").
+pub fn claim_as(net: &Net, verifier: &str, group: usize) -> Result<()> {
+    let n = if group > 0 { format!(" #{}", group + 1) } else { String::new() };
+    let label: String = format!("simfleet · {}{n}", crate::sys::hostname()).chars().take(40).collect();
     let r = net.post("/api/account/devices/claim", &json!({ "verifier": verifier, "label": label }))?;
     if r.status != 200 || r.body["ok"] != json!(true) {
         bail!("绑定设备失败（HTTP {} {}）", r.status, r.body["error"].as_str().unwrap_or(""));

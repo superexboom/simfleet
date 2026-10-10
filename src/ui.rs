@@ -23,6 +23,16 @@ pub struct Ctl {
     pub max_cores: usize,
 }
 
+/// One held task, as the bottom line shows it.
+#[derive(Default, Clone)]
+pub struct TaskLine {
+    pub label: String,
+    pub done: u64,
+    /// 0 for a task whose length is not known ahead (a search).
+    pub total: u64,
+    pub extra: String,
+}
+
 #[derive(Default, Clone)]
 pub struct Status {
     /// "计算中", "等待任务", "已暂停：…"
@@ -41,11 +51,12 @@ pub struct Status {
     pub account_points: Option<u64>,
     pub contributor_rank: Option<u64>,
     pub computing_now: Option<u64>,
-    pub task: String,
-    pub done: u64,
-    pub total: u64,
-    /// For a task with no known length: what it has done so far.
-    pub extra: String,
+    /// Busy lane time over the budget's lane time, last five minutes / session.
+    pub utilisation: Option<f64>,
+    pub utilisation_total: Option<f64>,
+    pub tasks: Vec<TaskLine>,
+    /// Computer ids taking work now.
+    pub groups: usize,
     pub note: String,
 }
 
@@ -190,19 +201,36 @@ impl Ui {
         if let Some(c) = s.computing_now {
             a += &format!(" · 全站在线 {c}");
         }
+        if let Some(u) = s.utilisation {
+            a += &format!(" · 利用率 {:.0}%", u * 100.0);
+        }
         a += &format!(" · {} {}", s.backend, s.engine.get(..8).unwrap_or(&s.engine));
+        if s.groups > 1 {
+            a += &format!(" · {} 路并行", s.groups);
+        }
         let mut b = String::from(" ");
-        if !s.task.is_empty() && s.total == 0 {
-            b += &format!("{}  已打 {} 场 · 试了 {}   ", s.task, group(s.done), if s.extra.is_empty() { "0 个构筑" } else { &s.extra });
-        } else if !s.task.is_empty() {
-            let bar = 20usize;
-            let frac = if s.total > 0 { (s.done as f64 / s.total as f64).clamp(0.0, 1.0) } else { 0.0 };
-            let fill = (frac * bar as f64).round() as usize;
-            b += &format!("{}  [{}{}] {:>3.0}%", s.task, "#".repeat(fill), "-".repeat(bar - fill), frac * 100.0);
-            if s.total > 0 {
-                b += &format!(" ({}/{})", s.done, s.total);
+        // ONE TASK in full; several, one short cell each.
+        match s.tasks.as_slice() {
+            [] => {}
+            [t] if t.total == 0 => {
+                b += &format!("{}  已打 {} 场 · 试了 {}   ", t.label, group(t.done), if t.extra.is_empty() { "0 个构筑" } else { &t.extra });
             }
-            b += "   ";
+            [t] => {
+                let bar = 20usize;
+                let frac = (t.done as f64 / t.total as f64).clamp(0.0, 1.0);
+                let fill = (frac * bar as f64).round() as usize;
+                b += &format!("{}  [{}{}] {:>3.0}% ({}/{})   ", t.label, "#".repeat(fill), "-".repeat(bar - fill), frac * 100.0, t.done, t.total);
+            }
+            many => {
+                for t in many {
+                    if t.total == 0 {
+                        b += &format!("{} {}场 | ", t.label, group(t.done));
+                    } else {
+                        b += &format!("{} {:.0}% | ", t.label, 100.0 * t.done as f64 / t.total as f64);
+                    }
+                }
+                b += "  ";
+            }
         }
         if !s.note.is_empty() {
             b += &format!("{}{}{}   ", C_INFO, s.note, C_END);

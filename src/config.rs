@@ -10,7 +10,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const CONSENT_V: u32 = 2;
+/// The statement this client asks agreement to (main.rs `STATEMENT`), numbered
+/// as WFSim numbers its own (69-board-work.js `COMPUTE_CONSENT_V`): a new one is
+/// asked again, and what was agreed travels with every ask for work.
+pub const CONSENT_V: u32 = 3;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
@@ -19,8 +22,11 @@ pub struct Config {
     /// THIS MACHINE'S COMPUTER ID — what a browser keeps as `wfsim-verifier`.
     /// Its points belong to whoever holds it, so keep it to yourself.
     pub verifier: String,
-    /// When you agreed to compute (ISO 8601); sent with every ask for work.
+    /// When you agreed to compute (ISO 8601), and to which statement; both are
+    /// sent with every ask for work.
     pub consent_at: String,
+    #[serde(default = "consent_v_before_numbering")]
+    pub consent_v: u32,
     /// Cores used while you are away from the computer.
     pub idle_cores: usize,
     /// Cores used while you are using it; 0 pauses computing then.
@@ -37,6 +43,14 @@ pub struct Config {
     /// none (`<url>/engine-<id>/<id>.dll`); "" never downloads one.
     #[serde(default = "default_native_url")]
     pub native_engine_url: String,
+    /// Computer ids run at once (each one holds a task and one asked ahead),
+    /// as players open several browsers; 0 lets simfleet open as many as keep
+    /// the cores busy, up to a quarter of them.
+    #[serde(default)]
+    pub slots: usize,
+    /// The ids beyond `verifier`, made as groups open. Keep them to yourself too.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_verifiers: Vec<String>,
     #[serde(default)]
     pub account: Account,
 }
@@ -50,6 +64,11 @@ pub struct Account {
     pub name: String,
 }
 
+/// A config written before the field existed was agreed under statement 2.
+fn consent_v_before_numbering() -> u32 {
+    2
+}
+
 pub const NATIVE_URL: &str = "https://github.com/superexboom/simfleet/releases/download";
 fn default_native_url() -> String {
     NATIVE_URL.into()
@@ -61,6 +80,7 @@ impl Config {
             server: "https://wfsim.app".into(),
             verifier: crate::sys::random_hex(12),
             consent_at: String::new(),
+            consent_v: CONSENT_V,
             idle_cores,
             active_cores: 1,
             idle_after_secs: 60,
@@ -68,11 +88,14 @@ impl Config {
             priority: "idle".into(),
             native_engine: true,
             native_engine_url: NATIVE_URL.into(),
+            slots: 0,
+            extra_verifiers: Vec::new(),
             account: Account::default(),
         }
     }
+    /// Agreed to the CURRENT statement; an older yes is asked again.
     pub fn consented(&self) -> bool {
-        !self.consent_at.is_empty()
+        !self.consent_at.is_empty() && self.consent_v == CONSENT_V
     }
 }
 
