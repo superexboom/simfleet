@@ -35,7 +35,7 @@ use crate::engine::{Backend, Call, Code, Done, Exec, Job, Pool};
 use crate::net::Net;
 use crate::ui::{group, points, Ctl, TaskLine, Ui, C_BAD, C_END, C_GO, C_INFO, C_OK};
 use crate::work::{
-    board_payload, call, fetch_native, fetch_release, load_code, native_lib_name, truthy, Release, RowScore, LEASE_SAFE,
+    board_payload, call, fetch_release, load_code, truthy, Release, RowScore, LEASE_SAFE,
     PIECE_MS, PROTOCOL, RIVEN_RENEW, STATS_EVERY,
 };
 use crate::{account, jsnum, sys};
@@ -999,10 +999,7 @@ impl Fleet {
             return;
         }
         self.native_checked = Instant::now();
-        let lib = self.paths.engines.join(native_lib_name(&self.rel.engine));
-        if !lib.exists() && !fetch_native(&self.net, &self.cfg, &self.ui, &self.rel, &lib) {
-            return;
-        }
+        // `load_code` fetches whichever native build is published by now.
         if let Ok(code) = load_code(&self.net, &self.paths, &self.cfg, &self.ui, &self.rel) {
             if code.native.is_some() {
                 self.swap_code(code);

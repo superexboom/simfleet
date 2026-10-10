@@ -11,7 +11,9 @@
 # equals the served one, optionally blanks Digital Extremes' card text
 # (tools/strip_card_text.py, required before a build is published), builds
 # native-engine/ against it, and writes engines\<engine id>.dll next to
-# simfleet.exe. simfleet checks it against the wasm before it uses it;
+# simfleet.exe (with -Cpu x86-64-v3: engines\<engine id>-v3.dll, the AVX2
+# build simfleet prefers on CPUs that have it). simfleet checks it against the
+# wasm before it uses it;
 # `simfleet check-native` checks it on 32 real board rows.
 param(
     [string]$Server = "https://wfsim.app",
@@ -21,7 +23,9 @@ param(
     # A WFSim commit already known to carry the engine (the workflow's check).
     [string]$Commit = "",
     # The engine id to build, instead of asking wfsim.app (the workflow cannot).
-    [string]$Engine = ""
+    [string]$Engine = "",
+    # A CPU level to build for (x86-64-v3); the file is named for it (-v3).
+    [string]$Cpu = ""
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -64,10 +68,16 @@ if ($Strip) {
 }
 $env:SFE_ENGINE_ID = $want
 $env:CARGO_TARGET_DIR = Join-Path $root "target\native-engine"
+$suffix = ""
+if ($Cpu) {
+    $suffix = if ($Cpu -match '^x86-64-(v\d)$') { "-" + $Matches[1] } else { "-$Cpu" }
+    $env:RUSTFLAGS = "-C target-cpu=$Cpu"
+    $env:CARGO_TARGET_DIR += "-$Cpu"
+}
 Copy-Item (Join-Path $src "Cargo.lock") (Join-Path $root "native-engine\Cargo.lock") -Force
 cargo build --release --manifest-path (Join-Path $root "native-engine\Cargo.toml")
 if ($LASTEXITCODE -ne 0) { exit 1 }
 New-Item -ItemType Directory -Force $Out | Out-Null
-Copy-Item (Join-Path $env:CARGO_TARGET_DIR "release\simfleet_native_engine.dll") (Join-Path $Out "$want.dll") -Force
+Copy-Item (Join-Path $env:CARGO_TARGET_DIR "release\simfleet_native_engine.dll") (Join-Path $Out "$want$suffix.dll") -Force
 "$found" | Set-Content -Encoding ascii (Join-Path $Out "$want.commit")
-Write-Host "done: $Out\$want.dll"
+Write-Host "done: $Out\$want$suffix.dll"

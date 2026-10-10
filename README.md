@@ -118,16 +118,27 @@ simfleet 因此有两个引擎：
 不用自己编译。本仓库的 [native-engine](.github/workflows/native-engine.yml) Action 每 30 分钟计算一次 WFSim `main` 分支的引擎号（wfsim.app 对 GitHub 的服务器会弹出人机验证，所以 Action 完全不访问网站；网站发布的引擎号就是它所用源码的哈希）。遇到还没发布过的引擎号，它会在那次提交上，用 WFSim 自己锁定的 Rust 和 wasm-bindgen 版本：
 
 1. 照 WFSim 的做法编译出 wasm，作为比对的参照；
-2. **把 Digital Extremes 的卡牌文本清空**（`tools/strip_card_text.py`）后编译原生引擎。WFSim 对这部分文本没有授权（见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)），所以发布的版本里不含它；引擎只拿这些文本做显示，不影响任何分数；
-3. 在 WFSim 仓库里提交的榜单快照上取 32 条真实榜单（4 把武器 × 4 把尺子 × 2 种模式），和参照 wasm **逐位比对**（`simfleet check-native`），全部一致才发布；
+2. **把 Digital Extremes 的卡牌文本清空**（`tools/strip_card_text.py`）后编译原生引擎，编两份：`<引擎号>.dll`（任何 x86-64 都能跑）和 `<引擎号>-v3.dll`（x86-64-v3，即 AVX2、FMA、BMI2 这一代指令，2013 年以后的 CPU 基本都有）。WFSim 对这部分文本没有授权（见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)），所以发布的版本里不含它；引擎只拿这些文本做显示，不影响任何分数；
+3. 在 WFSim 仓库里提交的榜单快照上取 32 条真实榜单（4 把武器 × 4 把尺子 × 2 种模式），两份都和参照 wasm **逐位比对**（`simfleet check-native`），全部一致才发布；
 4. 发布为 Release `engine-<引擎号>`，附 sha256，说明里写明对应的 WFSim 提交、simfleet 提交和构建记录。
 
 simfleet 只用网站**实际发布**的引擎号：启动时在 `engines\` 里找对应的 dll，没有就去 Release 下载，校验 sha256，再在金丝雀榜单上和**网站自己的 wasm** 比对一次，一致才用；运行中用 wasm 时每 30 分钟再看一次有没有发布出来。不想用原生引擎，把 `simfleet.toml` 里的 `native_engine` 设为 `false`；只想用自己编译的，把 `native_engine_url` 设为 `""`。
 
+**按 CPU 选版本**：CPU 支持 AVX2 那一代指令时用 `-v3` 版，否则用通用版；`-v3` 不可用或比对不一致时自动退回通用版。两份算出的结果逐位相同（Rust 不会擅自合并乘加、也不会调换求和顺序）。在 Ryzen 7 9700X 上实测 Braton 榜单（1000 次模拟）：
+
+| 编译目标 | 1 核 | 2 核 |
+|---|---|---|
+| 通用 x86-64 | 4.99 s | 2.60 s |
+| **x86-64-v3（AVX2）** | **4.47 s（快约 11%）** | **2.34 s** |
+| x86-64-v4（AVX-512） | 4.56 s | 2.28 s |
+| znver5（只针对这颗 CPU） | 4.46 s | 2.34 s |
+
+AVX-512 没有额外收益：引擎是一场场按事件推进的战斗模拟，分支多、几乎没有能成批向量化的数值循环，提速来自更新的标量指令，AVX2 那一代就已经有了。同理也不适合 GPU：GPU 的超越函数与 CPU 不逐位一致，而 WFSim 要求两台不同机器的结果逐位相同才算数。想强制用某一版，设环境变量 `SIMFLEET_CPU=baseline` 或 `SIMFLEET_CPU=v3`。
+
 自己编译（要 git、Rust，`-Strip` 还要 Python）：
 
 ```
-powershell -ExecutionPolicy Bypass -File toolsuild-native-engine.ps1 [-Strip]
+powershell -ExecutionPolicy Bypass -File tools\build-native-engine.ps1 [-Strip] [-Cpu x86-64-v3]
 simfleet check-native          # 和网站的 wasm 比对 32 条网站上的榜单
 ```
 

@@ -53,14 +53,44 @@ pub fn fetch_release(net: &Net) -> Result<Release> {
     Ok(rel)
 }
 
-pub fn native_lib_name(engine: &str) -> String {
+/// `variant` is "" for the baseline build, or a CPU level ("-v3").
+pub fn native_lib_name(engine: &str, variant: &str) -> String {
     if cfg!(windows) {
-        format!("{engine}.dll")
+        format!("{engine}{variant}.dll")
     } else if cfg!(target_os = "macos") {
-        format!("lib{engine}.dylib")
+        format!("lib{engine}{variant}.dylib")
     } else {
-        format!("lib{engine}.so")
+        format!("lib{engine}{variant}.so")
     }
+}
+
+/// THE NATIVE BUILDS THIS CPU CAN RUN, best first: `-v3` (x86-64-v3 — AVX2,
+/// FMA, BMI2, … — about 10% faster on board rows, the same bits; AVX-512 adds
+/// nothing measurable) and the baseline, which runs on any x86-64.
+/// `SIMFLEET_CPU=baseline` keeps to the baseline, `SIMFLEET_CPU=v3` to `-v3`.
+pub fn native_variants() -> Vec<&'static str> {
+    let v3 = cpu_v3();
+    match std::env::var("SIMFLEET_CPU").unwrap_or_default().as_str() {
+        "baseline" => vec![""],
+        "v3" => if v3 { vec!["-v3"] } else { vec![] },
+        _ if v3 => vec!["-v3", ""],
+        _ => vec![""],
+    }
+}
+
+fn variant_label(variant: &str) -> &'static str {
+    if variant == "-v3" { "（AVX2 版）" } else { "" }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn cpu_v3() -> bool {
+    use std::arch::is_x86_feature_detected as has;
+    has!("avx2") && has!("fma") && has!("bmi1") && has!("bmi2") && has!("lzcnt") && has!("movbe") && has!("f16c")
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn cpu_v3() -> bool {
+    false
 }
 
 /// THE ENGINE THE SITE SERVES, ready to run: its wasm (downloaded once,
@@ -120,11 +150,12 @@ pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release
         }
     }
     let mut code = Code { wasm, native: None };
-    let lib = paths.engines.join(native_lib_name(&rel.engine));
-    if cfg.native_engine && !lib.exists() && !cfg.native_engine_url.is_empty() {
-        fetch_native(net, cfg, ui, rel, &lib);
-    }
-    if cfg.native_engine && lib.exists() {
+    // The best build this CPU runs that is here (or published) and passes.
+    for variant in if cfg.native_engine { native_variants() } else { vec![] } {
+        let lib = paths.engines.join(native_lib_name(&rel.engine, variant));
+        if !lib.exists() && (cfg.native_engine_url.is_empty() || !fetch_native(net, cfg, ui, rel, variant, &lib)) {
+            continue;
+        }
         match NativeLib::open(&lib) {
             Ok(n) if n.engine_id == rel.engine => {
                 code.native = Some(n);
@@ -132,10 +163,17 @@ pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release
                 let checked = canary(&shared);
                 code = Arc::try_unwrap(shared).map_err(|_| anyhow!("engine still shared"))?;
                 match checked {
-                    Ok(()) => ui.log(format!("{C_INFO}[引擎]{C_END} 原生引擎 {} 与 wasm 逐位一致，榜单任务改用原生", rel.engine)),
+                    Ok(()) => {
+                        ui.log(format!(
+                            "{C_INFO}[引擎]{C_END} 原生引擎 {}{} 与 wasm 逐位一致，榜单任务改用原生",
+                            rel.engine,
+                            variant_label(variant)
+                        ));
+                        break;
+                    }
                     Err(e) => {
                         code.native = None;
-                        ui.log(format!("{C_BAD}[引擎]{C_END} 原生引擎与 wasm 结果不一致，已停用：{e}"));
+                        ui.log(format!("{C_BAD}[引擎]{C_END} 原生引擎{}与 wasm 结果不一致，已停用：{e}", variant_label(variant)));
                     }
                 }
             }
@@ -151,9 +189,10 @@ pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release
 /// (simfleet's `native-engine` workflow builds one for every engine wfsim.app
 /// serves, card text blanked, and publishes it only after it matched the wasm
 /// on real board rows). Checked against its `.sha256`; `load_code` then holds
-/// it to the wasm on the canary row before using it. Silent when there is none.
-pub fn fetch_native(net: &Net, cfg: &Config, ui: &Ui, rel: &Release, lib: &std::path::Path) -> bool {
-    let name = native_lib_name(&rel.engine);
+/// it to the wasm on the canary row before using it. Silent when there is none
+/// (releases before the `-v3` build have only the baseline).
+pub fn fetch_native(net: &Net, cfg: &Config, ui: &Ui, rel: &Release, variant: &str, lib: &std::path::Path) -> bool {
+    let name = native_lib_name(&rel.engine, variant);
     let base = format!("{}/engine-{}/{}", cfg.native_engine_url.trim_end_matches('/'), rel.engine, name);
     let got = (|| -> Result<Vec<u8>> {
         let sum = String::from_utf8(net.download(&format!("{base}.sha256"), |_, _| {})?)?;
