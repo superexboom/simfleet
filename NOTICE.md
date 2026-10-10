@@ -38,8 +38,9 @@ What simfleet takes from WFSim:
   the build, **Digital Extremes' card text is blanked** from WFSim's `data/`
   (`tools/strip_card_text.py`): WFSim makes no grant for that text
   (LICENSE-DATA.md §4), so no published build carries it. The engine only
-  displays card text; every published build matched the served wasm bit for bit
-  on real board rows before release.
+  displays card text; every published build matched the wasm built from the
+  same commit bit for bit on real board rows before release, and simfleet
+  checks it against wfsim.app's own wasm before every use.
 
 Scores and other figures simfleet computes are WFSim engine outputs; WFSim
 licenses those CC BY-NC-SA 4.0 with attribution to WFSim.
@@ -61,4 +62,4 @@ similar licences. Their licence texts are in
 
 ---
 
-**中文摘要**：simfleet 由 superexboom 编写，以 AGPL-3.0-or-later 开源；它基于 magenie33 的 WFSim（同为 AGPL-3.0-or-later），任务协议与客户端逻辑移植自 WFSim 的网页客户端，这部分版权归 WFSim 作者及贡献者。simfleet 本身不含 WFSim 引擎，运行时从 wfsim.app 下载官方发布的引擎；原生引擎由本仓库的 Action 从对应的 WFSim 提交编译，编译前删去 Digital Extremes 的卡牌文本（WFSim 对这部分没有授权），与网站 wasm 逐位比对通过后才发布。本项目非官方，与 WFSim、Digital Extremes 均无关联。
+**中文摘要**：simfleet 由 superexboom 编写，以 AGPL-3.0-or-later 开源；它基于 magenie33 的 WFSim（同为 AGPL-3.0-or-later），任务协议与客户端逻辑移植自 WFSim 的网页客户端，这部分版权归 WFSim 作者及贡献者。simfleet 本身不含 WFSim 引擎，运行时从 wfsim.app 下载官方发布的引擎；原生引擎由本仓库的 Action 从对应的 WFSim 提交编译，编译前删去 Digital Extremes 的卡牌文本（WFSim 对这部分没有授权），与同一提交编译的 wasm 逐位比对通过后才发布，simfleet 使用前还会再和网站的 wasm 比对一次。本项目非官方，与 WFSim、Digital Extremes 均无关联。

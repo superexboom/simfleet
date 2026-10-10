@@ -89,19 +89,20 @@ simfleet 因此有两个引擎：
 
 ## 原生引擎（自动）
 
-不用自己编译。本仓库的 [native-engine](.github/workflows/native-engine.yml) Action 每 30 分钟查一次 wfsim.app 正在发布的引擎号；有新引擎、且 GitHub 上已经有对应的 WFSim 提交时，它会：
+不用自己编译。本仓库的 [native-engine](.github/workflows/native-engine.yml) Action 每 30 分钟计算一次 WFSim `main` 分支的引擎号（wfsim.app 对 GitHub 的服务器会弹出人机验证，所以 Action 完全不访问网站；网站发布的引擎号就是它所用源码的哈希）。遇到还没发布过的引擎号，它会在那次提交上，用 WFSim 自己锁定的 Rust 和 wasm-bindgen 版本：
 
-1. 用那次提交编译原生引擎，**编译前把 Digital Extremes 的卡牌文本清空**（`tools/strip_card_text.py`）。WFSim 对这部分文本没有授权（见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)），所以发布的版本里不含它。引擎只拿这些文本做显示，不影响任何分数；
-2. 在 32 条真实榜单（4 把武器 × 4 把尺子 × 2 种模式）上和网站的 wasm **逐位比对**（`simfleet check-native`），全部一致才发布；
-3. 发布为 Release `engine-<引擎号>`，附 sha256，并在说明里写明对应的 WFSim 源码提交。
+1. 照 WFSim 的做法编译出 wasm，作为比对的参照；
+2. **把 Digital Extremes 的卡牌文本清空**（`tools/strip_card_text.py`）后编译原生引擎。WFSim 对这部分文本没有授权（见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)），所以发布的版本里不含它；引擎只拿这些文本做显示，不影响任何分数；
+3. 在 WFSim 仓库里提交的榜单快照上取 32 条真实榜单（4 把武器 × 4 把尺子 × 2 种模式），和参照 wasm **逐位比对**（`simfleet check-native`），全部一致才发布；
+4. 发布为 Release `engine-<引擎号>`，附 sha256，说明里写明对应的 WFSim 提交、simfleet 提交和构建记录。
 
-simfleet 启动时会在 `engines\` 里找对应引擎号的 dll，没有就去 Release 下载，校验 sha256，再在金丝雀榜单上和 wasm 比对一次，一致才用；运行中用 wasm 时每 30 分钟再看一次有没有发布出来。不想用原生引擎，把 `simfleet.toml` 里的 `native_engine` 设为 `false`；只想用自己编译的，把 `native_engine_url` 设为 `""`。
+simfleet 只用网站**实际发布**的引擎号：启动时在 `engines\` 里找对应的 dll，没有就去 Release 下载，校验 sha256，再在金丝雀榜单上和**网站自己的 wasm** 比对一次，一致才用；运行中用 wasm 时每 30 分钟再看一次有没有发布出来。不想用原生引擎，把 `simfleet.toml` 里的 `native_engine` 设为 `false`；只想用自己编译的，把 `native_engine_url` 设为 `""`。
 
 自己编译（要 git、Rust，`-Strip` 还要 Python）：
 
 ```
 powershell -ExecutionPolicy Bypass -File toolsuild-native-engine.ps1 [-Strip]
-simfleet check-native
+simfleet check-native          # 和网站的 wasm 比对 32 条网站上的榜单
 ```
 
 网站引擎更新后，旧的 dll 自动不再使用，回到 wasm，直到新的原生引擎发布出来。
