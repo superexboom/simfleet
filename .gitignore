@@ -7,3 +7,4 @@ simfleet.toml
 /.devrun
 /dist
 /native-engine/Cargo.lock
+/reference

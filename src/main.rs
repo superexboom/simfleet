@@ -333,20 +333,42 @@ fn bench(paths: &Paths, cfg: &Config, lanes_arg: Option<usize>) -> Result<()> {
 /// THE GATE A NATIVE ENGINE PASSES BEFORE IT IS PUBLISHED: real board rows
 /// (one per ruler and mode, from a few weapons' published boards) measured on
 /// the wasm and on the native build, which must agree on every row to the bit.
-fn check_native(paths: &Paths) -> Result<()> {
+///
+/// Offline (the release workflow, which cannot reach wfsim.app): `--engine <id>
+/// --wasm <file> --boards <dir>` take the engine id, the reference wasm built
+/// from the same commit, and a WFSim checkout's `site/board/`.
+fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boards: Option<String>) -> Result<()> {
     let mut cfg = Config::fresh(sys::cores());
     cfg.native_engine = true;
+    cfg.native_engine_url = String::new();
     let net = net::Net::new(&cfg.server, None);
     let ui = Ui::new();
-    let rel = work::fetch_release(&net)?;
-    let code = work::load_code(&net, paths, &cfg, &ui, &rel)?;
+    let code = match (engine, wasm) {
+        (Some(engine), Some(file)) => {
+            use sha2::{Digest, Sha256};
+            let bytes = std::fs::read(&file).with_context(|| file.clone())?;
+            let digest: String = Sha256::digest(&bytes).iter().take(6).map(|x| format!("{x:02x}")).collect();
+            let rel = work::Release { engine, wasm: digest };
+            println!("引擎 {} · 参照 wasm {} ({})", rel.engine, rel.wasm, file);
+            work::build_code(&net, paths, &cfg, &ui, &rel, &bytes)?
+        }
+        (None, None) => {
+            let rel = work::fetch_release(&net)?;
+            work::load_code(&net, paths, &cfg, &ui, &rel)?
+        }
+        _ => bail!("--engine 和 --wasm 要一起给"),
+    };
+    let rel_engine = code.native.as_ref().map(|n| n.engine_id.clone()).unwrap_or_default();
     if code.native.is_none() {
-        bail!("{} 下没有可用的原生引擎 {}（或金丝雀不一致）", paths.engines.display(), rel.engine);
+        bail!("{} 下没有可用的原生引擎（或金丝雀不一致）", paths.engines.display());
     }
     let lanes = sys::cores();
     let (mut same, mut skipped) = (0, 0);
     for weapon in ["braton_prime", "dual_toxocyst", "torid", "burston_prime"] {
-        let rows = net.get(&format!("/board/{weapon}.json"))?.body;
+        let rows = match &boards {
+            Some(dir) => jsnum::parse(&std::fs::read_to_string(std::path::Path::new(dir).join(format!("{weapon}.json")))?)?,
+            None => net.get(&format!("/board/{weapon}.json"))?.body,
+        };
         let mut seen = std::collections::HashSet::new();
         for row in rows.as_array().into_iter().flatten() {
             let (ruler, mode) = (row["benchmark"].as_str().unwrap_or(""), row["mode"].as_str().unwrap_or(""));
@@ -394,7 +416,7 @@ fn check_native(paths: &Paths) -> Result<()> {
     if same < 6 {
         bail!("只比对了 {same} 行（跳过 {skipped}），不足以放行");
     }
-    println!("原生引擎 {} 与 wasm 在 {same} 行榜单上逐位一致（跳过 {skipped} 行）", rel.engine);
+    println!("原生引擎 {rel_engine} 与 wasm 在 {same} 行榜单上逐位一致（跳过 {skipped} 行）");
     Ok(())
 }
 
@@ -531,7 +553,7 @@ fn main() {
                 let mut f = work::Fleet::new(net, cfg, paths_clone(&paths), ctl, ui, rel, code);
                 f.replay(&w)?;
             }
-            "check-native" => check_native(&paths)?,
+            "check-native" => check_native(&paths, flag("--engine"), flag("--wasm"), flag("--boards"))?,
             "bench" => {
                 let c = paths.load()?.unwrap_or_else(|| Config::fresh(1));
                 bench(&paths, &c, flag("--lanes").and_then(|x| x.parse().ok()))?;

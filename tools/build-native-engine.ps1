@@ -18,8 +18,10 @@ param(
     [int]$Depth = 60,
     [string]$Out = "",
     [switch]$Strip,
-    # A WFSim commit already known to carry the served engine (the workflow's check).
-    [string]$Commit = ""
+    # A WFSim commit already known to carry the engine (the workflow's check).
+    [string]$Commit = "",
+    # The engine id to build, instead of asking wfsim.app (the workflow cannot).
+    [string]$Engine = ""
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -28,9 +30,13 @@ $exe = Join-Path $root "target\release\simfleet.exe"
 if (-not (Test-Path $exe)) { cargo build --release --manifest-path (Join-Path $root "Cargo.toml") }
 if (-not $Out) { $Out = Join-Path (Split-Path -Parent $exe) "engines" }
 
-$rel = Invoke-RestMethod "$Server/release.json" -Headers @{ "Cache-Control" = "no-store" }
-$want = $rel.engine
-Write-Host "served engine: $want"
+if ($Engine) {
+    $want = $Engine
+} else {
+    $rel = Invoke-RestMethod "$Server/release.json" -Headers @{ "Cache-Control" = "no-store" }
+    $want = $rel.engine
+}
+Write-Host "engine: $want"
 
 if (-not (Test-Path $src)) {
     git clone --depth $Depth https://github.com/magenie33/wfsim.git $src

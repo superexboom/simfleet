@@ -99,12 +99,19 @@ pub fn load_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release)
             b
         }
     };
+    build_code(net, paths, cfg, ui, rel, &bytes)
+}
+
+/// The engine from its wasm `bytes` (named by `rel`): compiled (or read from
+/// the compile cache), with a native build beside it if one matches.
+pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release, bytes: &[u8]) -> Result<Arc<Code>> {
+    std::fs::create_dir_all(&paths.cache)?;
     let cwasm = paths.cache.join(format!("{}.wasmtime49.cwasm", rel.wasm));
     if !cwasm.exists() {
         ui.status(|s| s.note = "编译引擎（只在新版本第一次运行时）…".into());
     }
     let t = Instant::now();
-    let wasm = WasmCode::load(&bytes, &cwasm)?;
+    let wasm = WasmCode::load(bytes, &cwasm)?;
     if t.elapsed() > Duration::from_secs(1) {
         ui.log(format!("{C_INFO}[引擎]{C_END} 编译完成，用时 {:.1}s（已缓存）", t.elapsed().as_secs_f64()));
     }
