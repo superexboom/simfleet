@@ -1,6 +1,6 @@
 [package]
 name = "simfleet"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 authors = ["superexboom"]
@@ -22,7 +22,11 @@ serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 sha2 = "0.10"
 toml = "0.9"
 unicode-width = "0.2"
-ureq = { version = "3", features = ["gzip"] }
+# `platform-verifier`: certificates are checked against the system store, as a
+# browser checks them (a GitHub accelerator whose root the user installed is
+# trusted); the bundled Mozilla roots are the fallback. `win-system-proxy`:
+# the proxy Windows is set to, not only HTTPS_PROXY.
+ureq = { version = "3", features = ["gzip", "platform-verifier", "win-system-proxy"] }
 wasmtime = { version = "49", default-features = false, features = ["cranelift", "runtime", "gc", "gc-drc", "std"] }
 
 [target.'cfg(windows)'.dependencies]

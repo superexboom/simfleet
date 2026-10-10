@@ -12,9 +12,27 @@ pub const USER_AGENT: &str = concat!("simfleet/", env!("CARGO_PKG_VERSION"), " (
 
 #[derive(Clone)]
 pub struct Net {
+    /// Certificates checked by the operating system, as a browser checks them.
     agent: ureq::Agent,
+    /// …and by the bundled Mozilla roots, for a system whose verifier fails.
+    fallback: ureq::Agent,
     pub base: String,
     pub session: Option<String>,
+}
+
+fn tls_failure(e: &ureq::Error) -> bool {
+    let t = e.to_string().to_lowercase();
+    ["certificate", "tls", "handshake", "unknownissuer", "verif"].iter().any(|k| t.contains(k))
+}
+
+/// What a reader can do about a connection that failed on both verifiers.
+fn explain(first: &ureq::Error, second: &ureq::Error) -> String {
+    let both = format!("{first} / {second}");
+    if tls_failure(first) && tls_failure(second) {
+        format!("证书校验失败（{second}）。常见原因：加速器或代理改写了证书但其根证书没有装进 Windows，或系统时间不对")
+    } else {
+        both
+    }
 }
 
 /// A download that does not exist (yet).
@@ -35,13 +53,33 @@ pub struct Reply {
 
 impl Net {
     pub fn new(base: &str, session: Option<String>) -> Net {
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(30)))
-            .http_status_as_error(false)
-            .user_agent(USER_AGENT)
-            .build()
-            .into();
-        Net { agent, base: base.trim_end_matches('/').to_string(), session: session.filter(|s| !s.is_empty()) }
+        let make = |roots: ureq::tls::RootCerts| -> ureq::Agent {
+            ureq::Agent::config_builder()
+                .timeout_global(Some(Duration::from_secs(30)))
+                .http_status_as_error(false)
+                .user_agent(USER_AGENT)
+                .tls_config(ureq::tls::TlsConfig::builder().root_certs(roots).build())
+                .build()
+                .into()
+        };
+        Net {
+            agent: make(ureq::tls::RootCerts::PlatformVerifier),
+            fallback: make(ureq::tls::RootCerts::WebPki),
+            base: base.trim_end_matches('/').to_string(),
+            session: session.filter(|s| !s.is_empty()),
+        }
+    }
+
+    /// One request, on the system verifier and then — only if the connection
+    /// itself failed — once more on the bundled roots.
+    fn call(&self, f: impl Fn(&ureq::Agent) -> Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Result<ureq::http::Response<ureq::Body>> {
+        match f(&self.agent) {
+            Ok(r) => Ok(r),
+            // ONLY A HANDSHAKE THAT FAILED is tried again: nothing was sent, so
+            // nothing (a result, a lease) can arrive twice.
+            Err(first) if tls_failure(&first) => f(&self.fallback).map_err(|second| anyhow::anyhow!("{}", explain(&first, &second))),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// A path on the site, or an absolute URL as given.
@@ -55,22 +93,27 @@ impl Net {
 
     /// POST JSON; `Err` only when the network failed or the answer was not JSON.
     pub fn post(&self, path: &str, body: &Value) -> Result<Reply> {
-        let mut req = self.agent.post(&self.url(path)).header("Content-Type", "application/json");
-        // The session is the site's: never sent to another host.
-        if let (Some(s), false) = (&self.session, path.starts_with("http")) {
-            req = req.header("Cookie", &format!("wfsim_session={s}"));
-        }
-        let mut resp = req.send(body.to_string())?;
+        let text = body.to_string();
+        let mut resp = self.call(|a| {
+            let mut req = a.post(&self.url(path)).header("Content-Type", "application/json");
+            // The session is the site's: never sent to another host.
+            if let (Some(s), false) = (&self.session, path.starts_with("http")) {
+                req = req.header("Cookie", &format!("wfsim_session={s}"));
+            }
+            req.send(text.as_str())
+        })?;
         Self::reply(&mut resp)
     }
 
     pub fn get(&self, path: &str) -> Result<Reply> {
-        let mut req = self.agent.get(&self.url(path)).header("Cache-Control", "no-store");
-        // The session is the site's: never sent to another host.
-        if let (Some(s), false) = (&self.session, path.starts_with("http")) {
-            req = req.header("Cookie", &format!("wfsim_session={s}"));
-        }
-        let mut resp = req.call()?;
+        let mut resp = self.call(|a| {
+            let mut req = a.get(&self.url(path)).header("Cache-Control", "no-store");
+            // The session is the site's: never sent to another host.
+            if let (Some(s), false) = (&self.session, path.starts_with("http")) {
+                req = req.header("Cookie", &format!("wfsim_session={s}"));
+            }
+            req.call()
+        })?;
         Self::reply(&mut resp)
     }
 
@@ -98,13 +141,7 @@ impl Net {
 
     /// A file, read whole, with `progress(got, total)` as it arrives.
     pub fn download(&self, path: &str, mut progress: impl FnMut(u64, u64)) -> Result<Vec<u8>> {
-        let mut resp = self
-            .agent
-            .get(&self.url(path))
-            .config()
-            .timeout_global(Some(Duration::from_secs(600)))
-            .build()
-            .call()?;
+        let mut resp = self.call(|a| a.get(&self.url(path)).config().timeout_global(Some(Duration::from_secs(600))).build().call())?;
         if resp.status().as_u16() == 404 {
             bail!(NotFound);
         }

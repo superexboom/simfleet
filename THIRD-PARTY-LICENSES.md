@@ -6,9 +6,9 @@ for a binary distribution. (simfleet itself is AGPL-3.0-or-later; see LICENSE.)
 
 ## Overview
 
-- **Apache License 2.0** (106 crates)
+- **Apache License 2.0** (110 crates)
 - **ISC License** (19 crates)
-- **MIT License** (15 crates)
+- **MIT License** (16 crates)
 - **GNU Affero General Public License v3.0 or later** (1 crate)
 - **BSD 3-Clause "New" or "Revised" License** (1 crate)
 - **Community Data License Agreement Permissive 2.0** (1 crate)
@@ -21,7 +21,7 @@ for a binary distribution. (simfleet itself is AGPL-3.0-or-later; see LICENSE.)
 
 Used by:
 
-- [simfleet 0.1.0](https://crates.io/crates/simfleet)
+- [simfleet 0.2.0](https://github.com/superexboom/simfleet)
 
 ```
                     GNU AFFERO GENERAL PUBLIC LICENSE
@@ -1441,7 +1441,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Used by:
 
 - [windows-link 0.2.1](https://github.com/microsoft/windows-rs)
+- [windows-sys 0.52.0](https://github.com/microsoft/windows-rs)
 - [windows-sys 0.61.2](https://github.com/microsoft/windows-rs)
+- [windows-targets 0.52.6](https://github.com/microsoft/windows-rs)
+- [windows_x86_64_msvc 0.52.6](https://github.com/microsoft/windows-rs)
 
 ```
                                  Apache License
@@ -1654,6 +1657,7 @@ Used by:
 
 Used by:
 
+- [rustls-platform-verifier 0.7.1](https://github.com/rustls/rustls-platform-verifier)
 - [ureq 3.4.2](https://github.com/algesten/ureq)
 
 ```
@@ -4925,6 +4929,37 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 The files under third-party/chromium are licensed as described in
 third-party/chromium/LICENSE.
+
+```
+
+---
+
+## MIT License
+
+Used by:
+
+- [winreg 0.56.0](https://github.com/gentoo90/winreg-rs)
+
+```
+Copyright (c) 2015 Igor Shaula
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 
 ```
 
