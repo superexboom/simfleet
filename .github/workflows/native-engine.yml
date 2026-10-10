@@ -1,0 +1,88 @@
+# THE NATIVE ENGINE, published for every engine wfsim.app serves.
+#
+# Every 30 minutes a small Linux job reads the served engine id. If no release
+# `engine-<id>` exists yet and a WFSim commit on GitHub carries that engine, a
+# Windows job builds native-engine/ from that commit with Digital Extremes'
+# card text blanked (tools/strip_card_text.py, see NOTICE.md), holds it to the
+# served wasm on 32 real board rows (`simfleet check-native`), and only then
+# publishes it. simfleet downloads it from that release on its own.
+name: native-engine
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: native-engine
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      engine: ${{ steps.c.outputs.engine }}
+      commit: ${{ steps.c.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: c
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          engine=$(curl -fsS -H 'Cache-Control: no-store' https://wfsim.app/release.json | jq -r .engine)
+          echo "served engine: $engine"
+          if gh release view "engine-$engine" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "already published"; exit 0
+          fi
+          git clone -q --depth 60 https://github.com/magenie33/wfsim.git wfsim
+          for c in $(git -C wfsim rev-list -n 60 HEAD); do
+            git -C wfsim checkout -q "$c"
+            if python3 tools/engine_id.py wfsim | grep -qx "$engine"; then
+              echo "WFSim $c carries engine $engine"
+              echo "engine=$engine" >> "$GITHUB_OUTPUT"
+              echo "commit=$c" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "no WFSim commit on GitHub carries $engine yet; simfleet uses the wasm meanwhile"
+
+  build:
+    needs: check
+    if: needs.check.outputs.commit != ''
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - name: Build the native engine (card text blanked)
+        shell: pwsh
+        run: |
+          git clone -q --depth 60 https://github.com/magenie33/wfsim.git .wfsim-src
+          powershell -ExecutionPolicy Bypass -File tools/build-native-engine.ps1 -Strip -Commit ${{ needs.check.outputs.commit }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Hold it to the served wasm on real board rows
+        run: target/release/simfleet.exe check-native
+      - name: Publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENGINE: ${{ needs.check.outputs.engine }}
+          COMMIT: ${{ needs.check.outputs.commit }}
+        run: |
+          cd target/release/engines
+          test -f "$ENGINE.dll"
+          if gh release view "engine-$ENGINE" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then echo "published meanwhile"; exit 0; fi
+          sha256sum "$ENGINE.dll" | awk '{print $1"  "FILENAME}' FILENAME="$ENGINE.dll" > "$ENGINE.dll.sha256"
+          cat > notes.md <<NOTES
+          Native build of the WFSim engine **$ENGINE** (the engine wfsim.app serves) for simfleet on Windows x64. simfleet downloads it on its own; there is nothing to install.
+
+          - Built from WFSim commit [\`$COMMIT\`](https://github.com/magenie33/wfsim/tree/$COMMIT) (AGPL-3.0-or-later, by magenie33 and WFSim contributors) through [native-engine/](https://github.com/$GITHUB_REPOSITORY/tree/$GITHUB_SHA/native-engine) at simfleet \`$GITHUB_SHA\`. This is the corresponding source.
+          - Digital Extremes' card text was blanked before the build ([tools/strip_card_text.py](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/tools/strip_card_text.py)), since WFSim grants nothing for it ([LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)). The engine only displays that text; no score depends on it.
+          - Before publishing, it matched the served wasm bit for bit on 32 real board rows (\`simfleet check-native\`), and simfleet checks it again on a canary row before every use.
+          - Unofficial; not made or endorsed by WFSim or Digital Extremes. *Warframe* is a trademark of Digital Extremes Ltd.
+
+          SHA-256: \`$(cut -d' ' -f1 "$ENGINE.dll.sha256")\`
+          NOTES
+          sed -i 's/^          //' notes.md
+          gh release create "engine-$ENGINE" "$ENGINE.dll" "$ENGINE.dll.sha256" -R "$GITHUB_REPOSITORY" \
+            --title "native engine $ENGINE" --notes-file notes.md --latest=false --target "$GITHUB_SHA"

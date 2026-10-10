@@ -31,11 +31,15 @@ What simfleet takes from WFSim:
   work, under WFSim's licences (code AGPL-3.0-or-later; data and engine outputs
   as set out in WFSim's
   [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)).
-- **The optional native engine.** `native-engine/` is a thin wrapper that links
-  WFSim's `wfsim-webapi` crate. It is built locally from a WFSim checkout by
-  `tools/build-native-engine.ps1`; **no build of it is distributed with
-  simfleet**, because it embeds WFSim's `data/`, part of which is Digital
-  Extremes material that WFSim makes no grant for.
+- **The native engine.** `native-engine/` is a thin wrapper that links
+  WFSim's `wfsim-webapi` crate. The `native-engine` workflow builds it from the
+  WFSim commit that carries the served engine and publishes it as the release
+  `engine-<id>`, whose notes name that commit (the corresponding source). Before
+  the build, **Digital Extremes' card text is blanked** from WFSim's `data/`
+  (`tools/strip_card_text.py`): WFSim makes no grant for that text
+  (LICENSE-DATA.md §4), so no published build carries it. The engine only
+  displays card text; every published build matched the served wasm bit for bit
+  on real board rows before release.
 
 Scores and other figures simfleet computes are WFSim engine outputs; WFSim
 licenses those CC BY-NC-SA 4.0 with attribution to WFSim.
@@ -57,4 +61,4 @@ similar licences. Their licence texts are in
 
 ---
 
-**中文摘要**：simfleet 由 superexboom 编写，以 AGPL-3.0-or-later 开源；它基于 magenie33 的 WFSim（同为 AGPL-3.0-or-later），任务协议与客户端逻辑移植自 WFSim 的网页客户端，这部分版权归 WFSim 作者及贡献者。simfleet 本身不含 WFSim 引擎，运行时从 wfsim.app 下载官方发布的引擎；可选的原生引擎只能自行编译、不随本项目分发。本项目非官方，与 WFSim、Digital Extremes 均无关联。
+**中文摘要**：simfleet 由 superexboom 编写，以 AGPL-3.0-or-later 开源；它基于 magenie33 的 WFSim（同为 AGPL-3.0-or-later），任务协议与客户端逻辑移植自 WFSim 的网页客户端，这部分版权归 WFSim 作者及贡献者。simfleet 本身不含 WFSim 引擎，运行时从 wfsim.app 下载官方发布的引擎；原生引擎由本仓库的 Action 从对应的 WFSim 提交编译，编译前删去 Digital Extremes 的卡牌文本（WFSim 对这部分没有授权），与网站 wasm 逐位比对通过后才发布。本项目非官方，与 WFSim、Digital Extremes 均无关联。

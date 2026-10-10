@@ -330,6 +330,74 @@ fn bench(paths: &Paths, cfg: &Config, lanes_arg: Option<usize>) -> Result<()> {
     Ok(())
 }
 
+/// THE GATE A NATIVE ENGINE PASSES BEFORE IT IS PUBLISHED: real board rows
+/// (one per ruler and mode, from a few weapons' published boards) measured on
+/// the wasm and on the native build, which must agree on every row to the bit.
+fn check_native(paths: &Paths) -> Result<()> {
+    let mut cfg = Config::fresh(sys::cores());
+    cfg.native_engine = true;
+    let net = net::Net::new(&cfg.server, None);
+    let ui = Ui::new();
+    let rel = work::fetch_release(&net)?;
+    let code = work::load_code(&net, paths, &cfg, &ui, &rel)?;
+    if code.native.is_none() {
+        bail!("{} 下没有可用的原生引擎 {}（或金丝雀不一致）", paths.engines.display(), rel.engine);
+    }
+    let lanes = sys::cores();
+    let (mut same, mut skipped) = (0, 0);
+    for weapon in ["braton_prime", "dual_toxocyst", "torid", "burston_prime"] {
+        let rows = net.get(&format!("/board/{weapon}.json"))?.body;
+        let mut seen = std::collections::HashSet::new();
+        for row in rows.as_array().into_iter().flatten() {
+            let (ruler, mode) = (row["benchmark"].as_str().unwrap_or(""), row["mode"].as_str().unwrap_or(""));
+            if !seen.insert(format!("{ruler}/{mode}")) {
+                continue;
+            }
+            let mut rec = serde_json::json!({ "weapon": weapon, "mods": row["mods"], "evolutions": row["evolutions"], "arcanes": row["arcanes"] });
+            for k in ["valence", "exilus"] {
+                if row[k].as_str().is_some_and(|v| !v.is_empty()) {
+                    rec[k] = row[k].clone();
+                }
+            }
+            if let Some(r) = row["riven"].as_object() {
+                let mut pos: Vec<String> = r["bonuses"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect();
+                pos.sort();
+                rec["riven_pos"] = serde_json::json!(pos);
+                if r["malus"].as_str().is_some_and(|m| !m.is_empty()) {
+                    rec["riven_neg"] = r["malus"].clone();
+                }
+                rec["riven_rolls"] = r["rolls"].clone();
+            }
+            let order = serde_json::json!({ "record": rec, "ruler": ruler, "mode": mode }).to_string();
+            let mut answers = Vec::new();
+            for b in [Backend::Wasm, Backend::Native] {
+                let mut exec = Exec::new(code.clone());
+                let mut pool = Pool::new(code.clone());
+                let o = jsnum::parse(&exec.api(b, "/api/board/order", order.clone())?)?;
+                if o["ok"] != serde_json::json!(true) {
+                    answers.push(None);
+                    continue;
+                }
+                let s = work::measure_row(&mut pool, &mut exec, b, &o["request"], ruler, &|_| lanes, &|| true, &mut |_, _| {})?;
+                answers.push(s.map(|s| (s.score.to_bits(), s.work, s.metric)));
+            }
+            match (&answers[0], &answers[1]) {
+                (None, None) => skipped += 1,
+                (a, b) if a == b => {
+                    same += 1;
+                    println!("  一致  {weapon} · {ruler} · {mode}");
+                }
+                (a, b) => bail!("不一致：{weapon} · {ruler} · {mode}: wasm {a:?} / native {b:?}"),
+            }
+        }
+    }
+    if same < 6 {
+        bail!("只比对了 {same} 行（跳过 {skipped}），不足以放行");
+    }
+    println!("原生引擎 {} 与 wasm 在 {same} 行榜单上逐位一致（跳过 {skipped} 行）", rel.engine);
+    Ok(())
+}
+
 /// WFSim scripts/build_site_app.py `engine_id`, for a source checkout.
 fn engine_id(dir: &std::path::Path) -> Result<Vec<String>> {
     use sha2::{Digest, Sha256};
@@ -463,6 +531,7 @@ fn main() {
                 let mut f = work::Fleet::new(net, cfg, paths_clone(&paths), ctl, ui, rel, code);
                 f.replay(&w)?;
             }
+            "check-native" => check_native(&paths)?,
             "bench" => {
                 let c = paths.load()?.unwrap_or_else(|| Config::fresh(1));
                 bench(&paths, &c, flag("--lanes").and_then(|x| x.parse().ok()))?;

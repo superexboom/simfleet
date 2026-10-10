@@ -33,6 +33,10 @@ pub struct Config {
     /// Use a native engine build from `engines/` for board orders when one
     /// matches the served engine (faster); riven gains always use the wasm.
     pub native_engine: bool,
+    /// Where published native engines are fetched from when `engines/` holds
+    /// none (`<url>/engine-<id>/<id>.dll`); "" never downloads one.
+    #[serde(default = "default_native_url")]
+    pub native_engine_url: String,
     #[serde(default)]
     pub account: Account,
 }
@@ -44,6 +48,11 @@ pub struct Account {
     pub session: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
+}
+
+pub const NATIVE_URL: &str = "https://github.com/superexboom/simfleet/releases/download";
+fn default_native_url() -> String {
+    NATIVE_URL.into()
 }
 
 impl Config {
@@ -58,6 +67,7 @@ impl Config {
             pause_on_battery: true,
             priority: "idle".into(),
             native_engine: true,
+            native_engine_url: NATIVE_URL.into(),
             account: Account::default(),
         }
     }

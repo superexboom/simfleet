@@ -74,7 +74,7 @@ simfleet bench           本机测速（不领任务）
 
 simfleet 因此有两个引擎：
 - **wasm（默认，永远可用）**：运行网站当前发布的 `/pkg/wfsim_wasm_bg.<摘要>.wasm`，按文件名里的 sha256 校验，编译一次后缓存；网站发新版时自动下载新引擎，客户端不用更新。
-- **原生（可选，更快）**：`engines/<引擎号>.dll`，由 `tools/build-native-engine.ps1` 从 GitHub 上与网站引擎号完全相同的那次提交编译。每次启动都会在一条金丝雀榜单上和 wasm **逐步逐位比对**，不一致就自动停用。只用于榜单任务；紫卡增益的搜索在原生下批宽不同，所以始终走 wasm，保证和浏览器志愿者算出一样的构筑。
+- **原生（自动，更快）**：`engines/<引擎号>.dll`，由本仓库的 Action 从 GitHub 上与网站引擎号完全相同的那次 WFSim 提交编译并发布，simfleet 自动下载（见下文「原生引擎」）。每次启动都会在一条金丝雀榜单上和 wasm **逐步逐位比对**，不一致就自动停用。只用于榜单任务；紫卡增益的搜索在原生下批宽不同，所以始终走 wasm，保证和浏览器志愿者算出一样的构筑。
 
 本机（16 线程）实测，同一条榜单：
 
@@ -87,15 +87,24 @@ simfleet 因此有两个引擎：
 
 内存：原生引擎跑榜单几乎不占内存；wasm 每个核约 50 MB（和浏览器一个 worker 一样），空闲一分钟后自动释放。
 
-## 原生引擎（可选）
+## 原生引擎（自动）
 
-原生引擎**不随 simfleet 分发**：它把 WFSim 的 `data/` 编译在里面，其中有 Digital Extremes 的卡牌文本，WFSim 对这部分没有授权（见 WFSim 的 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)）。需要的话自己编译，要 git 和 Rust（https://rustup.rs）：
+不用自己编译。本仓库的 [native-engine](.github/workflows/native-engine.yml) Action 每 30 分钟查一次 wfsim.app 正在发布的引擎号；有新引擎、且 GitHub 上已经有对应的 WFSim 提交时，它会：
+
+1. 用那次提交编译原生引擎，**编译前把 Digital Extremes 的卡牌文本清空**（`tools/strip_card_text.py`）。WFSim 对这部分文本没有授权（见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)），所以发布的版本里不含它。引擎只拿这些文本做显示，不影响任何分数；
+2. 在 32 条真实榜单（4 把武器 × 4 把尺子 × 2 种模式）上和网站的 wasm **逐位比对**（`simfleet check-native`），全部一致才发布；
+3. 发布为 Release `engine-<引擎号>`，附 sha256，并在说明里写明对应的 WFSim 源码提交。
+
+simfleet 启动时会在 `engines\` 里找对应引擎号的 dll，没有就去 Release 下载，校验 sha256，再在金丝雀榜单上和 wasm 比对一次，一致才用；运行中用 wasm 时每 30 分钟再看一次有没有发布出来。不想用原生引擎，把 `simfleet.toml` 里的 `native_engine` 设为 `false`；只想用自己编译的，把 `native_engine_url` 设为 `""`。
+
+自己编译（要 git、Rust，`-Strip` 还要 Python）：
 
 ```
-powershell -ExecutionPolicy Bypass -File tools\build-native-engine.ps1
+powershell -ExecutionPolicy Bypass -File toolsuild-native-engine.ps1 [-Strip]
+simfleet check-native
 ```
 
-它会把 WFSim 源码拉到 `.wfsim-src`，找到引擎号与 wfsim.app 当前一致的提交，编译出 `target\release\engines\<引擎号>.dll`。把 `engines` 文件夹放到 `simfleet.exe` 旁边即可。网站引擎更新后旧 dll 自动不再使用（回到 wasm），重新跑一次脚本就行。
+网站引擎更新后，旧的 dll 自动不再使用，回到 wasm，直到新的原生引擎发布出来。
 
 ## 怎么做到「和浏览器一模一样」
 
@@ -120,7 +129,7 @@ powershell -File tools\package.ps1   # dist\simfleet-<版本>-windows-x64.zip
 
 - **simfleet**：Copyright (C) 2026 superexboom，以 [AGPL-3.0-or-later](LICENSE) 开源。
 - **WFSim**：simfleet 基于 [WFSim](https://github.com/magenie33/wfsim)（magenie33 与贡献者，AGPL-3.0-or-later）。任务协议和客户端逻辑移植自 WFSim 网页客户端的 `69-board-work.js`、`08-checkpoint-api.js`、`68-board-submit.js`，这部分版权归 WFSim 作者与贡献者。
-- **引擎**：simfleet 本身不含 WFSim 引擎，运行时从 wfsim.app 下载官方发布的 wasm。引擎及其数据按 WFSim 的许可（代码 AGPL；数据与引擎算出的分数等见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)，分数为 CC BY-NC-SA 4.0，需注明 WFSim）。
+- **引擎**：simfleet 本身不含 WFSim 引擎，运行时从 wfsim.app 下载官方发布的 wasm；原生引擎由本仓库的 Action 从 WFSim 源码编译（卡牌文本已清空），发布说明里写明对应源码。引擎及其数据按 WFSim 的许可（代码 AGPL；数据与引擎算出的分数等见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)，分数为 CC BY-NC-SA 4.0，需注明 WFSim）。
 - **游戏数据**：由 WFSim 整理自 [WARFRAME Wiki](https://wiki.warframe.com/)（CC BY-NC-SA 3.0）。*Warframe* 是 Digital Extremes Ltd. 的商标。
 - **第三方库**：wasmtime、ureq、rustls、serde、crossterm 等，许可证全文见 [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md)。
 

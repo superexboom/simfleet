@@ -17,6 +17,16 @@ pub struct Net {
     pub session: Option<String>,
 }
 
+/// A download that does not exist (yet).
+#[derive(Debug)]
+pub struct NotFound;
+impl std::fmt::Display for NotFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("not found")
+    }
+}
+impl std::error::Error for NotFound {}
+
 pub struct Reply {
     pub status: u16,
     pub body: Value,
@@ -34,14 +44,20 @@ impl Net {
         Net { agent, base: base.trim_end_matches('/').to_string(), session: session.filter(|s| !s.is_empty()) }
     }
 
+    /// A path on the site, or an absolute URL as given.
     fn url(&self, path: &str) -> String {
-        format!("{}{}", self.base, path)
+        if path.starts_with("https://") || path.starts_with("http://") {
+            path.to_string()
+        } else {
+            format!("{}{}", self.base, path)
+        }
     }
 
     /// POST JSON; `Err` only when the network failed or the answer was not JSON.
     pub fn post(&self, path: &str, body: &Value) -> Result<Reply> {
         let mut req = self.agent.post(&self.url(path)).header("Content-Type", "application/json");
-        if let Some(s) = &self.session {
+        // The session is the site's: never sent to another host.
+        if let (Some(s), false) = (&self.session, path.starts_with("http")) {
             req = req.header("Cookie", &format!("wfsim_session={s}"));
         }
         let mut resp = req.send(body.to_string())?;
@@ -50,7 +66,8 @@ impl Net {
 
     pub fn get(&self, path: &str) -> Result<Reply> {
         let mut req = self.agent.get(&self.url(path)).header("Cache-Control", "no-store");
-        if let Some(s) = &self.session {
+        // The session is the site's: never sent to another host.
+        if let (Some(s), false) = (&self.session, path.starts_with("http")) {
             req = req.header("Cookie", &format!("wfsim_session={s}"));
         }
         let mut resp = req.call()?;
@@ -88,6 +105,9 @@ impl Net {
             .timeout_global(Some(Duration::from_secs(600)))
             .build()
             .call()?;
+        if resp.status().as_u16() == 404 {
+            bail!(NotFound);
+        }
         if resp.status().as_u16() != 200 {
             bail!("GET {path}: HTTP {}", resp.status().as_u16());
         }

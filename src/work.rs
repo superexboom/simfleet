@@ -119,6 +119,9 @@ pub fn load_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release)
     }
     let mut code = Code { wasm, native: None };
     let lib = paths.engines.join(native_lib_name(&rel.engine));
+    if cfg.native_engine && !lib.exists() && !cfg.native_engine_url.is_empty() {
+        fetch_native(net, cfg, ui, rel, &lib);
+    }
     if cfg.native_engine && lib.exists() {
         match NativeLib::open(&lib) {
             Ok(n) if n.engine_id == rel.engine => {
@@ -140,6 +143,46 @@ pub fn load_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release)
     }
     ui.status(|s| s.note.clear());
     Ok(Arc::new(code))
+}
+
+/// A PUBLISHED NATIVE ENGINE for this engine id, if one exists yet
+/// (simfleet's `native-engine` workflow builds one for every engine wfsim.app
+/// serves, card text blanked, and publishes it only after it matched the wasm
+/// on real board rows). Checked against its `.sha256`; `load_code` then holds
+/// it to the wasm on the canary row before using it. Silent when there is none.
+pub fn fetch_native(net: &Net, cfg: &Config, ui: &Ui, rel: &Release, lib: &std::path::Path) -> bool {
+    let name = native_lib_name(&rel.engine);
+    let base = format!("{}/engine-{}/{}", cfg.native_engine_url.trim_end_matches('/'), rel.engine, name);
+    let got = (|| -> Result<Vec<u8>> {
+        let sum = String::from_utf8(net.download(&format!("{base}.sha256"), |_, _| {})?)?;
+        let want = sum.split_whitespace().next().unwrap_or("").to_lowercase();
+        ui.log(format!("{C_INFO}[引擎]{C_END} 下载原生引擎 {name}"));
+        let b = net.download(&base, |got, total| {
+            ui.status(|s| s.note = format!("下载原生引擎 {:.1}/{:.1} MB", got as f64 / 1e6, total as f64 / 1e6))
+        })?;
+        let have: String = Sha256::digest(&b).iter().map(|x| format!("{x:02x}")).collect();
+        if want.len() != 64 || have != want {
+            bail!("sha256 不符");
+        }
+        Ok(b)
+    })();
+    ui.status(|s| s.note.clear());
+    match got {
+        Ok(b) => {
+            let _ = std::fs::create_dir_all(lib.parent().unwrap_or(std::path::Path::new(".")));
+            let tmp = lib.with_extension("part");
+            if std::fs::write(&tmp, &b).and_then(|_| std::fs::rename(&tmp, lib)).is_err() {
+                ui.log(format!("{C_BAD}[引擎]{C_END} 无法写入 {}", lib.display()));
+                return false;
+            }
+            true
+        }
+        Err(e) if e.is::<crate::net::NotFound>() => false,
+        Err(e) => {
+            ui.log(format!("{C_GO}[引擎]{C_END} 原生引擎下载失败，继续用 wasm：{e:#}"));
+            false
+        }
+    }
 }
 
 /// A real board row (Braton Prime, demolisher, cycle), used to hold a native
@@ -407,6 +450,7 @@ pub struct Fleet {
     recent_orders: VecDeque<Value>,
     recent_rivens: VecDeque<Value>,
     stats_at: Option<Instant>,
+    native_checked: Instant,
     claimed: bool,
     pub session_dropped: bool,
     banned_said: bool,
@@ -437,6 +481,7 @@ impl Fleet {
             recent_orders: VecDeque::new(),
             recent_rivens: VecDeque::new(),
             stats_at: None,
+            native_checked: Instant::now(),
             claimed: false,
             session_dropped: false,
             banned_said: false,
@@ -562,6 +607,7 @@ impl Fleet {
             if self.stats_at.is_none_or(|t| t.elapsed() > STATS_EVERY) {
                 self.refresh_stats();
             }
+            self.maybe_native();
             if !worked {
                 let t = Instant::now();
                 let was_held = self.held_why().is_some();
@@ -946,6 +992,28 @@ impl Fleet {
         });
         self.rel = rel;
         Ok(())
+    }
+
+    /// ON THE WASM, look again every half hour for a published native build of
+    /// the served engine (it appears some minutes after the engine does).
+    fn maybe_native(&mut self) {
+        if self.pool.code().native.is_some() || !self.cfg.native_engine || self.cfg.native_engine_url.is_empty()
+            || self.native_checked.elapsed() < Duration::from_secs(1800)
+        {
+            return;
+        }
+        self.native_checked = Instant::now();
+        let lib = self.paths.engines.join(native_lib_name(&self.rel.engine));
+        if !lib.exists() && !fetch_native(&self.net, &self.cfg, &self.ui, &self.rel, &lib) {
+            return;
+        }
+        if let Ok(code) = load_code(&self.net, &self.paths, &self.cfg, &self.ui, &self.rel) {
+            if code.native.is_some() {
+                self.pool = Pool::new(code.clone());
+                self.exec = Exec::new(code);
+                self.ui.status(|s| s.backend = "native".into());
+            }
+        }
     }
 
     /// A signed-in client claims its computer id once a run (BOARD.md §Contribution rule 5).
