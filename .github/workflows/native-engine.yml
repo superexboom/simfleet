@@ -25,10 +25,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: c
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          engine=$(curl -fsS -H 'Cache-Control: no-store' https://wfsim.app/release.json | jq -r .engine)
+          code=$(curl -sS --retry 3 -o release.json -w '%{http_code}' -A "simfleet-ci (+https://github.com/$GITHUB_REPOSITORY)"             -H 'Cache-Control: no-store' https://wfsim.app/release.json)
+          echo "release.json: HTTP $code"; head -c 300 release.json; echo
+          engine=$(jq -er .engine release.json)
           echo "served engine: $engine"
           if gh release view "engine-$engine" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "already published"; exit 0
