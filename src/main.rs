@@ -502,13 +502,23 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boa
     println!("原生引擎 {rel_engine} 与 wasm 在 {same} 行上逐位一致（分数、work、gas；跳过 {skipped} 行）");
     // THE OPTIMIZER, where the build has one: reported, not refused — simfleet
     // holds it to the site's wasm again before any riven gain runs on it.
-    if let Some(n) = code.native.as_ref().filter(|n| n.has_optimize()) {
-        match n.wait_riven() {
-            2 => println!("紫卡搜索：原生与 wasm 逐位一致"),
-            3 => println!("警告：紫卡搜索与 wasm 不一致（{}）；运行时同样会校验，这个版本只用于榜单", n.riven_why()),
-            _ => println!("紫卡搜索：没有校验"),
+    let riven = match code.native.as_ref().filter(|n| n.has_optimize()).map(|n| n.wait_riven()) {
+        Some(2) => {
+            println!("紫卡搜索：原生与 wasm 逐位一致");
+            "same"
         }
-    }
+        Some(3) => {
+            let why = code.native.as_ref().map(|n| n.riven_why()).unwrap_or_default();
+            println!("警告：紫卡搜索与 wasm 不一致（{why}）；运行时同样会校验，这个版本只用于榜单");
+            "differs"
+        }
+        _ => {
+            println!("紫卡搜索：没有校验");
+            "unchecked"
+        }
+    };
+    // …AND ONE LINE FOR SCRIPTS (tools/publish-native-engine.ps1), in ASCII.
+    println!("CHECK-NATIVE rows={same} skipped={skipped} riven={riven}");
     Ok(())
 }
 

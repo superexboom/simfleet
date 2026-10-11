@@ -1,5 +1,5 @@
 # Build and pack a release: dist/simfleet-<version>-windows-x64.zip, or on
-# Linux (pwsh) dist/simfleet-<version>-linux-x64.tar.gz — simfleet,
+# Linux (pwsh) dist/simfleet-<version>-linux-x64.tar.gz - simfleet,
 # README.md, LICENSE, NOTICE.md, THIRD-PARTY-LICENSES.md.
 #
 # The native engine is NOT included: simfleet downloads the published build of

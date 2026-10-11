@@ -7,9 +7,9 @@
 # so each build is held to the wasm the site actually serves. Builds the
 # Windows engine for any x86-64 and for x86-64-v3 (tools/build-native-engine.ps1
 # -Strip: card text blanked), holds each to that wasm on WFSim's 32 board
-# rows, the client contract's gas vectors (docs/CLIENTS.md §"Conformance" 7,
+# rows, the client contract's gas vectors (docs/CLIENTS.md section "Conformance" 7,
 # tests/gas/rows.json) and the riven canary, and only then uploads what the
-# release engine-<id> does not hold yet — nothing published is ever replaced.
+# release engine-<id> does not hold yet - nothing published is ever replaced.
 # The Linux builds are the workflow's, which finds the Windows ones here and
 # builds only what is missing.
 #
@@ -56,6 +56,8 @@ $rows = Join-Path $root ".wfsim-src\tests\gas\rows.json"
 $args_ = @("check-native")
 if (Test-Path $rows) { $args_ += @("--rows", $rows) }
 if ($Lanes -gt 0) { $args_ += @("--lanes", "$Lanes") }
+# simfleet writes UTF-8; read it as such (Windows PowerShell would use the code page).
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
 $verdicts = @()
 foreach ($cpu in "baseline", "v3") {
     Write-Host "== check $cpu"
@@ -66,7 +68,12 @@ foreach ($cpu in "baseline", "v3") {
     $ErrorActionPreference = "Stop"
     $out | ForEach-Object { Write-Host $_ }
     if ($code -ne 0) { Write-Host "check failed ($cpu): nothing published"; exit 1 }
-    $verdicts += ($out | Where-Object { $_ -match "逐位一致|紫卡" })
+    # THE VERDICT, from check-native's ASCII line: the rows, and the riven canary's word.
+    $line = $out | Where-Object { $_ -match "^CHECK-NATIVE rows=(\d+) skipped=\d+ riven=(\w+)" } | Select-Object -First 1
+    if (-not $line) { Write-Host "no verdict line ($cpu): nothing published"; exit 1 }
+    $null = $line -match "rows=(\d+) skipped=\d+ riven=(\w+)"
+    $riven = if ($Matches[2] -eq "same") { "the riven canary gave the same answer" } else { "the riven canary did not agree (riven gains stay on the wasm)" }
+    $verdicts += "$(if ($cpu -eq 'v3') { 'x86-64-v3' } else { 'x86-64' }): $($Matches[1]) rows bit for bit (WFSim's board rows and the client contract's gas vectors: score, work, gas), $riven"
 }
 Remove-Item Env:SIMFLEET_CPU
 if ($NoUpload) { Write-Host "checked; -NoUpload: $stage"; exit 0 }
@@ -83,7 +90,7 @@ foreach ($f in $missing) {
 }
 $head = (git -C $root rev-parse HEAD).Trim()
 $tree = "https://github.com/$Repo/tree/$head"
-$checked = ($verdicts | Select-Object -Unique) -join "; "
+$checked = $verdicts -join "; "
 if ($have.Count -gt 0) {
     $notes = (gh release view "engine-$id" -R $Repo --json body -q .body | Out-String).TrimEnd()
     $notes += "`n`n**Added later**, built and checked on a maintainer's machine by tools/publish-native-engine.ps1 at simfleet [``$head``]($tree), card text blanked the same way:`n`n$sums"
