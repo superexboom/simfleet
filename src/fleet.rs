@@ -33,7 +33,7 @@
 use crate::config::{Config, Paths};
 use crate::engine::{Backend, Call, Code, Done, Exec, Job, Pool};
 use crate::net::Net;
-use crate::ui::{group, points, Ctl, TaskLine, Ui, C_BAD, C_END, C_GO, C_INFO, C_OK};
+use crate::ui::{group, points, Ctl, GroupView, Ranked, TaskLine, Ui, C_BAD, C_END, C_GO, C_INFO, C_OK};
 use crate::work::{
     board_payload, call, fetch_release, load_code, truthy, Release, RowScore, LEASE_SAFE,
     PIECE_MS, PROTOCOL, RIVEN_RENEW, STATS_EVERY,
@@ -41,7 +41,7 @@ use crate::work::{
 use crate::{account, jsnum, sys};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -121,7 +121,10 @@ impl BoardRun {
         if !pieces.is_empty() {
             let n = pieces.len() as u32;
             let body = format!(r#"{{"request":{},"acc":{},"pieces":{}}}"#, self.req_s, self.acc, Value::Array(pieces));
+            // The folds count in `compute_ms` too, as the page counts them.
+            let t = Instant::now();
             self.acc = call(exec, backend, "/api/board/fold", body)?["acc"].to_string();
+            self.spent += t.elapsed().as_secs_f64() * 1000.0;
             self.folded += n;
         }
         if self.folded < self.runs {
@@ -136,6 +139,7 @@ impl BoardRun {
             metric: s["metric"].as_str().unwrap_or("").to_string(),
             work: s["work"].as_u64().unwrap_or(0),
             compute_ms: self.spent.round() as u64,
+            counts: s["counts"].clone(),
         }))
     }
 }
@@ -156,6 +160,8 @@ struct Riven {
     done_fights: u64,
     builds: u64,
     fights: u64,
+    /// Every call's own time, summed over the lanes.
+    cpu_ms: f64,
 }
 
 impl Riven {
@@ -174,6 +180,7 @@ impl Riven {
             done_fights: 0,
             builds: 0,
             fights: 0,
+            cpu_ms: 0.0,
         }
     }
     fn job(&mut self, lane: usize, tag: u64) -> Option<Call> {
@@ -192,6 +199,7 @@ impl Riven {
     }
     /// `Some` with the search's result once its lead says there is nothing pending.
     fn done(&mut self, d: Done, lanes: usize) -> Result<Option<Value>> {
+        self.cpu_ms += d.ms;
         if self.lead_tag == Some(d.tag) {
             self.lead_tag = None;
             let r = jsnum::parse(&d.out?)?;
@@ -263,17 +271,24 @@ struct Active {
     last_ran: Instant,
     renewed: Instant,
     renewing: Option<JoinHandle<Option<Value>>>,
+    /// The lanes its jobs ran on, reported with the answer.
+    lanes_used: HashSet<usize>,
 }
 
 impl Active {
     fn riven(&self) -> bool {
         matches!(self.runner, Runner::Riven(_))
     }
-    fn line(&self) -> TaskLine {
-        match &self.runner {
-            Runner::Board(b) => TaskLine { label: format!("榜单 {}", self.label), done: b.folded as u64, total: b.runs as u64, extra: String::new() },
-            Runner::Riven(r) => TaskLine { label: format!("紫卡 {}", self.label), done: r.fights, total: 0, extra: format!("{} 个构筑", group(r.builds)) },
-        }
+    fn line(&self, lanes: usize) -> TaskLine {
+        let mut l = match &self.runner {
+            Runner::Board(b) => TaskLine { done: b.folded as u64, total: b.runs as u64, ..Default::default() },
+            Runner::Riven(r) => TaskLine { riven: true, done: r.fights, extra: format!("{} 个构筑", group(r.builds)), ..Default::default() },
+        };
+        l.group = self.group;
+        l.label = self.label.clone();
+        l.secs = self.began.elapsed().as_secs();
+        l.lanes = lanes;
+        l
     }
 }
 
@@ -284,6 +299,9 @@ struct Group {
     next_ask: Instant,
     next_ahead: Instant,
     claimed: bool,
+    /// Answers the server took from it this run, and their work.
+    done: u64,
+    work: u64,
 }
 
 /// An answer on its way to the server.
@@ -309,6 +327,8 @@ pub struct Fleet {
     open: usize,
     sending: Vec<Sending>,
     tag_task: HashMap<u64, u64>,
+    /// The task whose job each lane runs.
+    lane_job: Vec<Option<u64>>,
     next_id: u64,
     tasks_ahead: usize,
     stale: bool,
@@ -326,7 +346,7 @@ pub struct Fleet {
 
 impl Fleet {
     pub fn new(net: Net, cfg: Config, paths: Paths, ctl: Arc<Ctl>, ui: Arc<Ui>, rel: Release, code: Arc<Code>) -> Fleet {
-        let backend = if code.native.is_some() { "native" } else { "wasm" };
+        let backend = crate::work::backend_label(&code);
         ui.status(|s| {
             s.engine = rel.engine.clone();
             s.backend = backend.into();
@@ -345,6 +365,7 @@ impl Fleet {
             open: 1,
             sending: Vec::new(),
             tag_task: HashMap::new(),
+            lane_job: Vec::new(),
             next_id: 0,
             tasks_ahead: 1,
             stale: false,
@@ -381,7 +402,7 @@ impl Fleet {
                 self.cfg.extra_verifiers[i - 1].clone()
             };
             let now = Instant::now();
-            self.groups.push(Group { verifier, asking: None, next_ask: now, next_ahead: now, claimed: false });
+            self.groups.push(Group { verifier, asking: None, next_ask: now, next_ahead: now, claimed: false, done: 0, work: 0 });
         }
     }
 
@@ -455,7 +476,7 @@ impl Fleet {
             std::thread::spawn(move || Self::release_lease(&net, &v, &lease, code.as_deref()));
         }
         let kind = if t.riven() { "紫卡增益" } else { "榜单" };
-        self.ui.log(format!("{C_GO}[中断]{C_END} {kind} {}{why}", t.label));
+        self.ui.glog(t.group, format!("{C_GO}[中断]{C_END} {kind} {}{why}", t.label));
     }
 
     fn drop_all(&mut self, why: &str) {
@@ -569,7 +590,7 @@ impl Fleet {
         let (runner, label, code) = if w["kind"] == "riven_gain" {
             let code = w["code"].as_str().unwrap_or("").to_string();
             let label = format!("{} · {} [{}]", w["weapon"].as_str().unwrap_or("?"), w["ruler"].as_str().unwrap_or(""), code);
-            self.ui.log(format!("{C_GO}[开始]{C_END} 紫卡增益  {label}{}", self.where_(gi)));
+            self.ui.glog(gi, format!("{C_GO}[开始]{C_END} 紫卡增益  {label}"));
             (Runner::Riven(Riven::new(w["request"].clone())), label, Some(code))
         } else {
             let (ruler, mode) = (w["ruler"].as_str().unwrap_or("").to_string(), w["mode"].as_str().unwrap_or("").to_string());
@@ -578,14 +599,14 @@ impl Fleet {
             match call(&mut self.exec, backend, "/api/board/order", json!({ "record": w["record"], "ruler": ruler, "mode": mode }).to_string()) {
                 Ok(o) => {
                     let runs = o["request"]["runs"].as_u64().unwrap_or(0);
-                    self.ui.log(format!("{C_GO}[开始]{C_END} 榜单  {label}  {runs} 次模拟{}", self.where_(gi)));
+                    self.ui.glog(gi, format!("{C_GO}[开始]{C_END} 榜单  {label}  {runs} 次模拟"));
                     (Runner::Board(BoardRun::new(&o["request"], &ruler)), label, None)
                 }
                 Err(e) => {
                     if !self.offline {
                         Self::release_lease(&self.net, &verifier, &lease, None);
                     }
-                    self.ui.log(format!("{C_BAD}[跳过]{C_END} 榜单 {label}：{e:#}"));
+                    self.ui.glog(gi, format!("{C_BAD}[跳过]{C_END} 榜单 {label}：{e:#}"));
                     return false;
                 }
             }
@@ -603,12 +624,9 @@ impl Fleet {
             last_ran: now,
             renewed: now,
             renewing: None,
+            lanes_used: HashSet::new(),
         });
         true
-    }
-
-    fn where_(&self, gi: usize) -> String {
-        if self.groups.len() > 1 { format!("  （第 {} 路）", gi + 1) } else { String::new() }
     }
 
     fn claim(&mut self, gi: usize) {
@@ -663,6 +681,11 @@ impl Fleet {
                 };
                 if let Some((backend, call)) = job {
                     t.last_ran = Instant::now();
+                    t.lanes_used.insert(lane);
+                    if self.lane_job.len() <= lane {
+                        self.lane_job.resize(lane + 1, None);
+                    }
+                    self.lane_job[lane] = Some(t.id);
                     self.tag_task.insert(tag, t.id);
                     self.pool.send(lane, Job { tag, backend, call });
                     break;
@@ -673,6 +696,9 @@ impl Fleet {
 
     /// One finished job, into its task; a task that is done is answered.
     fn absorb(&mut self, d: Done) {
+        if let Some(l) = self.lane_job.get_mut(d.lane) {
+            *l = None;
+        }
         let Some(id) = self.tag_task.remove(&d.tag) else { return };
         let Some(ti) = self.tasks.iter().position(|t| t.id == id) else { return };
         let lanes = self.lanes();
@@ -691,8 +717,8 @@ impl Fleet {
                 self.answer(t, f);
             }
             Err(e) => {
-                let label = self.tasks[ti].label.clone();
-                self.ui.log(format!("{C_BAD}[失败]{C_END} {label}：{e:#}"));
+                let (label, gi) = (self.tasks[ti].label.clone(), self.tasks[ti].group);
+                self.ui.glog(gi, format!("{C_BAD}[失败]{C_END} {label}：{e:#}"));
                 self.drop_task(id, "，任务已交还", true);
             }
         }
@@ -701,11 +727,20 @@ impl Fleet {
     /// The answer, sent on its own thread (printed instead, offline).
     fn answer(&mut self, t: Active, f: Finished) {
         let secs = t.began.elapsed().as_secs_f64();
+        let lanes = t.lanes_used.len().max(1);
         let (path, body, log_ok, work, recent) = match f {
             Finished::Board(s) => (
                 "/api/board/verify".to_string(),
-                json!({ "lease": t.lease, "verifier": t.verifier, "engine": self.rel.engine,
-                        "score": s.score, "metric": s.metric, "work": s.work, "compute_ms": s.compute_ms }),
+                {
+                    // `counts` and `lanes`: what the row cost, kept beside the answer to
+                    // fit what a point is worth (never credited; 69-board-work.js).
+                    let mut b = json!({ "lease": t.lease, "verifier": t.verifier, "engine": self.rel.engine,
+                        "score": s.score, "metric": s.metric, "work": s.work, "compute_ms": s.compute_ms, "lanes": lanes });
+                    if s.counts.is_object() {
+                        b["counts"] = s.counts.clone();
+                    }
+                    b
+                },
                 format!("{C_OK}[完成]{C_END} 榜单  {}  = {:.4} {} · {:.2} 分 · {secs:.1}s", t.label, s.score, s.metric, points(s.work)),
                 s.work,
                 Some((false, json!({ "identity": t.w["identity"], "ruler": t.w["ruler"], "mode": t.w["mode"] }))),
@@ -719,15 +754,19 @@ impl Fleet {
                         let (net, v, lease, code) = (self.net.clone(), t.verifier.clone(), t.lease.clone(), t.code.clone());
                         std::thread::spawn(move || Self::release_lease(&net, &v, &lease, code.as_deref()));
                     }
-                    self.ui.log(format!("{C_BAD}[无结果]{C_END} 紫卡增益 {}：{}", t.label, r["error"].as_str().unwrap_or("搜索没有找到构筑")));
+                    self.ui.glog(t.group, format!("{C_BAD}[无结果]{C_END} 紫卡增益 {}：{}", t.label, r["error"].as_str().unwrap_or("搜索没有找到构筑")));
                     return;
                 };
                 let work = r["work"].as_u64().unwrap_or(0);
                 let build = board_payload(&best, &t.w["context"]);
                 let score = best["kill_progress"].as_f64().unwrap_or(0.0);
-                let (builds, kp) = match &t.runner {
-                    Runner::Riven(rv) => (rv.builds, best["kill_progress"].as_f64().or(best["kills"].as_f64()).unwrap_or(0.0)),
-                    _ => (0, 0.0),
+                let (builds, kp, cost) = match &t.runner {
+                    Runner::Riven(rv) => (
+                        rv.builds,
+                        best["kill_progress"].as_f64().or(best["kills"].as_f64()).unwrap_or(0.0),
+                        (rv.cpu_ms.round() as u64, json!({ "builds": rv.builds, "fights": rv.done_fights, "steps": rv.step })),
+                    ),
+                    _ => (0, 0.0, (0, json!({}))),
                 };
                 let dur = r["duration"].as_f64().unwrap_or(0.0);
                 let shown = if dur > 0.0 { format!("{:.2} kpm", kp * 60.0 / dur) } else { format!("{kp:.2}") };
@@ -736,7 +775,9 @@ impl Fleet {
                 }
                 (
                     format!("/api/appraise/{}/result", t.code.clone().unwrap_or_default()),
-                    json!({ "build": build, "lease": t.lease, "verifier": t.verifier, "engine": self.rel.engine, "score": score, "work": work }),
+                    // …and what the search cost, as the page sends it (never credited).
+                    json!({ "build": build, "lease": t.lease, "verifier": t.verifier, "engine": self.rel.engine, "score": score, "work": work,
+                            "compute_ms": cost.0, "lanes": lanes, "counts": cost.1 }),
                     format!("{C_OK}[完成]{C_END} 紫卡增益  {}  最佳 {shown} · 试了 {} 个构筑 · {:.2} 分 · {secs:.0}s", t.label, group(builds), points(work)),
                     work,
                     Some((true, json!({ "code": t.code, "at": sys::now_ms() }))),
@@ -747,7 +788,7 @@ impl Fleet {
             if !t.riven() {
                 println!("{}", json!({ "kind": "board", "score": body["score"], "metric": body["metric"], "work": body["work"], "compute_ms": body["compute_ms"] }));
             }
-            self.ui.log(log_ok);
+            self.ui.glog(t.group, log_ok);
             return;
         }
         if let Some((kind, v)) = recent {
@@ -769,13 +810,22 @@ impl Fleet {
                 let s = self.sending.remove(i);
                 let ok = s.handle.join().unwrap_or(false);
                 if ok {
-                    self.ui.log(s.log_ok);
+                    self.ui.glog(s.group, s.log_ok);
+                    if let Some(g) = self.groups.get_mut(s.group) {
+                        g.done += 1;
+                        g.work += s.work;
+                    }
+                    let now = Instant::now();
                     self.ui.status(|st| {
                         st.session_tasks += 1;
                         st.session_work += s.work;
+                        st.answered.push_back((now, s.work));
+                        while st.answered.front().is_some_and(|a| now.duration_since(a.0) > Duration::from_secs(900)) {
+                            st.answered.pop_front();
+                        }
                     });
                 } else {
-                    self.ui.log(format!("{C_BAD}[失败]{C_END} 结果没能发出"));
+                    self.ui.glog(s.group, format!("{C_BAD}[失败]{C_END} 结果没能发出"));
                 }
             } else {
                 i += 1;
@@ -847,7 +897,36 @@ impl Fleet {
 
     fn show(&mut self) {
         let (lanes, idle, open) = (self.lanes(), self.idle(), self.open);
-        let lines: Vec<TaskLine> = self.tasks.iter().map(Active::line).collect();
+        let running = |id: u64| self.lane_job.iter().filter(|l| **l == Some(id)).count();
+        let lines: Vec<TaskLine> = self.tasks.iter().map(|t| t.line(running(t.id))).collect();
+        let group_of: HashMap<u64, usize> = self.tasks.iter().map(|t| (t.id, t.group)).collect();
+        let lane_map: Vec<Option<usize>> =
+            (0..lanes).map(|l| self.lane_job.get(l).copied().flatten().and_then(|id| group_of.get(&id).copied())).collect();
+        let now = Instant::now();
+        let views: Vec<GroupView> = self
+            .groups
+            .iter()
+            .enumerate()
+            .map(|(gi, g)| {
+                let held = self.tasks.iter().filter(|t| t.group == gi).count();
+                let state = if held > 1 {
+                    "计算中（含预取）"
+                } else if held == 1 {
+                    "计算中"
+                } else if self.sending.iter().any(|s| s.group == gi) {
+                    "提交结果"
+                } else if g.asking.is_some() {
+                    "取任务"
+                } else if gi >= open {
+                    "暂不接活"
+                } else if g.next_ask > now {
+                    "暂无任务"
+                } else {
+                    "等待"
+                };
+                GroupView { id: g.verifier.get(..8).unwrap_or(&g.verifier).to_string(), state: state.into(), open: gi < open, tasks: g.done, work: g.work }
+            })
+            .collect();
         let state = if let Some(u) = &self.banned_until {
             format!("冷却中，至 {u}")
         } else if self.tasks.is_empty() {
@@ -861,6 +940,8 @@ impl Fleet {
             s.idle = idle;
             s.tasks = lines;
             s.groups = open;
+            s.group_views = views;
+            s.lane_map = lane_map;
         });
     }
 
@@ -981,7 +1062,7 @@ impl Fleet {
     }
 
     fn swap_code(&mut self, code: Arc<Code>) {
-        let backend = if code.native.is_some() { "native" } else { "wasm" };
+        let backend = crate::work::backend_label(&code);
         self.pool = Pool::new(code.clone());
         self.meter.rebase();
         self.tag_task.clear();
@@ -1020,7 +1101,35 @@ impl Fleet {
             }
         }
         let dev = self.net.session.as_ref().and_then(|_| account::devices(&self.net));
-        let computing = self.net.get("/api/board/computing").ok().and_then(|r| r.body["computing"].as_u64());
+        // THE SITE'S SIDE - who is computing, what is owed, the week's ranking - on
+        // its own thread; the ranking is the page's own (`/api/contributors`).
+        let (net, ui) = (self.net.clone(), self.ui.clone());
+        std::thread::spawn(move || {
+            let demand = net.get("/api/board/demand").ok().map(|r| r.body).filter(|b| b["ok"] == json!(true));
+            let top = net.get("/api/contributors?period=week&limit=40").ok().map(|r| r.body).filter(|b| b["ok"] == json!(true));
+            ui.status(|s| {
+                if let Some(d) = &demand {
+                    s.computing_now = d["computing"].as_u64();
+                    s.owed = Some(["new_builds", "rescores", "sweeps", "refreshes"].iter().map(|k| d["owed"][k].as_u64().unwrap_or(0)).sum());
+                    s.per_hour = Some((d["per_hour"]["volunteers"].as_u64().unwrap_or(0), d["per_hour"]["official"].as_u64().unwrap_or(0)));
+                }
+                if let Some(t) = &top {
+                    s.ranking_total = t["total"].as_u64();
+                    s.ranking = t["contributors"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .enumerate()
+                        .map(|(i, r)| Ranked {
+                            rank: i as u64 + 1,
+                            name: r["name"].as_str().unwrap_or("匿名").chars().filter(|c| !c.is_control()).take(24).collect(),
+                            points: r["week"].as_u64().unwrap_or(0),
+                            you: r["you"] == json!(true),
+                        })
+                        .collect();
+                }
+            });
+        });
         let (mut confirmed, mut waiting) = (0u64, 0u64);
         for g in &self.groups {
             let mine = |riven: bool| -> Vec<Value> {
@@ -1065,7 +1174,6 @@ impl Fleet {
                 s.account = None;
                 s.account_points = None;
             }
-            s.computing_now = computing;
             s.confirmed = confirmed;
             s.waiting = waiting;
         });

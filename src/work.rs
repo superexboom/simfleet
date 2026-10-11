@@ -78,6 +78,15 @@ pub fn native_variants() -> Vec<&'static str> {
     }
 }
 
+/// How the console names the backend a `Code` computes board rows on.
+pub fn backend_label(code: &Code) -> &'static str {
+    match &code.native {
+        Some(n) if n.variant == "-v3" => "原生 AVX2",
+        Some(_) => "原生",
+        None => "wasm",
+    }
+}
+
 fn variant_label(variant: &str) -> &'static str {
     if variant == "-v3" { "（AVX2 版）" } else { "" }
 }
@@ -157,7 +166,8 @@ pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release
             continue;
         }
         match NativeLib::open(&lib) {
-            Ok(n) if n.engine_id == rel.engine => {
+            Ok(mut n) if n.engine_id == rel.engine => {
+                n.variant = variant;
                 code.native = Some(n);
                 let shared = Arc::new(code);
                 let checked = canary(&shared);
@@ -281,6 +291,9 @@ pub struct RowScore {
     pub metric: String,
     pub work: u64,
     pub compute_ms: u64,
+    /// The counts the work was weighed from (`/api/board/score`), sent beside
+    /// the answer; null from an engine that does not say them.
+    pub counts: Value,
 }
 
 /// ONE ROW, MEASURED (69-board-work.js `measureRow`): its runs fought on the
@@ -373,6 +386,7 @@ pub fn measure_row(
         metric: s["metric"].as_str().unwrap_or("").to_string(),
         work: s["work"].as_u64().unwrap_or(0),
         compute_ms: spent.round() as u64,
+        counts: s["counts"].clone(),
     }))
 }
 

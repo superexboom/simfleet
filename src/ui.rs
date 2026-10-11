@@ -1,18 +1,26 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! THE CONSOLE: tasks scroll past above, and the bottom three lines stay put —
-//! what this machine is doing, what it has given, and the keys.
+//! THE CONSOLE: a dashboard redrawn in place — each group of this machine with
+//! the tasks it holds and what it said, what the machine has given, its load,
+//! and the week's ranking — on the terminal's alternate screen, so the window
+//! comes back as it was when simfleet ends, with the log's last lines in it.
 //!
-//! The scrolling part is a terminal scroll region (DECSTBM), so the log is
-//! ordinary text the terminal keeps in its scrollback; the status lines are
-//! repainted in place four times a second. Without a terminal (output piped to
-//! a file) it is a plain log with a status line every minute.
+//! It is drawn on a grid of cells and sent row by row, only the rows that
+//! changed. NO ROW IS WRITTEN TO ITS LAST COLUMN and autowrap is off while it
+//! runs: the Windows console in a CJK locale draws `·` or `●` two columns
+//! wide, and a status row one column too long scrolled the whole screen there.
+//! How this console draws such characters is measured when it starts (one `·`,
+//! and where the cursor went), and every width counted that way.
+//!
+//! Without a terminal (output piped to a file) it is a plain log with a status
+//! line every minute.
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use std::collections::VecDeque;
 use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthChar;
 
 /// What the keys change, read by the work loop.
 pub struct Ctl {
@@ -23,14 +31,39 @@ pub struct Ctl {
     pub max_cores: usize,
 }
 
-/// One held task, as the bottom line shows it.
+/// One held task.
 #[derive(Default, Clone)]
 pub struct TaskLine {
+    pub group: usize,
+    pub riven: bool,
     pub label: String,
     pub done: u64,
     /// 0 for a task whose length is not known ahead (a search).
     pub total: u64,
     pub extra: String,
+    pub secs: u64,
+    /// Lanes running its jobs right now.
+    pub lanes: usize,
+}
+
+/// One group (computer id).
+#[derive(Default, Clone)]
+pub struct GroupView {
+    pub id: String,
+    pub state: String,
+    /// Still taking new work.
+    pub open: bool,
+    pub tasks: u64,
+    pub work: u64,
+}
+
+/// A row of the week's ranking (`/api/contributors`).
+#[derive(Default, Clone)]
+pub struct Ranked {
+    pub rank: u64,
+    pub name: String,
+    pub points: u64,
+    pub you: bool,
 }
 
 #[derive(Default, Clone)]
@@ -51,23 +84,45 @@ pub struct Status {
     pub account_points: Option<u64>,
     pub contributor_rank: Option<u64>,
     pub computing_now: Option<u64>,
+    /// Board rows the site owes (`/api/board/demand`), and the rows done an
+    /// hour by volunteers and by the official machines.
+    pub owed: Option<u64>,
+    pub per_hour: Option<(u64, u64)>,
+    pub ranking: Vec<Ranked>,
+    pub ranking_total: Option<u64>,
     /// Busy lane time over the budget's lane time, last five minutes / session.
     pub utilisation: Option<f64>,
     pub utilisation_total: Option<f64>,
     pub tasks: Vec<TaskLine>,
-    /// Computer ids taking work now.
+    /// Groups taking work now.
     pub groups: usize,
+    pub group_views: Vec<GroupView>,
+    /// Each lane the budget allows now: the group whose job it runs, if any.
+    pub lane_map: Vec<Option<usize>>,
+    /// When the server took each answer, and its work: the last quarter hour.
+    pub answered: VecDeque<(Instant, u64)>,
     pub note: String,
 }
 
+struct LogLine {
+    group: Option<usize>,
+    text: String,
+}
+
 struct Inner {
-    lines: Vec<String>,
+    lines: VecDeque<LogLine>,
+    /// Lines ever dropped from the front, and the count printed on the main screen.
+    first: u64,
+    printed: u64,
+    /// The dashboard is up (the alternate screen).
+    live: bool,
     status: Status,
 }
 
 pub struct Ui {
     inner: Mutex<Inner>,
     tty: bool,
+    started: Instant,
 }
 
 pub const C_DIM: &str = "\x1b[2m";
@@ -77,7 +132,10 @@ pub const C_BAD: &str = "\x1b[31m";
 pub const C_INFO: &str = "\x1b[36m";
 pub const C_END: &str = "\x1b[0m";
 
-const STATUS_ROWS: u16 = 3;
+/// Log lines kept for the panels and for paging back.
+const KEEP: usize = 3000;
+/// …and printed on the main screen when the dashboard closes.
+const TAIL: usize = 40;
 
 pub fn points(work: u64) -> f64 {
     work as f64 / 1e9
@@ -95,33 +153,10 @@ pub fn group(n: u64) -> String {
     out
 }
 
-/// Cut to `w` columns, counting a CJK character as two; escape codes count none.
-fn fit(s: &str, w: usize) -> String {
-    let mut out = String::new();
-    let mut used = 0;
-    let mut esc = false;
-    for c in s.chars() {
-        if esc {
-            out.push(c);
-            if c.is_ascii_alphabetic() {
-                esc = false;
-            }
-            continue;
-        }
-        if c == '\x1b' {
-            esc = true;
-            out.push(c);
-            continue;
-        }
-        let cw = c.width().unwrap_or(0);
-        if used + cw > w {
-            break;
-        }
-        used += cw;
-        out.push(c);
-    }
-    out.push_str(C_END);
-    out
+/// 23468.6 → "23,468.6"
+fn pts(p: f64) -> String {
+    let whole = p.max(0.0).floor();
+    format!("{}.{}", group(whole as u64), ((p - whole) * 10.0).floor().clamp(0.0, 9.0) as u64)
 }
 
 fn strip(s: &str) -> String {
@@ -141,201 +176,1042 @@ fn strip(s: &str) -> String {
     out
 }
 
+/// 75 → "1m15s"
+fn dur(secs: u64) -> String {
+    match secs {
+        0..60 => format!("{secs}s"),
+        60..3600 => format!("{}m{:02}s", secs / 60, secs % 60),
+        _ => format!("{}h{:02}m", secs / 3600, secs / 60 % 60),
+    }
+}
+
+fn hms(secs: u64) -> String {
+    format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60)
+}
+
+/// Points a minute: over the last ten minutes, and over the whole run.
+fn rates(s: &Status, up: Duration) -> (f64, f64) {
+    let mins = (up.as_secs_f64() / 60.0).max(1.0 / 60.0);
+    let recent: u64 = s.answered.iter().filter(|(t, _)| t.elapsed() < Duration::from_secs(600)).map(|(_, w)| w).sum();
+    (points(recent) / mins.min(10.0), points(s.session_work) / mins)
+}
+
 impl Ui {
     pub fn new() -> Arc<Ui> {
-        Arc::new(Ui { inner: Mutex::new(Inner { lines: Vec::new(), status: Status::default() }), tty: std::io::stdout().is_terminal() })
+        Arc::new(Ui {
+            inner: Mutex::new(Inner { lines: VecDeque::new(), first: 0, printed: 0, live: false, status: Status::default() }),
+            tty: std::io::stdout().is_terminal(),
+            started: Instant::now(),
+        })
     }
     pub fn log(&self, line: impl Into<String>) {
-        let line = format!("{}{} {}{}", C_DIM, crate::sys::clock(), C_END, line.into());
-        if self.tty {
-            self.inner.lock().unwrap().lines.push(line);
-        } else {
-            println!("{}", strip(&line));
+        self.push(None, line.into());
+    }
+    /// A line about one group, shown in that group's box.
+    pub fn glog(&self, group: usize, line: impl Into<String>) {
+        self.push(Some(group), line.into());
+    }
+    fn push(&self, group: Option<usize>, line: String) {
+        let text = format!("{C_DIM}{}{C_END} {line}", crate::sys::clock());
+        let mut g = self.inner.lock().unwrap();
+        g.lines.push_back(LogLine { group, text: text.clone() });
+        if g.lines.len() > KEEP {
+            g.lines.pop_front();
+            g.first += 1;
+        }
+        if !g.live {
+            g.printed = g.first + g.lines.len() as u64;
+            drop(g);
+            if self.tty {
+                println!("{text}{C_END}");
+            } else {
+                println!("{}", strip(&text));
+            }
         }
     }
     pub fn status(&self, f: impl FnOnce(&mut Status)) {
         f(&mut self.inner.lock().unwrap().status);
     }
-    /// Lines logged after the painter stopped, printed plainly.
+    /// Lines logged while nothing showed them, printed plainly.
     pub fn flush_plain(&self) {
-        for l in std::mem::take(&mut self.inner.lock().unwrap().lines) {
-            println!("{}", strip(&l));
+        let mut g = self.inner.lock().unwrap();
+        if g.live {
+            return;
         }
+        let end = g.first + g.lines.len() as u64;
+        let from = g.printed.max(g.first);
+        for l in g.lines.range((from - g.first) as usize..) {
+            println!("{}", strip(&l.text));
+        }
+        g.printed = end;
     }
     pub fn snapshot(&self) -> Status {
         self.inner.lock().unwrap().status.clone()
     }
 
-    fn status_lines(s: &Status, ctl: &Ctl) -> [String; 2] {
-        // MOST IMPORTANT FIRST: a narrow window cuts from the right.
+    /// The minute line of a run without a terminal.
+    fn plain_status(&self, s: &Status, ctl: &Ctl) -> String {
+        let (rate, _) = rates(s, self.started.elapsed());
         let mut a = format!(
-            " {}●{} {} · {}/{} 核{} · 本次 {} 任务 {:.1} 分",
-            if s.state.starts_with("计算") { C_OK } else { C_GO },
-            C_END,
+            "{} | {}/{} 核 | 本次 {} 任务 {} 分 | {:.1} 分/分钟",
             s.state,
             s.lanes_now,
             ctl.max_cores,
-            if s.idle { "(空闲)" } else { "(使用中)" },
             s.session_tasks,
-            points(s.session_work)
+            pts(points(s.session_work)),
+            rate
         );
-        if s.confirmed + s.waiting > 0 {
-            a += &format!("(已确认 {}/待确认 {})", s.confirmed, s.waiting);
-        }
         if let Some(t) = s.today_points {
-            a += &format!(" · 今日 {} 分", group(t));
-        }
-        match (&s.account, s.account_points) {
-            (Some(name), Some(p)) => {
-                a += &format!(" · {} 累计 {} 分", name, group(p));
-                if let Some(r) = s.contributor_rank {
-                    a += &format!(" 段位 {r}");
-                }
-            }
-            _ => {
-                if let Some(p) = s.device_points {
-                    a += &format!(" · 本机累计 {} 分(未登录)", group(p));
-                }
-            }
-        }
-        if let Some(c) = s.computing_now {
-            a += &format!(" · 全站在线 {c}");
+            a += &format!(" | 今日 {} 分", group(t));
         }
         if let Some(u) = s.utilisation {
-            a += &format!(" · 利用率 {:.0}%", u * 100.0);
+            a += &format!(" | 利用率 {:.0}%", u * 100.0);
         }
-        a += &format!(" · {} {}", s.backend, s.engine.get(..8).unwrap_or(&s.engine));
-        if s.groups > 1 {
-            a += &format!(" · {} 路并行", s.groups);
-        }
-        let mut b = String::from(" ");
-        // ONE TASK in full; several, one short cell each.
-        match s.tasks.as_slice() {
-            [] => {}
-            [t] if t.total == 0 => {
-                b += &format!("{}  已打 {} 场 · 试了 {}   ", t.label, group(t.done), if t.extra.is_empty() { "0 个构筑" } else { &t.extra });
-            }
-            [t] => {
-                let bar = 20usize;
-                let frac = (t.done as f64 / t.total as f64).clamp(0.0, 1.0);
-                let fill = (frac * bar as f64).round() as usize;
-                b += &format!("{}  [{}{}] {:>3.0}% ({}/{})   ", t.label, "#".repeat(fill), "-".repeat(bar - fill), frac * 100.0, t.done, t.total);
-            }
-            many => {
-                for t in many {
-                    if t.total == 0 {
-                        b += &format!("{} {}场 | ", t.label, group(t.done));
-                    } else {
-                        b += &format!("{} {:.0}% | ", t.label, 100.0 * t.done as f64 / t.total as f64);
-                    }
-                }
-                b += "  ";
+        for t in &s.tasks {
+            if t.total > 0 {
+                a += &format!(" | {} {:.0}%", t.label, 100.0 * t.done as f64 / t.total as f64);
+            } else {
+                a += &format!(" | {} {} 场", t.label, group(t.done));
             }
         }
-        if !s.note.is_empty() {
-            b += &format!("{}{}{}   ", C_INFO, s.note, C_END);
-        }
-        b += &format!("{}[P]暂停/继续 [+/-]空闲核心 [Q]退出{}", C_DIM, C_END);
-        [a, b]
+        a
     }
 
     /// The render-and-keys thread. Returns when `ctl.quit` is set and the screen is restored.
     pub fn run(self: Arc<Ui>, ctl: Arc<Ctl>) -> std::thread::JoinHandle<()> {
         std::thread::spawn(move || {
-            if !self.tty {
-                // Piped: a line on stdin is a key — `p` pauses, `q` quits.
-                let (c2, u2) = (ctl.clone(), self.clone());
-                std::thread::spawn(move || {
-                    let mut line = String::new();
-                    while std::io::stdin().read_line(&mut line).unwrap_or(0) > 0 {
-                        match line.trim() {
-                            "q" | "Q" => c2.quit.store(true, Ordering::Relaxed),
-                            "p" | "P" => {
-                                let p = !c2.paused.load(Ordering::Relaxed);
-                                c2.paused.store(p, Ordering::Relaxed);
-                                u2.log(if p { "[暂停]" } else { "[继续]" });
-                            }
-                            _ => {}
-                        }
-                        line.clear();
-                    }
-                });
-                let mut last = Instant::now();
-                while !ctl.quit.load(Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(250));
-                    if last.elapsed() > Duration::from_secs(60) {
-                        last = Instant::now();
-                        let s = self.snapshot();
-                        let [a, b] = Self::status_lines(&s, &ctl);
-                        println!("{}", strip(&format!("{} |{}", a, b)));
-                    }
-                }
+            if self.tty {
+                self.paint(&ctl);
                 return;
             }
-            let _ = crossterm::terminal::enable_raw_mode();
-            let mut out = std::io::stdout();
-            let mut size = (0u16, 0u16);
-            let mut log_row = 1u16;
-            loop {
-                let (w, h) = crossterm::terminal::size().unwrap_or((100, 30));
-                if (w, h) != size {
-                    size = (w, h);
-                    let region = h.saturating_sub(STATUS_ROWS).max(2);
-                    log_row = region;
-                    let _ = write!(out, "\x1b[r\x1b[{h};1H\r\n\x1b[1;{region}r\x1b[{region};1H");
+            // Piped: a line on stdin is a key — `p` pauses, `q` quits.
+            let (c2, u2) = (ctl.clone(), self.clone());
+            std::thread::spawn(move || {
+                let mut line = String::new();
+                while std::io::stdin().read_line(&mut line).unwrap_or(0) > 0 {
+                    match line.trim() {
+                        "q" | "Q" => c2.quit.store(true, Ordering::Relaxed),
+                        "p" | "P" => {
+                            let p = !c2.paused.load(Ordering::Relaxed);
+                            c2.paused.store(p, Ordering::Relaxed);
+                            u2.log(if p { "[暂停]" } else { "[继续]" });
+                        }
+                        _ => {}
+                    }
+                    line.clear();
                 }
-                let (lines, status) = {
-                    let mut g = self.inner.lock().unwrap();
-                    (std::mem::take(&mut g.lines), g.status.clone())
+            });
+            let mut last = Instant::now();
+            while !ctl.quit.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(250));
+                if last.elapsed() > Duration::from_secs(60) {
+                    last = Instant::now();
+                    let s = self.snapshot();
+                    println!("{}", self.plain_status(&s, &ctl));
+                }
+            }
+        })
+    }
+
+    fn paint(&self, ctl: &Ctl) {
+        let _ = crossterm::terminal::enable_raw_mode();
+        let mut out = std::io::stdout();
+        let wide = probe_wide(&mut out);
+        self.inner.lock().unwrap().live = true;
+        let _ = write!(out, "\x1b[?1049h\x1b[?7l\x1b[?25l\x1b[2J");
+        let mut prev: Vec<String> = Vec::new();
+        let mut size = (0u16, 0u16);
+        let mut view = View::default();
+        let mut meter = SysMeter::default();
+        loop {
+            let (w, h) = crossterm::terminal::size().unwrap_or((100, 30));
+            if (w, h) != size {
+                size = (w, h);
+                prev.clear();
+                let _ = write!(out, "\x1b[0m\x1b[2J");
+            }
+            meter.tick();
+            // The last column stays empty (see the module's note).
+            let mut c = Canvas::new((w as usize).saturating_sub(1), h as usize, wide);
+            {
+                let g = self.inner.lock().unwrap();
+                let f = Frame {
+                    s: &g.status,
+                    lines: &g.lines,
+                    ctl,
+                    m: meter.view,
+                    up: self.started.elapsed(),
+                    multi: g.status.group_views.len() > 1,
                 };
-                let mut buf = String::new();
-                for l in lines {
-                    // A long line wraps inside the scroll region; the status rows are below it.
-                    buf += &format!("\x1b[{log_row};1H\r\n{l}{C_END}");
+                draw(&mut c, &f, &mut view);
+            }
+            let mut buf = String::new();
+            prev.resize(c.h, String::new());
+            for y in 0..c.h {
+                let row = c.row(y);
+                if row != prev[y] {
+                    buf += &format!("\x1b[{};1H{row}", y + 1);
+                    prev[y] = row;
                 }
-                let [a, b] = Self::status_lines(&status, &ctl);
-                let cols = w.saturating_sub(1) as usize;
-                let sep = "─".repeat(cols / "─".width().max(1));
-                buf += &format!("\x1b7\x1b[{};1H\x1b[2K{}{}{}", h - 2, C_DIM, sep, C_END);
-                buf += &format!("\x1b[{};1H\x1b[2K{}", h - 1, fit(&a, cols));
-                buf += &format!("\x1b[{};1H\x1b[2K{}\x1b8", h, fit(&b, cols));
+            }
+            if !buf.is_empty() {
                 let _ = out.write_all(buf.as_bytes());
                 let _ = out.flush();
-                if ctl.quit.load(Ordering::Relaxed) {
-                    break;
-                }
-                while event::poll(Duration::from_millis(0)).unwrap_or(false) {
-                    if let Ok(Event::Key(k)) = event::read() {
-                        if k.kind != KeyEventKind::Press {
-                            continue;
-                        }
-                        match k.code {
-                            KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => ctl.quit.store(true, Ordering::Relaxed),
-                            KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => ctl.quit.store(true, Ordering::Relaxed),
-                            KeyCode::Char('p') | KeyCode::Char('P') | KeyCode::Char(' ') => {
-                                let p = !ctl.paused.load(Ordering::Relaxed);
-                                ctl.paused.store(p, Ordering::Relaxed);
-                                self.log(if p { format!("{C_GO}[暂停]{C_END} 手头的任务交还给服务器，按 P 继续") } else { format!("{C_OK}[继续]{C_END}") });
-                            }
-                            KeyCode::Char('+') | KeyCode::Char('=') => {
-                                let n = (ctl.idle_cores.load(Ordering::Relaxed) + 1).min(ctl.max_cores);
-                                ctl.idle_cores.store(n, Ordering::Relaxed);
-                                self.log(format!("空闲时使用 {n} 个核心"));
-                            }
-                            KeyCode::Char('-') | KeyCode::Char('_') => {
-                                let n = ctl.idle_cores.load(Ordering::Relaxed).saturating_sub(1).max(1);
-                                ctl.idle_cores.store(n, Ordering::Relaxed);
-                                self.log(format!("空闲时使用 {n} 个核心"));
-                            }
-                            _ => {}
-                        }
+            }
+            if ctl.quit.load(Ordering::Relaxed) {
+                break;
+            }
+            if event::poll(Duration::from_millis(250)).unwrap_or(false) {
+                while let Ok(true) = event::poll(Duration::ZERO) {
+                    match event::read() {
+                        Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => self.key(k.code, k.modifiers, ctl, &mut view, h as usize),
+                        _ => {}
                     }
                 }
-                std::thread::sleep(Duration::from_millis(250));
             }
-            let _ = write!(out, "\x1b[r\x1b[{};1H\r\n", size.1);
-            let _ = out.flush();
-            let _ = crossterm::terminal::disable_raw_mode();
+        }
+        let _ = write!(out, "\x1b[0m\x1b[2J\x1b[?25h\x1b[?7h\x1b[?1049l");
+        let _ = out.flush();
+        let _ = crossterm::terminal::disable_raw_mode();
+        // THE LOG'S TAIL, on the screen the user returns to.
+        let mut g = self.inner.lock().unwrap();
+        let end = g.first + g.lines.len() as u64;
+        let from = g.printed.max(end.saturating_sub(TAIL as u64)).max(g.first);
+        for l in g.lines.range((from - g.first) as usize..) {
+            println!("{}{C_END}", l.text);
+        }
+        g.printed = end;
+        g.live = false;
+    }
+
+    fn key(&self, code: KeyCode, mods: KeyModifiers, ctl: &Ctl, v: &mut View, h: usize) {
+        let page = h.saturating_sub(4).max(1);
+        match code {
+            KeyCode::Char('c') if mods.contains(KeyModifiers::CONTROL) => ctl.quit.store(true, Ordering::Relaxed),
+            KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => ctl.quit.store(true, Ordering::Relaxed),
+            KeyCode::Char('p') | KeyCode::Char('P') | KeyCode::Char(' ') => {
+                let p = !ctl.paused.load(Ordering::Relaxed);
+                ctl.paused.store(p, Ordering::Relaxed);
+                self.log(if p { format!("{C_GO}[暂停]{C_END} 手头的任务交还给服务器，按 P 继续") } else { format!("{C_OK}[继续]{C_END}") });
+            }
+            KeyCode::Char('+') | KeyCode::Char('=') => {
+                let n = (ctl.idle_cores.load(Ordering::Relaxed) + 1).min(ctl.max_cores);
+                ctl.idle_cores.store(n, Ordering::Relaxed);
+                self.log(format!("空闲时使用 {n} 个核心"));
+            }
+            KeyCode::Char('-') | KeyCode::Char('_') => {
+                let n = ctl.idle_cores.load(Ordering::Relaxed).saturating_sub(1).max(1);
+                ctl.idle_cores.store(n, Ordering::Relaxed);
+                self.log(format!("空闲时使用 {n} 个核心"));
+            }
+            KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Tab => {
+                v.full_log = !v.full_log;
+                v.scroll = 0;
+            }
+            KeyCode::PageUp | KeyCode::Up => v.scroll += if code == KeyCode::Up { 1 } else { page },
+            KeyCode::PageDown | KeyCode::Down => v.scroll = v.scroll.saturating_sub(if code == KeyCode::Down { 1 } else { page }),
+            KeyCode::End => v.scroll = 0,
+            KeyCode::Home => v.scroll = usize::MAX,
+            _ => {}
+        }
+    }
+}
+
+/// Whether this console draws East Asian ambiguous-width characters two
+/// columns wide: one `·` written at the line's start, and where the cursor
+/// ended. (conhost in a CJK locale draws `·` and `●` two wide yet `─` one, so
+/// there every ambiguous one is counted two: never fewer columns than drawn.)
+/// `SIMFLEET_WIDE=1` / `0` says it instead.
+fn probe_wide(out: &mut std::io::Stdout) -> bool {
+    if let Ok(v) = std::env::var("SIMFLEET_WIDE") {
+        return v.trim() == "1";
+    }
+    let _ = write!(out, "\r·");
+    let _ = out.flush();
+    let wide = matches!(crossterm::cursor::position(), Ok((2, _)));
+    let _ = write!(out, "\r  \r");
+    let _ = out.flush();
+    wide
+}
+
+// ---- the machine's load ---------------------------------------------------------
+
+#[derive(Default, Clone, Copy)]
+struct SysView {
+    cpu: Option<f64>,
+    me: Option<f64>,
+    /// In use, in all, this process.
+    mem: Option<(u64, u64, u64)>,
+}
+
+#[derive(Default)]
+struct SysMeter {
+    last: Option<(u64, u64, u64)>,
+    at: Option<Instant>,
+    view: SysView,
+}
+
+impl SysMeter {
+    /// A fresh reading once a second.
+    fn tick(&mut self) {
+        if self.at.is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
+            return;
+        }
+        self.at = Some(Instant::now());
+        let now = crate::sys::cpu_times();
+        if let (Some(a), Some(b)) = (self.last, now) {
+            let all = b.0.saturating_sub(a.0) as f64;
+            if all > 0.0 {
+                self.view.cpu = Some((1.0 - b.1.saturating_sub(a.1) as f64 / all).clamp(0.0, 1.0));
+                self.view.me = Some((b.2.saturating_sub(a.2) as f64 / all).clamp(0.0, 1.0));
+            }
+        }
+        self.last = now;
+        self.view.mem = crate::sys::memory();
+    }
+}
+
+// ---- the grid ---------------------------------------------------------------------
+
+/// A cell's colours, xterm's 256: `None` is the console's own.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Sty {
+    fg: Option<u8>,
+    bg: Option<u8>,
+    bold: bool,
+}
+
+const PLAIN: Sty = Sty { fg: None, bg: None, bold: false };
+const DIM: Sty = Sty { fg: Some(244), ..PLAIN };
+const VAL: Sty = Sty { fg: Some(255), bold: true, ..PLAIN };
+const HDR: Sty = Sty { fg: Some(252), bg: Some(237), bold: true };
+const BAR: Sty = Sty { fg: Some(250), bg: Some(235), bold: false };
+const KEY: Sty = Sty { fg: Some(255), bg: Some(239), bold: true };
+
+const fn on(bg: u8) -> Sty {
+    Sty { fg: Some(255), bg: Some(bg), bold: true }
+}
+const fn fg(n: u8) -> Sty {
+    Sty { fg: Some(n), ..PLAIN }
+}
+
+/// Each group's colour.
+fn gcolor(g: usize) -> u8 {
+    [31, 64, 130, 97, 25, 125, 66, 136][g % 8]
+}
+
+/// The tail of a wide character.
+const CONT: char = '\0';
+
+#[derive(Clone, Copy)]
+struct Cell {
+    ch: char,
+    st: Sty,
+}
+
+struct Canvas {
+    w: usize,
+    h: usize,
+    wide: bool,
+    cells: Vec<Cell>,
+}
+
+impl Canvas {
+    fn new(w: usize, h: usize, wide: bool) -> Canvas {
+        Canvas { w, h, wide, cells: vec![Cell { ch: ' ', st: PLAIN }; w * h] }
+    }
+    fn cw(&self, c: char) -> usize {
+        if c.is_control() {
+            return 0;
+        }
+        (if self.wide { c.width_cjk() } else { c.width() }).unwrap_or(0)
+    }
+    fn tw(&self, s: &str) -> usize {
+        let mut n = 0;
+        let mut esc = false;
+        for c in s.chars() {
+            if esc {
+                esc = !c.is_ascii_alphabetic();
+            } else if c == '\x1b' {
+                esc = true;
+            } else {
+                n += self.cw(c);
+            }
+        }
+        n
+    }
+    fn set(&mut self, x: usize, y: usize, ch: char, st: Sty, n: usize) {
+        if y >= self.h || x + n > self.w {
+            return;
+        }
+        let i = y * self.w + x;
+        // A wide character this write cuts in two becomes a space.
+        if self.cells[i].ch == CONT && x > 0 {
+            self.cells[i - 1].ch = ' ';
+        }
+        if x + n < self.w && self.cells[i + n].ch == CONT {
+            self.cells[i + n].ch = ' ';
+        }
+        self.cells[i] = Cell { ch, st };
+        if n == 2 {
+            self.cells[i + 1] = Cell { ch: CONT, st };
+        }
+    }
+    fn fill(&mut self, x: usize, y: usize, w: usize, h: usize, st: Sty) {
+        for yy in y..(y + h).min(self.h) {
+            for xx in x..(x + w).min(self.w) {
+                self.set(xx, yy, ' ', st, 1);
+            }
+        }
+    }
+    /// `s` from column `x`, at most `max` columns of it; the columns used.
+    fn text(&mut self, x: usize, y: usize, max: usize, s: &str, st: Sty) -> usize {
+        let mut used = 0;
+        for c in s.chars() {
+            let n = self.cw(c);
+            if n == 0 {
+                continue;
+            }
+            if used + n > max {
+                break;
+            }
+            self.set(x + used, y, c, st, n);
+            used += n;
+        }
+        used
+    }
+    /// …with the log's colour codes read into styles over `base`.
+    fn ansi(&mut self, x: usize, y: usize, max: usize, s: &str, base: Sty) -> usize {
+        let (mut st, mut used) = (base, 0);
+        let mut it = s.chars().peekable();
+        while let Some(c) = it.next() {
+            if c == '\x1b' {
+                if it.peek() == Some(&'[') {
+                    it.next();
+                    let mut code = String::new();
+                    for d in it.by_ref() {
+                        if d.is_ascii_alphabetic() {
+                            if d == 'm' {
+                                st = sgr(&code, st, base);
+                            }
+                            break;
+                        }
+                        code.push(d);
+                    }
+                }
+                continue;
+            }
+            let n = self.cw(c);
+            if n == 0 {
+                continue;
+            }
+            if used + n > max {
+                break;
+            }
+            self.set(x + used, y, c, st, n);
+            used += n;
+        }
+        used
+    }
+    fn row(&self, y: usize) -> String {
+        let mut out = String::new();
+        let mut cur = None;
+        for c in &self.cells[y * self.w..(y + 1) * self.w] {
+            if c.ch == CONT {
+                continue;
+            }
+            if cur != Some(c.st) {
+                out += "\x1b[0";
+                if c.st.bold {
+                    out += ";1";
+                }
+                if let Some(f) = c.st.fg {
+                    out += &format!(";38;5;{f}");
+                }
+                if let Some(b) = c.st.bg {
+                    out += &format!(";48;5;{b}");
+                }
+                out.push('m');
+                cur = Some(c.st);
+            }
+            out.push(c.ch);
+        }
+        out + "\x1b[0m"
+    }
+}
+
+/// The log's SGR codes as cell styles. Faint is drawn grey: the Windows 10
+/// console ignores it.
+fn sgr(code: &str, mut st: Sty, base: Sty) -> Sty {
+    for p in code.split(';') {
+        match p {
+            "" | "0" => st = base,
+            "1" => st.bold = true,
+            "2" => st.fg = Some(244),
+            "31" => st.fg = Some(203),
+            "32" => st.fg = Some(114),
+            "33" => st.fg = Some(179),
+            "34" => st.fg = Some(75),
+            "35" => st.fg = Some(176),
+            "36" => st.fg = Some(80),
+            "37" => st.fg = Some(252),
+            "39" => st.fg = base.fg,
+            _ => {}
+        }
+    }
+    st
+}
+
+// ---- the layout -------------------------------------------------------------------
+
+#[derive(Default)]
+struct View {
+    /// The whole log instead of the dashboard (L).
+    full_log: bool,
+    /// Lines paged back from the newest.
+    scroll: usize,
+}
+
+struct Frame<'a> {
+    s: &'a Status,
+    lines: &'a VecDeque<LogLine>,
+    ctl: &'a Ctl,
+    m: SysView,
+    up: Duration,
+    multi: bool,
+}
+
+#[derive(Clone, Copy)]
+enum Pick {
+    All,
+    Group(usize),
+    Untagged,
+}
+
+fn draw(c: &mut Canvas, f: &Frame, v: &mut View) {
+    let (w, h) = (c.w, c.h);
+    if w < 20 || h < 3 {
+        return;
+    }
+    title(c, f);
+    footer(c, f, v);
+    let (y, bh) = (1, h - 2);
+    if v.full_log {
+        header(c, 0, y, w, " 全部日志 ", "PgUp/PgDn 翻页  End 最新  L 回到面板", HDR);
+        logs(c, 0, y + 1, w, bh - 1, f, Pick::All, &mut v.scroll);
+        return;
+    }
+    if w >= 96 && bh >= 14 {
+        let sw = (w * 3 / 10).clamp(36, 54);
+        let lw = w - sw - 1;
+        side(c, lw + 1, y, sw, bh, f);
+        left(c, 0, y, lw, bh, f, v);
+    } else {
+        compact(c, 0, y, w, bh, f, v);
+    }
+}
+
+fn state_bg(state: &str) -> u8 {
+    if state.starts_with("计算") {
+        28
+    } else if ["冷却", "连不上", "过旧", "协议", "出错"].iter().any(|k| state.contains(k)) {
+        124
+    } else {
+        130
+    }
+}
+
+fn title(c: &mut Canvas, f: &Frame) {
+    let (s, w) = (f.s, c.w);
+    c.fill(0, 0, w, 1, BAR);
+    let mut x = c.text(0, 0, w, &format!(" simfleet {} ", env!("CARGO_PKG_VERSION")), on(24));
+    let state = if s.state.is_empty() { "启动中" } else { &s.state };
+    x += c.text(x, 0, w - x, &format!(" {state} "), on(state_bg(state)));
+    let clock = format!(" {} ", crate::sys::clock());
+    let right = w.saturating_sub(c.tw(&clock));
+    // MOST USEFUL FIRST: a narrow window cuts from the right.
+    let mut info = format!("  已运行 {}   核心 {}/{} {}", hms(f.up.as_secs()), s.lanes_now, f.ctl.max_cores, if s.idle { "空闲" } else { "使用中" });
+    if let Some(n) = s.computing_now {
+        info += &format!("   全站在线 {n}");
+    }
+    if !s.engine.is_empty() {
+        info += &format!("   引擎 {} {}", s.engine.get(..8).unwrap_or(&s.engine), s.backend);
+    }
+    c.text(x, 0, right.saturating_sub(x), &info, BAR);
+    c.text(right, 0, w - right, &clock, BAR);
+}
+
+fn footer(c: &mut Canvas, f: &Frame, v: &View) {
+    let (y, w) = (c.h - 1, c.w);
+    c.fill(0, y, w, 1, BAR);
+    let paused = f.ctl.paused.load(Ordering::Relaxed);
+    let keys = [
+        ("P", if paused { "继续" } else { "暂停" }),
+        ("+/-", "空闲核心"),
+        ("L", if v.full_log { "面板" } else { "日志" }),
+        ("PgUp/PgDn", "翻页"),
+        ("Q", "退出"),
+    ];
+    let mut x = 0;
+    for (k, d) in keys {
+        x += c.text(x, y, w - x, &format!(" {k} "), KEY);
+        x += c.text(x, y, w - x, &format!(" {d}  "), BAR);
+    }
+    if !f.s.note.is_empty() {
+        let n = c.tw(&f.s.note) + 1;
+        if x + n < w {
+            c.text(w - n, y, n, &f.s.note, Sty { fg: Some(80), ..BAR });
+        }
+    }
+}
+
+/// A panel's title row: `left`, and `right` against its right edge.
+fn header(c: &mut Canvas, x: usize, y: usize, w: usize, left: &str, right: &str, st: Sty) {
+    if y >= c.h || w == 0 {
+        return;
+    }
+    c.fill(x, y, w, 1, st);
+    let used = c.text(x, y, w, left, st);
+    let rw = c.tw(right);
+    if !right.is_empty() && used + rw + 2 <= w {
+        c.text(x + w - rw - 1, y, rw, right, Sty { bold: false, ..st });
+    }
+}
+
+fn bar(c: &mut Canvas, x: usize, y: usize, w: usize, frac: f64, color: u8) {
+    let fill = (frac.clamp(0.0, 1.0) * w as f64).round() as usize;
+    c.fill(x, y, fill, 1, on(color));
+    c.fill(x + fill, y, w - fill.min(w), 1, Sty { bg: Some(236), ..PLAIN });
+}
+
+/// A colour by how full: green, amber, red.
+fn load_color(frac: f64) -> u8 {
+    if frac < 0.6 {
+        71
+    } else if frac < 0.85 {
+        172
+    } else {
+        167
+    }
+}
+
+/// "label  [=====    ] text" across `w`.
+fn bar_row(c: &mut Canvas, x: usize, y: usize, w: usize, label: &str, frac: Option<f64>, text: &str, color: u8) {
+    c.text(x + 1, y, 7, label, DIM);
+    let tw = c.tw(text);
+    let bw = w.saturating_sub(8 + tw + 2);
+    if bw >= 3 {
+        bar(c, x + 8, y, bw, frac.unwrap_or(0.0), color);
+    }
+    c.text(x + 8 + bw + 1, y, tw, text, VAL);
+}
+
+fn kv(c: &mut Canvas, x: usize, y: usize, w: usize, label: &str, value: &str, rest: &str) {
+    c.text(x + 1, y, 7, label, DIM);
+    let used = c.text(x + 8, y, w.saturating_sub(9), value, VAL);
+    c.text(x + 8 + used, y, w.saturating_sub(9 + used), rest, DIM);
+}
+
+fn task_row(c: &mut Canvas, x: usize, y: usize, w: usize, t: &TaskLine, chip: bool) {
+    if w < 12 {
+        return;
+    }
+    let color = gcolor(t.group);
+    let mut cx = x + 1;
+    if chip {
+        cx += c.text(cx, y, 3, &format!(" {} ", t.group + 1), on(color)) + 1;
+    }
+    let (kind, kst) = if t.riven { ("紫卡", fg(213)) } else { ("榜单", fg(117)) };
+    cx += c.text(cx, y, 4, kind, kst) + 1;
+    let tail = if t.lanes == 0 { format!("  {} 等待", dur(t.secs)) } else { format!("  {} {}核", dur(t.secs), t.lanes) };
+    let end = x + w - 1;
+    let room = end.saturating_sub(cx);
+    let label_w;
+    if t.total > 0 {
+        let frac = t.done as f64 / t.total as f64;
+        let pct = format!(" {:>3.0}%", frac * 100.0);
+        let bw = (w / 5).clamp(6, 24);
+        let rw = bw + c.tw(&pct) + c.tw(&tail);
+        if rw + 10 <= room {
+            let rx = end - rw;
+            bar(c, rx, y, bw, frac, color);
+            c.text(rx + bw, y, rw, &pct, VAL);
+            c.text(rx + bw + c.tw(&pct), y, rw, &tail, DIM);
+            label_w = rx - cx - 1;
+        } else {
+            let pw = c.tw(&pct);
+            c.text(end.saturating_sub(pw), y, pw, &pct, VAL);
+            label_w = room.saturating_sub(pw + 1);
+        }
+    } else {
+        let info = format!("已打 {} 场 · {}", group(t.done), if t.extra.is_empty() { "0 个构筑" } else { &t.extra });
+        let rw = c.tw(&info) + c.tw(&tail);
+        if rw + 10 <= room {
+            let rx = end - rw;
+            let u = c.text(rx, y, rw, &info, VAL);
+            c.text(rx + u, y, rw - u, &tail, DIM);
+            label_w = rx - cx - 1;
+        } else {
+            label_w = room;
+        }
+    }
+    c.text(cx, y, label_w, &t.label, PLAIN);
+}
+
+fn logs(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame, pick: Pick, scroll: &mut usize) {
+    if h == 0 || w < 4 {
+        return;
+    }
+    let rows: Vec<&LogLine> = f
+        .lines
+        .iter()
+        .filter(|l| match pick {
+            Pick::All => true,
+            Pick::Group(g) => l.group == Some(g),
+            Pick::Untagged => l.group.is_none(),
         })
+        .collect();
+    *scroll = (*scroll).min(rows.len().saturating_sub(h));
+    let end = rows.len() - *scroll;
+    let chips = f.multi && matches!(pick, Pick::All);
+    for (i, l) in rows[end.saturating_sub(h)..end].iter().enumerate() {
+        let mut cx = x + 1;
+        if chips {
+            if let Some(g) = l.group {
+                c.text(cx, y + i, 1, &(g + 1).to_string(), on(gcolor(g)));
+            }
+            cx += 2;
+        }
+        c.ansi(cx, y + i, (x + w).saturating_sub(cx + 1), &l.text, PLAIN);
+    }
+}
+
+fn group_header(c: &mut Canvas, x: usize, y: usize, w: usize, gi: usize, f: &Frame) {
+    let g = f.s.group_views.get(gi).cloned().unwrap_or_default();
+    let st = if g.open || g.tasks > 0 || f.s.tasks.iter().any(|t| t.group == gi) { on(gcolor(gi)) } else { on(239) };
+    let left = if f.multi {
+        format!(" 第 {} 路  {}  {} ", gi + 1, g.id, g.state)
+    } else {
+        format!(" 本机  {}  {} ", g.id, g.state)
+    };
+    let right = format!("{} 任务  {} 分", g.tasks, pts(points(g.work)));
+    header(c, x, y, w, &left, &right, st);
+}
+
+fn left(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame, v: &mut View) {
+    let n = f.s.group_views.len();
+    if !f.multi {
+        group_header(c, x, y, w, 0, f);
+        let tasks = &f.s.tasks;
+        let rows = tasks.len().max(1).min(h.saturating_sub(4));
+        if tasks.is_empty() {
+            c.text(x + 2, y + 1, w - 2, "等待任务……", DIM);
+        }
+        for (i, t) in tasks.iter().take(rows).enumerate() {
+            task_row(c, x, y + 1 + i, w, t, false);
+        }
+        let ly = y + 1 + rows;
+        let hint = if v.scroll > 0 { format!("往前翻了 {} 行  End 回到最新", v.scroll) } else { String::new() };
+        header(c, x, ly, w, " 日志 ", &hint, HDR);
+        logs(c, x, ly + 1, w, (y + h).saturating_sub(ly + 1), f, Pick::All, &mut v.scroll);
+        return;
+    }
+    let sys_h = if h >= 24 { 5 } else if h >= 16 { 3 } else { 0 };
+    let room = h - sys_h;
+    let (per, extra) = (room / n, room % n);
+    let mut yy = y;
+    for gi in 0..n {
+        let hh = per + usize::from(gi < extra);
+        if hh == 0 {
+            continue;
+        }
+        group_header(c, x, yy, w, gi, f);
+        let mine: Vec<&TaskLine> = f.s.tasks.iter().filter(|t| t.group == gi).collect();
+        let tr = mine.len().min(hh - 1);
+        for (i, t) in mine.iter().take(tr).enumerate() {
+            task_row(c, x, yy + 1 + i, w, t, false);
+        }
+        logs(c, x, yy + 1 + tr, w, hh - 1 - tr, f, Pick::Group(gi), &mut 0);
+        yy += hh;
+    }
+    if sys_h > 0 {
+        header(c, x, yy, w, " 系统消息 ", "", HDR);
+        logs(c, x, yy + 1, w, sys_h - 1, f, Pick::Untagged, &mut 0);
+    }
+}
+
+fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
+    let s = f.s;
+    let end = y + h;
+    let mut yy = y;
+    let (rate, avg) = rates(s, f.up);
+
+    header(c, x, yy, w, " 贡献 ", "", HDR);
+    yy += 1;
+    let mut rows: Vec<(&str, String, String)> = vec![
+        ("本次", format!("{} 分", pts(points(s.session_work))), format!("  {} 个任务", group(s.session_tasks))),
+        ("速度", format!("{rate:.1} 分/分钟"), format!("  平均 {avg:.1}")),
+    ];
+    if let Some(t) = s.today_points {
+        rows.push(("今日", format!("{} 分", group(t)), String::new()));
+    }
+    match (&s.account, s.account_points) {
+        (Some(name), Some(p)) => rows.push((
+            "账号",
+            format!("{} 分", group(p)),
+            format!("  {}{}", name, s.contributor_rank.map(|r| format!(" 段位 {r}")).unwrap_or_default()),
+        )),
+        _ => {
+            if let Some(p) = s.device_points {
+                rows.push(("本机", format!("{} 分", group(p)), "  未登录".into()));
+            }
+        }
+    }
+    if s.confirmed + s.waiting > 0 {
+        rows.push(("确认", format!("{}", s.confirmed), format!(" 已确认  {} 待确认", s.waiting)));
+    }
+    for (l, val, rest) in rows {
+        if yy < end {
+            kv(c, x, yy, w, l, &val, &rest);
+            yy += 1;
+        }
+    }
+
+    if yy + 3 < end {
+        header(c, x, yy, w, " 资源 ", "", HDR);
+        yy += 1;
+        let pct = |v: Option<f64>| v.map_or("--".into(), |v| format!("{:>3.0}%", v * 100.0));
+        let m = f.m;
+        bar_row(c, x, yy, w, "CPU", m.cpu, &pct(m.cpu), load_color(m.cpu.unwrap_or(0.0)));
+        yy += 1;
+        if yy < end {
+            bar_row(c, x, yy, w, "本程序", m.me, &pct(m.me), 31);
+            yy += 1;
+        }
+        if let (Some((used, all, me)), true) = (m.mem, yy < end) {
+            let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
+            let frac = used as f64 / all.max(1) as f64;
+            bar_row(c, x, yy, w, "内存", Some(frac), &format!("{:.1}/{:.0}G", gb(used), gb(all)), load_color(frac));
+            yy += 1;
+            if yy < end {
+                kv(c, x, yy, w, "占用", &format!("{:.0} MB", me as f64 / (1u64 << 20) as f64), "  本程序");
+                yy += 1;
+            }
+        }
+        if yy < end {
+            bar_row(c, x, yy, w, "利用率", s.utilisation, &pct(s.utilisation), 31);
+            yy += 1;
+        }
+        // THE LANES: each core of the machine, coloured by the group whose job it runs.
+        let per = (w.saturating_sub(9) / 3).max(1);
+        let max = f.ctl.max_cores;
+        let rows = max.div_ceil(per);
+        if yy + rows <= end && rows <= 4 {
+            c.text(x + 1, yy, 7, "核心", DIM);
+            for i in 0..max {
+                let st = match s.lane_map.get(i) {
+                    Some(Some(g)) => on(gcolor(*g)),
+                    Some(None) => Sty { bg: Some(240), ..PLAIN },
+                    None => Sty { bg: Some(234), ..PLAIN },
+                };
+                c.fill(x + 8 + (i % per) * 3, yy + i / per, 2, 1, st);
+            }
+            yy += rows;
+        }
+    }
+
+    if yy + 3 < end && (s.computing_now.is_some() || s.owed.is_some()) {
+        header(c, x, yy, w, " 全站 ", "", HDR);
+        yy += 1;
+        if let Some(n) = s.computing_now {
+            let ph = s.per_hour.map(|(v, o)| format!("  每小时 志愿 {} / 官方 {}", group(v), group(o))).unwrap_or_default();
+            kv(c, x, yy, w, "在线", &n.to_string(), &ph);
+            yy += 1;
+        }
+        if let (Some(o), true) = (s.owed, yy < end) {
+            kv(c, x, yy, w, "待算", &format!("{} 行", group(o)), "  榜单");
+            yy += 1;
+        }
+    }
+
+    if yy + 2 < end && !s.ranking.is_empty() {
+        let total = s.ranking_total.map(|t| format!("共 {t} 人")).unwrap_or_default();
+        header(c, x, yy, w, " 本周贡献榜 ", &total, HDR);
+        yy += 1;
+        for r in &s.ranking {
+            if yy >= end {
+                break;
+            }
+            let base = if r.you { on(24) } else { PLAIN };
+            if r.you {
+                c.fill(x, yy, w, 1, base);
+            }
+            let rank_st = match r.rank {
+                1 => Sty { fg: Some(220), bold: true, ..base },
+                2 => Sty { fg: Some(252), bold: true, ..base },
+                3 => Sty { fg: Some(173), bold: true, ..base },
+                _ => Sty { fg: Some(244), ..base },
+            };
+            c.text(x + 1, yy, 4, &format!("{:>3}", r.rank), rank_st);
+            let p = group(r.points);
+            let pw = c.tw(&p);
+            c.text(x + w - pw - 1, yy, pw, &p, Sty { fg: Some(255), ..base });
+            let name = if r.you { format!("{}（你）", r.name) } else { r.name.clone() };
+            c.text(x + 6, yy, w.saturating_sub(pw + 8), &name, base);
+            yy += 1;
+        }
+    }
+}
+
+fn compact(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame, v: &mut View) {
+    let s = f.s;
+    let end = y + h;
+    let mut yy = y;
+    let (rate, _) = rates(s, f.up);
+    let mut a = format!(
+        " 本次 {C_OK}{}{C_END} 分 · {} 任务 · {C_OK}{rate:.1}{C_END} 分/分钟",
+        pts(points(s.session_work)),
+        group(s.session_tasks)
+    );
+    if let Some(t) = s.today_points {
+        a += &format!(" · 今日 {} 分", group(t));
+    }
+    match (&s.account, s.account_points) {
+        (Some(_), Some(p)) => a += &format!(" · 账号 {} 分", group(p)),
+        _ => {
+            if let Some(p) = s.device_points {
+                a += &format!(" · 本机 {} 分", group(p));
+            }
+        }
+    }
+    c.ansi(x, yy, w, &a, PLAIN);
+    yy += 1;
+    if yy < end && w >= 40 {
+        // CPU, memory and the lanes' use, a third of the width each.
+        let third = w / 3;
+        let mem = f.m.mem.map(|(u, a, _)| u as f64 / a.max(1) as f64);
+        for (i, (l, v)) in [("CPU", f.m.cpu), ("内存", mem), ("利用率", s.utilisation)].into_iter().enumerate() {
+            let x0 = x + i * third;
+            let t = v.map_or(" --".into(), |v| format!("{:>3.0}%", v * 100.0));
+            let lw = c.text(x0 + 1, yy, 7, l, DIM) + 2;
+            let bw = third.saturating_sub(lw + 7);
+            if bw >= 2 {
+                bar(c, x0 + lw, yy, bw, v.unwrap_or(0.0), if i == 2 { 31 } else { load_color(v.unwrap_or(0.0)) });
+            }
+            c.text(x0 + lw + bw + 1, yy, 5, &t, VAL);
+        }
+        yy += 1;
+    }
+    let budget = end.saturating_sub(yy + 3);
+    for t in s.tasks.iter().take(budget) {
+        task_row(c, x, yy, w, t, f.multi);
+        yy += 1;
+    }
+    if s.tasks.is_empty() && yy < end {
+        c.text(x + 2, yy, w - 2, "等待任务……", DIM);
+        yy += 1;
+    }
+    if yy + 1 < end {
+        let hint = if v.scroll > 0 { format!("往前翻了 {} 行", v.scroll) } else { String::new() };
+        header(c, x, yy, w, " 日志 ", &hint, HDR);
+        logs(c, x, yy + 1, w, end - yy - 1, f, Pick::All, &mut v.scroll);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text_of(c: &Canvas, y: usize) -> String {
+        c.cells[y * c.w..(y + 1) * c.w].iter().filter(|x| x.ch != CONT).map(|x| x.ch).collect()
+    }
+
+    #[test]
+    fn rows_never_pass_the_width() {
+        for wide in [false, true] {
+            let mut c = Canvas::new(10, 1, wide);
+            c.text(0, 0, 10, "──·●中文abcdef", PLAIN);
+            let n: usize = text_of(&c, 0).chars().map(|ch| c.cw(ch)).sum();
+            assert_eq!(n, 10, "wide={wide}");
+        }
+    }
+
+    #[test]
+    fn a_cut_wide_character_becomes_a_space() {
+        let mut c = Canvas::new(6, 1, false);
+        c.text(0, 0, 6, "中文字", PLAIN);
+        c.text(1, 0, 1, "x", PLAIN);
+        assert_eq!(text_of(&c, 0), " x文字");
+    }
+
+    #[test]
+    fn log_colours_are_read() {
+        let mut c = Canvas::new(12, 1, false);
+        c.ansi(0, 0, 12, "\x1b[32mok\x1b[0m done", PLAIN);
+        assert_eq!(c.cells[0].st.fg, Some(114));
+        assert_eq!(c.cells[3].st, PLAIN);
+        assert_eq!(text_of(&c, 0), "ok done     ");
+    }
+
+    /// The dashboard at a few sizes, as text: `cargo test preview -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn preview() {
+        let ctl = Ctl { paused: AtomicBool::new(false), quit: AtomicBool::new(false), idle_cores: AtomicUsize::new(10), active_cores: AtomicUsize::new(10), max_cores: 16 };
+        let now = Instant::now();
+        let s = Status {
+            state: "计算中".into(),
+            lanes_now: 10,
+            engine: "b48cf15757cb".into(),
+            backend: "原生 AVX2".into(),
+            session_tasks: 2056,
+            session_work: 23_468_600_000_000,
+            confirmed: 58,
+            waiting: 2,
+            device_points: Some(0),
+            today_points: Some(21_388),
+            computing_now: Some(37),
+            owed: Some(23_320),
+            per_hour: Some((1212, 77)),
+            ranking: (1..=12).map(|i| Ranked { rank: i, name: if i == 3 { "季·术宅".into() } else { format!("player{i}") }, points: 700_000 / i, you: i == 5 }).collect(),
+            ranking_total: Some(79),
+            utilisation: Some(0.88),
+            tasks: vec![
+                TaskLine { group: 0, label: "torid · standard_multi_target · cycle".into(), done: 330, total: 1000, secs: 12, lanes: 4, ..Default::default() },
+                TaskLine { group: 1, riven: true, label: "soma_prime · demolisher [ab12cd]".into(), done: 41084, extra: "3,210 个构筑".into(), secs: 95, lanes: 3, ..Default::default() },
+                TaskLine { group: 2, label: "ocucor · standard_multi_target · base".into(), done: 0, total: 1000, secs: 0, lanes: 0, ..Default::default() },
+            ],
+            groups: 3,
+            group_views: (0..3).map(|i| GroupView { id: format!("a7i8qm{i:02}"), state: "计算中".into(), open: i < 3, tasks: 700 + i as u64, work: 7_800_000_000_000 }).collect(),
+            lane_map: vec![Some(0), Some(0), Some(0), Some(0), Some(1), Some(1), Some(1), None, Some(2), None],
+            answered: [(now, 9_000_000_000)].into_iter().collect(),
+            ..Default::default()
+        };
+        let mut lines = VecDeque::new();
+        for i in 0..40 {
+            let group = if i % 5 == 4 { None } else { Some(i % 3) };
+            lines.push_back(LogLine { group, text: format!("\x1b[2m10:17:{i:02}\x1b[0m \x1b[32m[完成]\x1b[0m 榜单  torid · heavy_gunner · base  = 0.6031 kpm · 1.44 分 · 4.4s") });
+        }
+        for (w, h, wide, groups) in [(150, 44, false, 3), (110, 30, true, 3), (110, 30, false, 1), (70, 24, false, 3)] {
+            let mut s = s.clone();
+            s.group_views.truncate(groups);
+            s.tasks.retain(|t| t.group < groups);
+            let f = Frame { s: &s, lines: &lines, ctl: &ctl, m: SysView { cpu: Some(0.63), me: Some(0.5), mem: Some((22 << 30, 63 << 30, 210 << 20)) }, up: Duration::from_secs(4567), multi: groups > 1 };
+            let mut c = Canvas::new(w - 1, h, wide);
+            draw(&mut c, &f, &mut View::default());
+            println!("==== {w}x{h} wide={wide} groups={groups}");
+            for y in 0..h {
+                let t = text_of(&c, y);
+                let n: usize = t.chars().map(|ch| c.cw(ch)).sum();
+                assert!(n <= w - 1);
+                println!("|{}|", t);
+            }
+        }
+    }
+
+    #[test]
+    fn points_print_with_a_tenth() {
+        assert_eq!(pts(23468.66), "23,468.6");
+        assert_eq!(pts(0.05), "0.0");
     }
 }

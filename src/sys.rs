@@ -139,6 +139,58 @@ pub fn hostname() -> String {
     std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_else(|_| "pc".into())
 }
 
+/// CPU time so far, in 100 ns: all cores together (busy and idle), the idle
+/// part of it, and this process's.
+#[cfg(windows)]
+pub fn cpu_times() -> Option<(u64, u64, u64)> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes, GetSystemTimes};
+    let t = |f: FILETIME| ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64;
+    let z = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let (mut idle, mut kernel, mut user) = (z, z, z);
+    let (mut made, mut ended, mut pk, mut pu) = (z, z, z, z);
+    // SAFETY: plain out-parameters.
+    unsafe {
+        if GetSystemTimes(&mut idle, &mut kernel, &mut user) == 0
+            || GetProcessTimes(GetCurrentProcess(), &mut made, &mut ended, &mut pk, &mut pu) == 0
+        {
+            return None;
+        }
+    }
+    // The kernel time includes the idle time.
+    Some((t(kernel) + t(user), t(idle), t(pk) + t(pu)))
+}
+
+#[cfg(not(windows))]
+pub fn cpu_times() -> Option<(u64, u64, u64)> {
+    None
+}
+
+/// Physical memory in use and in all, and this process's working set, in bytes.
+#[cfg(windows)]
+pub fn memory() -> Option<(u64, u64, u64)> {
+    use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    // SAFETY: plain out-parameters, their sizes given.
+    unsafe {
+        let mut m: MEMORYSTATUSEX = std::mem::zeroed();
+        m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        if GlobalMemoryStatusEx(&mut m) == 0 {
+            return None;
+        }
+        let mut p: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+        p.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        let me = if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut p, p.cb) != 0 { p.WorkingSetSize as u64 } else { 0 };
+        Some((m.ullTotalPhys - m.ullAvailPhys, m.ullTotalPhys, me))
+    }
+}
+
+#[cfg(not(windows))]
+pub fn memory() -> Option<(u64, u64, u64)> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

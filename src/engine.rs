@@ -203,6 +203,8 @@ pub struct NativeLib {
     api: ApiFn,
     free: FreeFn,
     pub engine_id: String,
+    /// The CPU level it was built for: "" or "-v3" (`work::native_variants`).
+    pub variant: &'static str,
 }
 
 impl NativeLib {
@@ -215,7 +217,7 @@ impl NativeLib {
             let free: FreeFn = *lib.get::<FreeFn>(b"sfe_free\0")?;
             let id: IdFn = *lib.get::<IdFn>(b"sfe_engine_id\0")?;
             let engine_id = std::ffi::CStr::from_ptr(id()).to_string_lossy().to_string();
-            Ok(NativeLib { _lib: lib, api, free, engine_id })
+            Ok(NativeLib { _lib: lib, api, free, engine_id, variant: "" })
         }
     }
 
