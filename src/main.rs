@@ -11,6 +11,7 @@
 //! NOTICE.md and LICENSE.
 
 mod account;
+mod affinity;
 mod config;
 mod engine;
 mod fleet;
@@ -42,9 +43,11 @@ simfleet — WFSim 志愿计算客户端（非官方，基于 WFSim 引擎）
   simfleet logout          退出登录（之后的贡献记在本机）
   simfleet status          看一眼本机和账号的贡献
   simfleet bench           本机测速（不连任务服务器派活）
+  simfleet cpu             看 CPU 识别结果：是否 Intel 大小核、计算线程会放在哪种核心上
   simfleet engine-id <dir> 计算一份 WFSim 源码的引擎号（原生引擎构建脚本用）
 
-运行时按键: P 暂停/继续 · + / - 调整空闲核心数 · Q 退出（会先把手头任务交还）
+运行时按键: P 暂停/继续 · + / - 空闲时的核心数 · Shift 加 + / - 使用电脑时的核心数（0 = 使用时暂停）
+          L 全屏日志 · PgUp/PgDn 翻页 · Q 退出（会先把手头任务交还）
 
 源码与许可: https://github.com/superexboom/simfleet （AGPL-3.0-or-later）
 基于 WFSim（https://github.com/magenie33/wfsim，AGPL-3.0-or-later），非官方项目。
@@ -176,6 +179,20 @@ fn wizard(paths: &Paths, old: Option<Config>, full: bool) -> Result<Option<Confi
     } else if let Ok(n) = a.parse::<usize>() {
         c.active_cores = n.clamp(1, cores);
     }
+    let topo = affinity::Topology::read();
+    if topo.hybrid().is_ok() {
+        let a = ask(&format!(
+            "\n检测到 Intel 大小核（P 核 {} 个线程，E 核 {} 个）。计算放在哪种核心上？\n  回车 = 交给 Windows（通常会放到 E 核），p = 优先 P 核（更快），e = 优先 E 核（更省电、更不打扰）：",
+            topo.count(true),
+            topo.count(false)
+        ));
+        c.core_type = match affinity::Prefer::parse(&a) {
+            affinity::Prefer::P => "p",
+            affinity::Prefer::E => "e",
+            affinity::Prefer::Auto => "auto",
+        }
+        .into();
+    }
     println!("\n预算：离开时 {} 核，使用时 {}。可随时编辑 {}", c.idle_cores,
         if c.active_cores == 0 { "暂停".to_string() } else { format!("{} 核", c.active_cores) }, paths.config.display());
     if c.account.session.is_empty() && yes("\n现在登录 wfsim.app 账号，把贡献记到你的名下吗？（之后也能用 simfleet login）[y/N] ", false) {
@@ -235,6 +252,9 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<(
         &cfg.verifier[..6],
         paths.config.display()
     ));
+    if let Some(l) = affinity::init(affinity::Prefer::parse(&cfg.core_type)) {
+        ui.log(format!("{C_INFO}[CPU]{C_END} {l}"));
+    }
     let painter = ui.clone().run(ctl.clone());
     let started = Instant::now();
     let result = (|| -> Result<fleet::Fleet> {
@@ -278,6 +298,7 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<(
     let _ = painter.join();
     ui.flush_plain();
     cfg.idle_cores = ctl.idle_cores.load(Ordering::Relaxed);
+    cfg.active_cores = ctl.active_cores.load(Ordering::Relaxed);
     paths.save(&cfg)?;
     if let Some(s) = summary {
         println!(
@@ -583,6 +604,10 @@ fn main() {
                 });
                 let mut f = fleet::Fleet::new(net, cfg, paths_clone(&paths), ctl, ui, rel, code);
                 f.replay(&w)?;
+            }
+            "cpu" => {
+                let c = paths.load()?.unwrap_or_else(|| Config::fresh(sys::cores()));
+                print!("{}", affinity::report(affinity::Prefer::parse(&c.core_type), c.idle_cores.max(c.active_cores)));
             }
             "check-native" => check_native(&paths, flag("--engine"), flag("--wasm"), flag("--boards"))?,
             "bench" => {

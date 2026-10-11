@@ -333,6 +333,7 @@ impl Pool {
                 .name(format!("lane-{lane}"))
                 .stack_size(8 << 20)
                 .spawn(move || {
+                    crate::affinity::apply_lane(lane);
                     let mut exec = Exec::new(code);
                     loop {
                         // A lane idle for a minute gives its instance back, as the
@@ -352,6 +353,7 @@ impl Pool {
                         let t = Instant::now();
                         let out = exec.run(job.backend, &job.call);
                         let ms = t.elapsed().as_secs_f64() * 1000.0;
+                        crate::affinity::note_cpu(lane);
                         if done.send(Done { tag: job.tag, lane, ms, out }).is_err() {
                             break;
                         }

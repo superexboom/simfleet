@@ -99,6 +99,13 @@ pub struct Status {
     pub group_views: Vec<GroupView>,
     /// Each lane the budget allows now: the group whose job it runs, if any.
     pub lane_map: Vec<Option<usize>>,
+    /// …and the kind of core it last ran on ('P' / 'E'), on an Intel hybrid.
+    pub lane_kind: Vec<Option<char>>,
+    /// The hybrid setting in effect ("优先 P 核"), on an Intel hybrid.
+    pub core_pref: Option<&'static str>,
+    /// The budget: cores while away, cores while in use (0 pauses then).
+    pub idle_cores: usize,
+    pub active_cores: usize,
     /// When the server took each answer, and its work: the last quarter hour.
     pub answered: VecDeque<(Instant, u64)>,
     pub note: String,
@@ -394,15 +401,20 @@ impl Ui {
                 ctl.paused.store(p, Ordering::Relaxed);
                 self.log(if p { format!("{C_GO}[暂停]{C_END} 手头的任务交还给服务器，按 P 继续") } else { format!("{C_OK}[继续]{C_END}") });
             }
-            KeyCode::Char('+') | KeyCode::Char('=') => {
-                let n = (ctl.idle_cores.load(Ordering::Relaxed) + 1).min(ctl.max_cores);
-                ctl.idle_cores.store(n, Ordering::Relaxed);
-                self.log(format!("空闲时使用 {n} 个核心"));
-            }
-            KeyCode::Char('-') | KeyCode::Char('_') => {
-                let n = ctl.idle_cores.load(Ordering::Relaxed).saturating_sub(1).max(1);
-                ctl.idle_cores.store(n, Ordering::Relaxed);
-                self.log(format!("空闲时使用 {n} 个核心"));
+            // + / - THE BUDGET WHILE AWAY; WITH SHIFT, WHILE IN USE (0 pauses then).
+            KeyCode::Char(ch @ ('+' | '=' | '-' | '_')) => {
+                let up = matches!(ch, '+' | '=');
+                if mods.contains(KeyModifiers::SHIFT) {
+                    let now = ctl.active_cores.load(Ordering::Relaxed);
+                    let n = if up { (now + 1).min(ctl.max_cores) } else { now.saturating_sub(1) };
+                    ctl.active_cores.store(n, Ordering::Relaxed);
+                    self.log(if n == 0 { "使用电脑时暂停计算".to_string() } else { format!("使用电脑时用 {n} 个核心") });
+                } else {
+                    let now = ctl.idle_cores.load(Ordering::Relaxed);
+                    let n = if up { (now + 1).min(ctl.max_cores) } else { now.saturating_sub(1).max(1) };
+                    ctl.idle_cores.store(n, Ordering::Relaxed);
+                    self.log(format!("离开电脑时用 {n} 个核心"));
+                }
             }
             KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Tab => {
                 v.full_log = !v.full_log;
@@ -748,6 +760,7 @@ fn footer(c: &mut Canvas, f: &Frame, v: &View) {
     let keys = [
         ("P", if paused { "继续" } else { "暂停" }),
         ("+/-", "空闲核心"),
+        ("Shift +/-", "使用时核心"),
         ("L", if v.full_log { "面板" } else { "日志" }),
         ("PgUp/PgDn", "翻页"),
         ("Q", "退出"),
@@ -1002,6 +1015,16 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
             bar_row(c, x, yy, w, "利用率", s.utilisation, &pct(s.utilisation), 31);
             yy += 1;
         }
+        if yy < end {
+            let busy = if s.active_cores == 0 { "暂停".to_string() } else { format!("{} 核", s.active_cores) };
+            kv(c, x, yy, w, "预算", &format!("离开 {} 核", s.idle_cores), &format!("  使用时 {busy}"));
+            yy += 1;
+        }
+        if let (Some(pref), true) = (s.core_pref, yy < end) {
+            let (p, e) = s.lane_kind.iter().flatten().fold((0, 0), |a, k| if *k == 'P' { (a.0 + 1, a.1) } else { (a.0, a.1 + 1) });
+            kv(c, x, yy, w, "大小核", pref, &format!("  在 P {p} / E {e}"));
+            yy += 1;
+        }
         // THE LANES: each core of the machine, coloured by the group whose job it runs.
         let per = (w.saturating_sub(9) / 3).max(1);
         let max = f.ctl.max_cores;
@@ -1014,7 +1037,12 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
                     Some(None) => Sty { bg: Some(240), ..PLAIN },
                     None => Sty { bg: Some(234), ..PLAIN },
                 };
-                c.fill(x + 8 + (i % per) * 3, yy + i / per, 2, 1, st);
+                let (cx, cy) = (x + 8 + (i % per) * 3, yy + i / per);
+                c.fill(cx, cy, 2, 1, st);
+                // Where the lane last ran, on an Intel hybrid.
+                if let Some(Some(k)) = s.lane_kind.get(i) {
+                    c.text(cx, cy, 1, &k.to_string(), st);
+                }
             }
             yy += rows;
         }
@@ -1185,6 +1213,10 @@ mod tests {
             group_views: (0..3).map(|i| GroupView { id: format!("a7i8qm{i:02}"), state: "计算中".into(), open: i < 3, tasks: 700 + i as u64, work: 7_800_000_000_000 }).collect(),
             lane_map: vec![Some(0), Some(0), Some(0), Some(0), Some(1), Some(1), Some(1), None, Some(2), None],
             answered: [(now, 9_000_000_000)].into_iter().collect(),
+            lane_kind: vec![Some('P'), Some('P'), Some('P'), Some('P'), Some('P'), Some('P'), Some('E'), None, Some('E'), None],
+            core_pref: Some("优先 P 核"),
+            idle_cores: 10,
+            active_cores: 2,
             ..Default::default()
         };
         let mut lines = VecDeque::new();

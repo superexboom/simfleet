@@ -36,6 +36,10 @@ pub struct Config {
     pub pause_on_battery: bool,
     /// "idle" (never slows anything), "below_normal" or "normal".
     pub priority: String,
+    /// Intel hybrid CPUs: "auto" (Windows decides), "p" (P-cores first) or
+    /// "e" (E-cores first). Ignored on any other CPU, AMD included (affinity.rs).
+    #[serde(default = "default_core_type")]
+    pub core_type: String,
     /// Use a native engine build from `engines/` for board orders when one
     /// matches the served engine (faster); riven gains always use the wasm.
     pub native_engine: bool,
@@ -73,6 +77,9 @@ pub const NATIVE_URL: &str = "https://github.com/superexboom/simfleet/releases/d
 fn default_native_url() -> String {
     NATIVE_URL.into()
 }
+fn default_core_type() -> String {
+    "auto".into()
+}
 
 impl Config {
     pub fn fresh(idle_cores: usize) -> Self {
@@ -86,6 +93,7 @@ impl Config {
             idle_after_secs: 60,
             pause_on_battery: true,
             priority: "idle".into(),
+            core_type: default_core_type(),
             native_engine: true,
             native_engine_url: NATIVE_URL.into(),
             slots: 0,
@@ -145,6 +153,7 @@ impl Paths {
         let body = toml::to_string_pretty(c)?;
         let text = format!(
             "# simfleet — WFSim 志愿计算客户端的配置。可以直接编辑；运行中按键调整的核心数会在退出时写回。\n\
+             # core_type（只对 Intel 大小核有效）：auto 交给 Windows，p 优先性能核，e 优先能效核。\n\
              # verifier 是本机的计算者 id，account.session 是登录凭据：都请勿发给别人。\n\n{body}"
         );
         let tmp = self.config.with_extension("toml.tmp");

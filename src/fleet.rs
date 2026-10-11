@@ -942,6 +942,10 @@ impl Fleet {
             s.groups = open;
             s.group_views = views;
             s.lane_map = lane_map;
+            s.lane_kind = crate::affinity::lane_kinds(lanes);
+            s.core_pref = crate::affinity::active().map(|p| p.name());
+            s.idle_cores = self.ctl.idle_cores.load(Ordering::Relaxed);
+            s.active_cores = self.ctl.active_cores.load(Ordering::Relaxed);
         });
     }
 
