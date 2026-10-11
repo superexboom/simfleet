@@ -404,7 +404,7 @@ fn bench(paths: &Paths, cfg: &Config, lanes_arg: Option<usize>) -> Result<()> {
 /// Offline (the release workflow, which cannot reach wfsim.app): `--engine <id>
 /// --wasm <file> --boards <dir>` take the engine id, the reference wasm built
 /// from the same commit, and a WFSim checkout's `site/board/`.
-fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boards: Option<String>, lanes: Option<usize>) -> Result<()> {
+fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boards: Option<String>, rows: Option<String>, lanes: Option<usize>) -> Result<()> {
     let mut cfg = Config::fresh(sys::cores());
     cfg.native_engine = true;
     cfg.native_engine_url = String::new();
@@ -431,6 +431,9 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boa
     }
     let lanes = lanes.unwrap_or_else(sys::cores);
     let (mut same, mut skipped) = (0, 0);
+    // THE ROWS: the board's (one per ruler and mode of four weapons), then the
+    // contract's vectors (docs/CLIENTS.md §"Conformance" 7, tests/gas/rows.json).
+    let mut orders: Vec<(String, String, String)> = Vec::new();
     for weapon in ["braton_prime", "dual_toxocyst", "torid", "burston_prime"] {
         let rows = match &boards {
             Some(dir) => jsnum::parse(&std::fs::read_to_string(std::path::Path::new(dir).join(format!("{weapon}.json")))?)?,
@@ -458,32 +461,45 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boa
                 rec["riven_rolls"] = r["rolls"].clone();
             }
             let order = serde_json::json!({ "record": rec, "ruler": ruler, "mode": mode }).to_string();
-            let mut answers = Vec::new();
-            for b in [Backend::Wasm, Backend::Native] {
-                let mut exec = Exec::new(code.clone());
-                let mut pool = Pool::new(code.clone());
-                let o = jsnum::parse(&exec.api(b, "/api/board/order", order.clone())?)?;
-                if o["ok"] != serde_json::json!(true) {
-                    answers.push(None);
-                    continue;
-                }
-                let s = work::measure_row(&mut pool, &mut exec, b, &o["request"], ruler, &|_| lanes, &|| true, &mut |_, _| {})?;
-                answers.push(s.map(|s| (s.score.to_bits(), s.work, s.metric)));
+            orders.push((format!("{weapon} · {ruler} · {mode}"), order, ruler.to_string()));
+        }
+    }
+    if let Some(file) = &rows {
+        let list = jsnum::parse(&std::fs::read_to_string(file).with_context(|| file.clone())?)?;
+        for r in list.as_array().into_iter().flatten() {
+            let (ruler, mode) = (r["ruler"].as_str().unwrap_or(""), r["mode"].as_str().unwrap_or(""));
+            let label = format!("{} · {ruler} · {mode}（gas 向量）", r["record"]["weapon"].as_str().unwrap_or("?"));
+            let order = serde_json::json!({ "record": r["record"], "ruler": ruler, "mode": mode }).to_string();
+            orders.push((label, order, ruler.to_string()));
+        }
+    }
+    for (label, order, ruler) in &orders {
+        let mut answers = Vec::new();
+        for b in [Backend::Wasm, Backend::Native] {
+            let mut exec = Exec::new(code.clone());
+            let mut pool = Pool::new(code.clone());
+            let o = jsnum::parse(&exec.api(b, "/api/board/order", order.clone())?)?;
+            if o["ok"] != serde_json::json!(true) {
+                answers.push(None);
+                continue;
             }
-            match (&answers[0], &answers[1]) {
-                (None, None) => skipped += 1,
-                (a, b) if a == b => {
-                    same += 1;
-                    println!("  一致  {weapon} · {ruler} · {mode}");
-                }
-                (a, b) => bail!("不一致：{weapon} · {ruler} · {mode}: wasm {a:?} / native {b:?}"),
+            let s = work::measure_row(&mut pool, &mut exec, b, &o["request"], ruler, &|_| lanes, &|| true, &mut |_, _| {})?;
+            // THE ANSWER'S BITS: score, work, metric, and the gas the work was priced from.
+            answers.push(s.map(|s| (s.score.to_bits(), s.work, s.metric, s.counts["gas"].as_u64())));
+        }
+        match (&answers[0], &answers[1]) {
+            (None, None) => skipped += 1,
+            (a, b) if a == b => {
+                same += 1;
+                println!("  一致  {label}");
             }
+            (a, b) => bail!("不一致：{label}: wasm {a:?} / native {b:?}"),
         }
     }
     if same < 6 {
         bail!("只比对了 {same} 行（跳过 {skipped}），不足以放行");
     }
-    println!("原生引擎 {rel_engine} 与 wasm 在 {same} 行榜单上逐位一致（跳过 {skipped} 行）");
+    println!("原生引擎 {rel_engine} 与 wasm 在 {same} 行上逐位一致（分数、work、gas；跳过 {skipped} 行）");
     // THE OPTIMIZER, where the build has one: reported, not refused — simfleet
     // holds it to the site's wasm again before any riven gain runs on it.
     if let Some(n) = code.native.as_ref().filter(|n| n.has_optimize()) {
@@ -655,7 +671,7 @@ fn main() {
                 let c = paths.load()?.unwrap_or_else(|| Config::fresh(sys::cores()));
                 print!("{}", affinity::report(affinity::Prefer::parse(&c.core_type), c.idle_cores.max(c.active_cores)));
             }
-            "check-native" => check_native(&paths, flag("--engine"), flag("--wasm"), flag("--boards"), flag("--lanes").and_then(|x| x.parse().ok()))?,
+            "check-native" => check_native(&paths, flag("--engine"), flag("--wasm"), flag("--boards"), flag("--rows"), flag("--lanes").and_then(|x| x.parse().ok()))?,
             "bench" => {
                 let c = paths.load()?.unwrap_or_else(|| Config::fresh(1));
                 bench(&paths, &c, flag("--lanes").and_then(|x| x.parse().ok()))?;

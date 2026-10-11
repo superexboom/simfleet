@@ -158,13 +158,13 @@ simfleet 因此有两个引擎：
 不用自己编译。本仓库的 [native-engine](.github/workflows/native-engine.yml) Action 每 30 分钟计算一次 WFSim `main` 分支的引擎号（wfsim.app 对 GitHub 的服务器会弹出人机验证，所以 Action 完全不访问网站；网站发布的引擎号就是它所用源码的哈希）。遇到还没发布过的引擎号，它会在那次提交上，用 WFSim 自己锁定的 Rust 和 wasm-bindgen 版本：
 
 1. 照 WFSim 的做法编译出 wasm，作为比对的参照；
-2. **把 Digital Extremes 的卡牌文本清空**（`tools/strip_card_text.py`），打上 `native-engine/patches/` 里的提速补丁（见下），然后编译原生引擎。每个平台编两份：一份任何 x86-64 都能跑，一份是 x86-64-v3（即 AVX2、FMA、BMI2 这一代指令，2013 年以后的 CPU 基本都有）。Windows 是 `<引擎号>.dll` / `<引擎号>-v3.dll`，Linux 是 `lib<引擎号>.so` / `lib<引擎号>-v3.so`。WFSim 对卡牌文本没有授权（见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)），所以发布的版本里不含它；引擎只拿这些文本做显示，不影响任何分数；
-3. 在 WFSim 仓库里提交的榜单快照上取 32 条真实榜单（4 把武器 × 4 把尺子 × 2 种模式），每一份都和参照 wasm **逐位比对**（`simfleet check-native`），全部一致才发布。某个平台没通过就不发布它，那个平台继续用 wasm；
-4. 发布为 Release `engine-<引擎号>`，附 sha256，说明里写明对应的 WFSim 提交、simfleet 提交、打了哪些补丁和构建记录。已经发布的文件从不替换，只补缺的。
+2. **把 Digital Extremes 的卡牌文本清空**（`tools/strip_card_text.py`），然后用这次提交原样的代码编译原生引擎（WFSim 的 [客户端约定](https://github.com/magenie33/wfsim/blob/main/docs/CLIENTS.md)：原生版必须是网站那次提交、未经修改）。每个平台编两份：一份任何 x86-64 都能跑，一份是 x86-64-v3（即 AVX2、FMA、BMI2 这一代指令，2013 年以后的 CPU 基本都有）。Windows 是 `<引擎号>.dll` / `<引擎号>-v3.dll`，Linux 是 `lib<引擎号>.so` / `lib<引擎号>-v3.so`。WFSim 对卡牌文本没有授权（见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)），所以发布的版本里不含它；引擎只拿这些文本做显示，不影响任何分数；
+3. 在 WFSim 仓库里提交的榜单快照上取 32 条真实榜单（4 把武器 × 4 把尺子 × 2 种模式），每一份都和参照 wasm **逐位比对**（`simfleet check-native`：分数、work 和 gas），全部一致才发布。某个平台没通过就不发布它，那个平台继续用 wasm；
+4. 发布为 Release `engine-<引擎号>`，附 sha256，说明里写明对应的 WFSim 提交、simfleet 提交和构建记录。已经发布的文件从不替换，只补缺的。
 
-**提速补丁**（`native-engine/patches/prepared-runs.patch`，只改 WFSim 的 `webapi/`，不碰引擎本身）：`/api/board/runs` 原来每一局都要重新解析战斗、解析构筑、重建参数，再顺带算一份用不上的报告；补丁让一次调用里的所有局共用一次准备，shard 不再算报告，`/api/board/score` 也不再把累加器转成 JSON 再读回来。每一局的输入完全相同，所以结果逐位不变——发布前的 32 行比对和每次启动的金丝雀都会验证。在网站当前引擎上实测 AVX2 版：1 核 3.40–3.86 s → 3.04–3.06 s，2 核 2.00–2.04 s → 1.69–1.76 s（约快 15%）。补丁打不上（上游改了这几个文件）时自动跳过、照常编译不打补丁的版本。
+**本地发布更快**：Action 因为访问不了网站，每次都得先自己编一份参照 wasm，很慢。维护者在自己电脑上运行 `tools\publish-native-engine.ps1`：编两份 Windows 版，每份都直接和**网站正在用的 wasm** 比对 32 条榜单、WFSim 客户端约定里的 gas 测试向量（`tests/gas/rows.json`）和紫卡校验，全部通过才上传缺的文件。Linux 版仍由 Action 补上——它发现 Windows 版已经在了，就只编 Linux。
 
-**紫卡增益走原生**（`native-engine/patches/optimizer-one-thread.patch`，只改 WFSim 的 `optimizer/`）：WFSim 的优化器本来就保证原生与 wasm 算出同一个结果——随机种子与线程数无关，紫卡搜索的状态是每个线程自己的（就像浏览器里每个 worker 一个实例）。唯一的差别是每批评估的候选数：wasm 固定 16 个，原生是「工作线程数 × 4，至少 16」，而原生默认用「核心数 − 2」个线程，所以 6 个线程以上的机器上原生的搜索路径会和浏览器不同。补丁加一个「单线程」开关：打开后每批正好 16 个，而且直接在调用它的计算线程上算、不另起线程（于是大小核分配和「实得」统计照样准确）。原生 DLL 只有在这个补丁打上时才带紫卡入口（`sfe_optimize`）。
+**紫卡增益走原生**：WFSim 的优化器本来就保证原生与 wasm 算出同一个结果——随机种子与线程数无关，紫卡搜索的状态是每个线程自己的（就像浏览器里每个 worker 一个实例）。唯一的差别是每批评估的候选数：wasm 固定 16 个，原生是「工作线程数 × 4，至少 16」，而原生默认用「核心数 − 2」个线程，所以 6 个线程以上的机器上原生的搜索路径会和浏览器不同。WFSim 的请求本身就有 `threads` 字段，原生入口（`sfe_optimize`）给每个请求写上 `threads: 1`，每批就正好 16 个；这个字段只会出现在结果行的回放请求里，不进紫卡增益的答案（构筑、分数、work）。**WFSim 的代码原样使用，一行不改。**
 
 每次启动，simfleet 在后台线程上用一个小的紫卡搜索把原生和网站的 wasm 各跑一遍（领头、两片打分，和真实任务的流程一样，十来秒），**结果完全相同才让之后开始的紫卡增益走原生**，在此之前开始的照常用 wasm（一个紫卡任务从开始到结束只在一边算，中途不换）。不一致就只用于榜单，`native_riven = false` 可以关掉。实测一个真实的紫卡任务（dual_toxocyst，180 秒战斗、4 个起点，2 核）：wasm 417 s，原生 **240 s**（快 1.74 倍），最佳构筑、分数 274.4998410739098、work 205,792,130,138、41,084 场战斗、6,761 个构筑全部相同，和浏览器 V8 的参照结果也一致。
 
@@ -181,12 +181,13 @@ simfleet 只用网站**实际发布**的引擎号：启动时在 `engines\` 里�
 
 AVX-512 没有额外收益：引擎是一场场按事件推进的战斗模拟，分支多、几乎没有能成批向量化的数值循环，提速来自更新的标量指令，AVX2 那一代就已经有了。同理也不适合 GPU：GPU 的超越函数与 CPU 不逐位一致，而 WFSim 要求两台不同机器的结果逐位相同才算数。想强制用某一版，设环境变量 `SIMFLEET_CPU=baseline` 或 `SIMFLEET_CPU=v3`。
 
-自己编译（要 git、Rust，`-Strip` 还要 Python；默认打补丁，`-NoPatch` 不打）：
+自己编译（要 git、Rust，`-Strip` 还要 Python）：
 
 ```
 powershell -ExecutionPolicy Bypass -File tools\build-native-engine.ps1 [-Strip] [-Cpu x86-64-v3]
 pwsh tools/build-native-engine.ps1 [-Strip] [-Cpu x86-64-v3]      # Linux
-simfleet check-native [--lanes N]   # 和网站的 wasm 比对 32 条网站上的榜单
+simfleet check-native [--rows tests/gas/rows.json] [--lanes N]   # 和网站的 wasm 逐位比对
+powershell -ExecutionPolicy Bypass -File tools\publish-native-engine.ps1 [-Lanes N] [-Jobs N] [-NoUpload]   # 维护者：编译、检查、发布
 ```
 
 网站引擎更新后，旧的 dll 自动不再使用，回到 wasm，直到新的原生引擎发布出来。

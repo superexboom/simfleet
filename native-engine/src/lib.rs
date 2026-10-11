@@ -31,21 +31,28 @@ pub unsafe extern "C" fn sfe_api(path: *const u8, path_len: usize, body: *const 
 }
 
 /// `optimize(body)` as the wasm build has it — a riven gain's search, a
-/// `quick_fleet` lead or score step among them — run to its end on THIS
-/// thread: the search runs one thread (`wfsim_optimizer::one_thread`, the wasm
-/// build's batch of 16, nothing spawned), and a lead's state between steps is
-/// the thread's own, as a Web Worker's is its instance's. The answer is the
-/// wasm's string, owned as `sfe_api`'s is.
+/// `quick_fleet` lead or score step among them — called on one thread for a
+/// search's whole life: a lead's state between steps is the thread's own, as
+/// a Web Worker's is its instance's. The answer is the wasm's string, owned
+/// as `sfe_api`'s is.
+///
+/// ONE WORKER (`threads: 1`), as a request may ask: the optimizer evaluates a
+/// batch as wide as four a worker, at least 16, and the wasm build's is 16 —
+/// so with one worker the search is the browser fleet's, step for step (the
+/// seeds never depended on the workers). The field rides into a result row's
+/// replay request, and nowhere into a riven gain's answer (its build, score
+/// and work). WFSim's code is used as committed.
 ///
 /// # Safety
 /// As `sfe_api`.
-#[cfg(feature = "riven")]
 #[no_mangle]
 pub unsafe extern "C" fn sfe_optimize(body: *const u8, body_len: usize, out_len: *mut usize) -> *mut u8 {
     let body = String::from_utf8_lossy(std::slice::from_raw_parts(body, body_len)).to_string();
     let r = std::panic::catch_unwind(move || {
-        wfsim_optimizer::one_thread();
-        let v: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+        let mut v: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+        if let Some(o) = v.as_object_mut() {
+            o.insert("threads".into(), serde_json::json!(1));
+        }
         let plan = match wfsim_webapi::parse_optimize(&v) {
             Ok(p) => p,
             Err(e) => return e.to_string(),

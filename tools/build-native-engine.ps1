@@ -11,8 +11,8 @@
 # WFSim into .wfsim-src (or updates it), finds the newest commit whose engine id
 # equals the served one, optionally blanks Digital Extremes' card text
 # (tools/strip_card_text.py, required before a build is published), applies
-# native-engine/patches/*.patch (speed only, the same bits; -NoPatch skips them,
-# and a patch that no longer applies is skipped with a warning), builds
+# native-engine/patches/*.patch if there are any (none now: WFSim's code is used
+# as committed; -NoPatch skips them, one that no longer applies is skipped), builds
 # native-engine/ against it, and writes engines/<engine id>.dll (Linux:
 # engines/lib<engine id>.so) next to simfleet (with -Cpu x86-64-v3:
 # <engine id>-v3, the AVX2 build simfleet prefers on CPUs that have it).
@@ -102,10 +102,7 @@ if ($Cpu) {
 }
 $ne = Join-Path $root "native-engine"
 Copy-Item (Join-Path $src "Cargo.lock") (Join-Path $ne "Cargo.lock") -Force
-# A RIVEN GAIN natively needs the optimizer patch: the entry point is built only with it.
-$features = @()
-if ($applied -contains "optimizer-one-thread.patch") { $features = @("--features", "riven") }
-cargo build --release --manifest-path (Join-Path $ne "Cargo.toml") @features
+cargo build --release --manifest-path (Join-Path $ne "Cargo.toml")
 $built = $LASTEXITCODE
 # The checkout goes back as it was, patched or not.
 if ($applied.Count -gt 0) { git -C $src checkout -q -- webapi engine optimizer }

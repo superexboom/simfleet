@@ -427,8 +427,12 @@ impl Pool {
                         let (t, cpu) = (Instant::now(), crate::sys::thread_cpu_us());
                         let out = exec.run(job.backend, &job.call);
                         let ms = t.elapsed().as_secs_f64() * 1000.0;
-                        // WHAT THE LANE WAS GIVEN: CPU time against wall time.
-                        crate::affinity::note_job(lane, crate::sys::thread_cpu_us().saturating_sub(cpu), (ms * 1000.0) as u64);
+                        // WHAT THE LANE WAS GIVEN: CPU time against wall time — but
+                        // not for a native search, which computes on a worker
+                        // thread of the optimizer's own while this one waits.
+                        let away = matches!((job.backend, &job.call), (Backend::Native, Call::Optimize(_)));
+                        let (c, w) = if away { (0, 0) } else { (crate::sys::thread_cpu_us().saturating_sub(cpu), (ms * 1000.0) as u64) };
+                        crate::affinity::note_job(lane, c, w);
                         if done.send(Done { tag: job.tag, lane, ms, out }).is_err() {
                             break;
                         }

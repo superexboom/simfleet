@@ -8,8 +8,8 @@
 # pinned toolchain:
 #
 #   1. builds the wasm the way WFSim builds it (the reference),
-#   2. blanks Digital Extremes' card text (tools/strip_card_text.py, NOTICE.md),
-#      applies native-engine/patches (speed only, the same bits) and builds
+#   2. blanks Digital Extremes' card text (tools/strip_card_text.py, NOTICE.md)
+#      and builds, WFSim's code as committed (docs/CLIENTS.md),
 #      native-engine/ twice: for any x86-64, and for x86-64-v3 (AVX2; about
 #      10% faster, the same bits) — Windows <id>.dll / <id>-v3.dll, Linux
 #      lib<id>.so / lib<id>-v3.so,
@@ -190,7 +190,7 @@ jobs:
           done
           via="native-engine/ at simfleet [\`$GITHUB_SHA\`]($tree)"
           if [ -n "$patches" ]; then
-            via+=", with $patches from [native-engine/patches]($tree/native-engine/patches) (a board row set up once a call, and the optimizer on one thread as the wasm build runs it: the same bits — a build with the optimizer patch also runs riven gains, once simfleet's riven canary agrees with the site's wasm)"
+            via+=", with $patches from [native-engine/patches]($tree/native-engine/patches)"
           fi
           if [ -n "$have" ]; then
             gh release view "engine-$ENGINE" -R "$GITHUB_REPOSITORY" --json body -q .body > notes.md

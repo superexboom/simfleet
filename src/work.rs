@@ -327,14 +327,30 @@ fn riven_canary(code: &Arc<Code>) -> Result<()> {
         }
         bail!("the search never settled")
     };
-    let (a, b) = (search(false)?, search(true)?);
+    let (a, mut b) = (search(false)?, search(true)?);
     if a["results"].as_array().is_none_or(|r| r.is_empty()) {
         bail!("the wasm found nothing");
     }
+    // The native engine asks for one worker (native-engine/ `sfe_optimize`),
+    // which a row's replay request carries; nothing else may differ.
+    strip_threads(&mut b);
     if a != b {
         bail!("{} ≠ {}", a.to_string().chars().take(160).collect::<String>(), b.to_string().chars().take(160).collect::<String>());
     }
     Ok(())
+}
+
+fn strip_threads(v: &mut Value) {
+    match v {
+        Value::Object(o) => {
+            if o.get("threads") == Some(&json!(1)) {
+                o.remove("threads");
+            }
+            o.values_mut().for_each(strip_threads);
+        }
+        Value::Array(a) => a.iter_mut().for_each(strip_threads),
+        _ => {}
+    }
 }
 
 /// The native engine must give the wasm's answer on every step of a row.
