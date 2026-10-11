@@ -499,8 +499,25 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boa
 /// WFSim scripts/build_site_app.py `engine_id`, for a source checkout.
 fn engine_id(dir: &std::path::Path) -> Result<Vec<String>> {
     use sha2::{Digest, Sha256};
-    const SOURCES: [&str; 4] = ["engine/src", "webapi/src", "wasm/src", "data"];
-    const NOT: [&str; 6] = ["data/i18n/", "data/board_state.yaml", "data/market.yaml", "data/assets.yaml", "data/notes.yaml", "data/README.md"];
+    // THE CHECKOUT'S OWN LISTS (`ENGINE_SOURCES`, `ENGINE_SOURCES_NOT`), so a
+    // commit that changes what the id covers is hashed as that commit does;
+    // these (as of WFSim 2fb8138) when its script cannot be read.
+    let script = std::fs::read_to_string(dir.join("scripts").join("build_site_app.py")).unwrap_or_default();
+    let list = |name: &str, default: &[&str]| -> Vec<String> {
+        let found = script.lines().position(|l| l.starts_with(name) && l[name.len()..].trim_start().starts_with('=')).and_then(|i| {
+            let tail: String = script.lines().skip(i).collect::<Vec<_>>().join("
+");
+            let open = tail.find('(')?;
+            let close = open + tail[open..].find(')')?;
+            Some(tail[open + 1..close].split('"').skip(1).step_by(2).map(String::from).collect::<Vec<_>>())
+        });
+        found.filter(|v| !v.is_empty()).unwrap_or_else(|| default.iter().map(|s| s.to_string()).collect())
+    };
+    let sources = list("ENGINE_SOURCES", &["engine/src", "webapi/src", "wasm/src", "tools/gas-macro", "data"]);
+    let not = list(
+        "ENGINE_SOURCES_NOT",
+        &["data/i18n/", "data/board_state.yaml", "data/market.yaml", "data/assets.yaml", "data/notes.yaml", "data/README.md"],
+    );
     fn walk(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         if let Ok(rd) = std::fs::read_dir(d) {
             for e in rd.flatten() {
@@ -514,7 +531,7 @@ fn engine_id(dir: &std::path::Path) -> Result<Vec<String>> {
         }
     }
     let mut files = Vec::new();
-    for s in SOURCES {
+    for s in &sources {
         walk(&dir.join(s), &mut files);
     }
     let rel: Vec<String> = files
@@ -530,7 +547,7 @@ fn engine_id(dir: &std::path::Path) -> Result<Vec<String>> {
         list.push("Cargo.lock".into());
         let mut h = Sha256::new();
         for r in list {
-            if NOT.iter().any(|n| r.starts_with(n)) {
+            if not.iter().any(|n| r.starts_with(n.as_str())) {
                 continue;
             }
             let bytes = std::fs::read(dir.join(&r)).with_context(|| r.clone())?;
