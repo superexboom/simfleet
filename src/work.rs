@@ -24,12 +24,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// What a page that can fill an order sends (worker/verify.js `PROTOCOL`).
-pub const PROTOCOL: u32 = 6;
+/// What a page that can fill an order sends (worker/verify.js `PROTOCOL`):
+/// 7 is board rows in packs (`/api/board/answers`).
+pub const PROTOCOL: u32 = 7;
 /// A piece of a row is sized to about this long on one lane.
 pub const PIECE_MS: f64 = 250.0;
-/// A lease runs 30 min on the server; past this the fight stops and is given back.
-pub const LEASE_SAFE: Duration = Duration::from_secs(27 * 60);
 pub const RIVEN_RENEW: Duration = Duration::from_secs(120);
 pub const STATS_EVERY: Duration = Duration::from_secs(300);
 /// Jobs queued on a lane at once, so a lane never waits on the dispatcher.

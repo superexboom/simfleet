@@ -73,7 +73,8 @@ simfleet cpu             看 CPU 识别结果：是否 Intel 大小核、计算�
 
 simfleet 用的是分布式/批处理调度里的成熟做法：
 
-- **多任务并行**：服务器允许一个计算者 id 同时持有「正在算的 1 个 + 提前领的 1 个」（`TASKS_AHEAD`），simfleet 两个一起算，而不是算完一个再算下一个。
+- **榜单按包领取**（协议 7）：服务器把大约「这台电脑一分钟的工作量」的若干行榜单打成一包，共用一个租约下发；包的大小按客户端报告的速度（`pace_ms`）来定。simfleet 不像网页那样一行一行地算，而是哪个核心空出来就从最早那包里开始下一行，上一行的拖尾和下一行的开头叠在一起；答案每 30 秒和整包结束时一起交（`/api/board/answers`），最后一次带 `done`，把没来得及算的行交还给服务器。紫卡增益仍然单个下发。
+- **提前领下一份**：服务器允许一个计算者 id 同时持有「正在算的 + 提前领的」两份（`PACKS_HELD`）。当前包剩下的行按这一路的速度不到 15 秒就能算完时，或者手上是一个紫卡搜索时，就提前领下一份，核心不用等网络往返。
 - **多路（slots）**：一个浏览器就是一个 id，玩家本来就会多开浏览器来提高并发；simfleet 同样可以开几路，每路一个自己的 id，登录后都绑到你的账号（设备列表里显示为 `simfleet · 主机名 #2` 等）。服务器不让同一主人或同一网络的两个 id 互相确认，所以多开只增加算力，不增加「见证人」，不影响结果的可信度。
 - **一个共享的核心池，先来的任务优先**（类似 Slurm 的 backfill / 工作窃取）：每个空闲核心去拿最早那个任务的下一块活，它用不上的核心自动补给后面的任务，核心永远不等任务。
 - **紫卡增益的领头步骤固定在它自己的核心上**：搜索的状态存在那个 wasm 实例里，所以那个核心不接别的任务的 wasm 活（原生引擎的榜单块不碰 wasm，可以接）。
@@ -174,8 +175,8 @@ simfleet check-native          # 和网站的 wasm 比对 32 条网站上的榜�
 
 协议逐条照搬网页的 `69-board-work.js` / `08-checkpoint-api.js`（WFSim 源码）：
 
-- `/api/board/work` 领任务（带同意书版本与时间、协议号 6、可用核心数），80% 进度时提前领下一个（`ahead`），中断就 `/api/board/release` 交还；
-- 榜单：`/api/board/order` 取对战 → 各核并行跑 `/api/board/runs`（每局一个 shard）→ **严格按局序** `/api/board/fold` → `/api/board/score` → `/api/board/verify`；
+- `/api/board/work` 领任务（带同意书版本与时间、协议号 7、可用核心数、每行耗时 `pace_ms`），快做完时提前领下一份（`ahead`），中断就交还：紫卡用续租接口的 `release`，榜单包用 `/api/board/answers` 的 `done`；
+- 榜单：每一行 `/api/board/order` 取对战 → 各核并行跑 `/api/board/runs`（每局一个 shard）→ **严格按局序** `/api/board/fold` → `/api/board/score`，答案连同 `counts`/`lanes`/`compute_ms` 攒进包里，每 30 秒和整包结束时交 `/api/board/answers`；
 - 紫卡增益：`quick_fleet` 下降，lead 永远在 0 号核的同一个实例上，评分切片每核两片，2 分钟续租一次，结果按 `boardPayloadFromResult` 组装后交 `/api/appraise/<code>/result`；
 - 所有在引擎之间传递的 JSON 都按 `JSON.parse`/`JSON.stringify` 的语义处理（数字转 f64、`-0` 写成 `0`、整数键排前），保证喂给引擎的值与浏览器逐位相同。
 

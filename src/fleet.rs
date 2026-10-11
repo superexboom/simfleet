@@ -7,9 +7,15 @@
 //! board row parallelises across its runs but ends in a tail, and between tasks
 //! there is a round trip to the server. So:
 //!
-//! - SEVERAL TASKS AT ONCE. The server lets one computer id hold a task and one
-//!   asked ahead (worker/verify.js `TASKS_AHEAD`), so a GROUP — one id — runs up
-//!   to two. One browser is one id and players open several to compute more;
+//! - BOARD ROWS COME IN PACKS (protocol 7, worker/verify.js `PACK_MS`): about a
+//!   minute of a computer's work under one lease, sized by the pace the client
+//!   reports. A pack's rows start as lanes come free — one row's tail is the
+//!   next row's start — and their answers go back together every half minute
+//!   and as the pack ends (`/api/board/answers`), the last send giving back the
+//!   rows it did not reach. A riven gain still comes alone.
+//! - SEVERAL AT ONCE. The server lets one computer id hold what it computes and
+//!   one more asked ahead (`PACKS_HELD`), so a GROUP — one id — holds up to two
+//!   packs, or a riven gain and one more. One browser is one id and players open several to compute more;
 //!   simfleet opens groups the same way, each with its own id, claimed for the
 //!   same account. The server never lets two of one owner's ids, or two ids on
 //!   one network, confirm each other, so this adds compute and never a witness.
@@ -35,8 +41,7 @@ use crate::engine::{Backend, Call, Code, Done, Exec, Job, Pool};
 use crate::net::Net;
 use crate::ui::{group, points, Ctl, GroupView, Ranked, TaskLine, Ui, C_BAD, C_END, C_GO, C_INFO, C_OK};
 use crate::work::{
-    board_payload, call, fetch_release, load_code, truthy, Release, RowScore, LEASE_SAFE,
-    PIECE_MS, PROTOCOL, RIVEN_RENEW, STATS_EVERY,
+    board_payload, call, fetch_release, load_code, truthy, Release, RowScore, PIECE_MS, PROTOCOL, RIVEN_RENEW, STATS_EVERY,
 };
 use crate::{account, jsnum, sys};
 use anyhow::{bail, Context, Result};
@@ -56,6 +61,13 @@ const OPEN_BELOW: f64 = 0.85;
 const CLOSE_ABOVE: f64 = 0.97;
 /// A group the server told "nothing for you" asks again after this.
 const NOTHING_WAIT: Duration = Duration::from_secs(10);
+/// A pack's answers so far go back this often (69-board-work.js `ANSWER_EVERY_MS`)…
+const ANSWER_EVERY: Duration = Duration::from_secs(30);
+/// …the next pack is asked once what is left of this one would take under this
+/// at the group's pace (`REFILL_MS`)…
+const REFILL_MS: f64 = 15_000.0;
+/// …and a pack stops this long before its lease ends (`LEASE_MARGIN_MS`).
+const LEASE_MARGIN: Duration = Duration::from_secs(60);
 
 // ---- one task's computation, as jobs ------------------------------------------
 
@@ -273,6 +285,26 @@ struct Active {
     renewing: Option<JoinHandle<Option<Value>>>,
     /// The lanes its jobs ran on, reported with the answer.
     lanes_used: HashSet<usize>,
+    /// A board row's pack, and its question there.
+    pack: Option<u64>,
+    question: String,
+}
+
+/// A PACK of board rows under one lease: its rows not started yet, and its
+/// answers not sent yet.
+struct Pack {
+    id: u64,
+    group: usize,
+    verifier: String,
+    lease: String,
+    rows: VecDeque<Value>,
+    total: usize,
+    running: usize,
+    answered: usize,
+    unsent: Vec<Value>,
+    unsent_work: u64,
+    sent_at: Instant,
+    until: Instant,
 }
 
 impl Active {
@@ -295,13 +327,18 @@ impl Active {
 /// A computer id and what it is asking for.
 struct Group {
     verifier: String,
-    asking: Option<(bool, JoinHandle<Option<Value>>)>,
+    /// An ask on its way: ahead or not, and when it was sent.
+    asking: Option<(bool, Instant, JoinHandle<Option<Value>>)>,
     next_ask: Instant,
     next_ahead: Instant,
     claimed: bool,
     /// Answers the server took from it this run, and their work.
     done: u64,
     work: u64,
+    /// A row's wall time in this group, smoothed (the `pace_ms` a pack is sized
+    /// by): rows finishing side by side count the time between them.
+    pace_ms: f64,
+    last_row: Option<Instant>,
 }
 
 /// An answer on its way to the server.
@@ -310,6 +347,7 @@ struct Sending {
     handle: JoinHandle<bool>,
     log_ok: String,
     work: u64,
+    rows: u64,
 }
 
 pub struct Fleet {
@@ -322,6 +360,7 @@ pub struct Fleet {
     exec: Exec,
     rel: Release,
     tasks: Vec<Active>,
+    packs: Vec<Pack>,
     groups: Vec<Group>,
     /// How many groups may take new work now.
     open: usize,
@@ -330,9 +369,10 @@ pub struct Fleet {
     /// The task whose job each lane runs.
     lane_job: Vec<Option<u64>>,
     next_id: u64,
-    tasks_ahead: usize,
     stale: bool,
     banned_until: Option<String>,
+    /// The server's word when it hands this client no work at all (`unrecognised_client`).
+    refused: Option<String>,
     recent: Vec<(String, bool, Value)>,
     stats_at: Option<Instant>,
     native_checked: Instant,
@@ -361,15 +401,16 @@ impl Fleet {
             exec: Exec::new(code),
             rel,
             tasks: Vec::new(),
+            packs: Vec::new(),
             groups: Vec::new(),
             open: 1,
             sending: Vec::new(),
             tag_task: HashMap::new(),
             lane_job: Vec::new(),
             next_id: 0,
-            tasks_ahead: 1,
             stale: false,
             banned_until: None,
+            refused: None,
             recent: Vec::new(),
             stats_at: None,
             native_checked: Instant::now(),
@@ -402,7 +443,17 @@ impl Fleet {
                 self.cfg.extra_verifiers[i - 1].clone()
             };
             let now = Instant::now();
-            self.groups.push(Group { verifier, asking: None, next_ask: now, next_ahead: now, claimed: false, done: 0, work: 0 });
+            self.groups.push(Group {
+                verifier,
+                asking: None,
+                next_ask: now,
+                next_ahead: now,
+                claimed: false,
+                done: 0,
+                work: 0,
+                pace_ms: 0.0,
+                last_row: None,
+            });
         }
     }
 
@@ -443,11 +494,12 @@ impl Fleet {
         if self.pool.code().native.is_some() { Backend::Native } else { Backend::Wasm }
     }
 
-    fn ask_body(&self, verifier: &str, ahead: bool) -> Value {
+    fn ask_body(&self, gi: usize, ahead: bool) -> Value {
         // WHAT THIS ID CAN GIVE: its share of the lanes, as one browser among several says its own.
         let lanes = (self.lanes() / self.open.max(1)).max(1);
+        let g = &self.groups[gi];
         let mut b = json!({
-            "verifier": verifier,
+            "verifier": g.verifier,
             "engine": self.rel.engine,
             "protocol": PROTOCOL,
             "consent": { "v": self.cfg.consent_v, "at": self.cfg.consent_at },
@@ -455,6 +507,9 @@ impl Fleet {
         });
         if ahead {
             b["ahead"] = json!(true);
+        }
+        if g.pace_ms > 0.0 {
+            b["pace_ms"] = json!((g.pace_ms.round() as u64).clamp(100, 30 * 60_000));
         }
         b
     }
@@ -471,23 +526,77 @@ impl Fleet {
         let Some(i) = self.tasks.iter().position(|t| t.id == id) else { return };
         let t = self.tasks.remove(i);
         self.tag_task.retain(|_, v| *v != id);
+        let kind = if t.riven() { "紫卡增益" } else { "榜单" };
+        self.ui.glog(t.group, format!("{C_GO}[中断]{C_END} {kind} {}{why}", t.label));
+        // A PACK'S ROW is given back with the pack, by leaving it unanswered.
+        if let Some(pid) = t.pack {
+            if let Some(p) = self.packs.iter_mut().find(|p| p.id == pid) {
+                p.running = p.running.saturating_sub(1);
+            }
+            self.maybe_end_pack(pid);
+            return;
+        }
         if give_back && !self.offline {
             let (net, v, lease, code) = (self.net.clone(), t.verifier.clone(), t.lease.clone(), t.code.clone());
             std::thread::spawn(move || Self::release_lease(&net, &v, &lease, code.as_deref()));
         }
-        let kind = if t.riven() { "紫卡增益" } else { "榜单" };
-        self.ui.glog(t.group, format!("{C_GO}[中断]{C_END} {kind} {}{why}", t.label));
+    }
+
+    /// A pack with nothing left to start or finish: its last answers, `done`.
+    fn maybe_end_pack(&mut self, pid: u64) {
+        if self.packs.iter().any(|p| p.id == pid && p.rows.is_empty() && p.running == 0) {
+            self.send_pack(pid, true);
+        }
+    }
+
+    /// A pack's answers so far, sent on their own thread; `done` ends the pack,
+    /// giving back what it did not reach.
+    fn send_pack(&mut self, pid: u64, done: bool) {
+        let Some(pi) = self.packs.iter().position(|p| p.id == pid) else { return };
+        let p = &mut self.packs[pi];
+        if p.unsent.is_empty() && !done {
+            return;
+        }
+        let answers = std::mem::take(&mut p.unsent);
+        let (rows, work) = (answers.len() as u64, std::mem::take(&mut p.unsent_work));
+        p.sent_at = Instant::now();
+        let body = json!({ "lease": p.lease, "verifier": p.verifier, "engine": self.rel.engine, "done": done, "answers": answers });
+        let gi = p.group;
+        let log_ok = if rows > 0 {
+            format!("{C_OK}[提交]{C_END} {rows} 行答案 · {:.2} 分{}", points(work), if done { "（本包结束）" } else { "" })
+        } else {
+            String::new()
+        };
+        if done {
+            let p = self.packs.remove(pi);
+            if p.answered < p.total {
+                self.ui.glog(gi, format!("{C_GO}[交还]{C_END} 本包还有 {} 行没算，已交还", p.total - p.answered));
+            }
+        }
+        let net = self.net.clone();
+        let handle = std::thread::spawn(move || net.post_ok("/api/board/answers", &body).is_some_and(|r| r["ok"] == json!(true)));
+        self.sending.push(Sending { group: gi, handle, log_ok, work, rows });
     }
 
     fn drop_all(&mut self, why: &str) {
+        for p in &mut self.packs {
+            p.rows.clear();
+        }
         let ids: Vec<u64> = self.tasks.iter().map(|t| t.id).collect();
         for id in ids {
             self.drop_task(id, why, true);
         }
+        let packs: Vec<u64> = self.packs.iter().map(|p| p.id).collect();
+        for pid in packs {
+            self.send_pack(pid, true);
+        }
         // An ask still on its way may come back holding a lease: give it back.
         for g in &mut self.groups {
-            if let Some((_, h)) = g.asking.take() {
+            if let Some((_, _, h)) = g.asking.take() {
                 if let Ok(Some(r)) = h.join() {
+                    if let Some(lease) = r["pack"]["lease"].as_str() {
+                        Self::release_lease(&self.net, &g.verifier, lease, None);
+                    }
                     if let Some(lease) = r["work"]["lease"].as_str() {
                         let code = (r["work"]["kind"] == "riven_gain").then(|| r["work"]["code"].as_str().unwrap_or("").to_string());
                         Self::release_lease(&self.net, &g.verifier, lease, code.as_deref());
@@ -499,8 +608,14 @@ impl Fleet {
 
     pub fn shutdown(&mut self) {
         self.drop_all("，任务已交还");
+        // The last answers count in the closing line too.
         for s in self.sending.drain(..) {
-            let _ = s.handle.join();
+            if s.handle.join().unwrap_or(false) {
+                self.ui.status(|st| {
+                    st.session_tasks += s.rows;
+                    st.session_work += s.work;
+                });
+            }
         }
     }
 
@@ -511,36 +626,50 @@ impl Fleet {
         let lanes = self.lanes();
         let now = Instant::now();
         for gi in 0..self.groups.len() {
-            if let Some((ahead, h)) = self.groups[gi].asking.take() {
+            if let Some((ahead, at, h)) = self.groups[gi].asking.take() {
                 if !h.is_finished() {
-                    self.groups[gi].asking = Some((ahead, h));
+                    self.groups[gi].asking = Some((ahead, at, h));
                 } else {
                     let reply = h.join().ok().flatten();
-                    self.take_reply(gi, ahead, reply);
+                    self.take_reply(gi, ahead, at, reply);
                 }
             }
-            if self.groups[gi].asking.is_some() || self.offline || self.stale || self.banned_until.is_some() {
+            if self.groups[gi].asking.is_some() || self.offline || self.stale || self.banned_until.is_some() || self.refused.is_some() {
                 continue;
             }
-            let held = self.tasks.iter().filter(|t| t.group == gi).count();
+            // WHAT THE GROUP HOLDS: its packs and the riven gains it computes.
+            let packs: Vec<&Pack> = self.packs.iter().filter(|p| p.group == gi).collect();
+            let units = packs.len() + self.tasks.iter().filter(|t| t.group == gi && t.pack.is_none()).count();
             let sending = self.sending.iter().filter(|s| s.group == gi).count();
             let open = gi < self.open;
             let g = &self.groups[gi];
-            // A PLAIN ASK only from an id holding nothing and sending nothing;
-            // AN AHEAD ASK from one holding exactly the task it computes.
-            let plain = open && held == 0 && sending == 0 && now >= g.next_ask;
-            let ahead = open && held == 1 && sending == 0 && self.tasks_ahead > 0 && lanes >= 2 && now >= g.next_ahead;
+            // A PLAIN ASK makes the server take back all the id holds, so only an
+            // id holding nothing and sending nothing sends one; AN AHEAD ASK comes
+            // from one holding one thing — a pack nearly through, or a search.
+            let refill = match packs.first() {
+                Some(p) => p.rows.len() as f64 * g.pace_ms <= REFILL_MS,
+                None => true,
+            };
+            let plain = open && units == 0 && sending == 0 && now >= g.next_ask;
+            let ahead = open && units == 1 && refill && lanes >= 2 && now >= g.next_ahead;
             if plain || ahead {
                 if !g.claimed && self.net.session.is_some() {
                     self.claim(gi);
                 }
-                let (net, body) = (self.net.clone(), self.ask_body(&self.groups[gi].verifier, ahead));
-                self.groups[gi].asking = Some((ahead, std::thread::spawn(move || net.post_ok("/api/board/work", &body))));
+                let (net, body) = (self.net.clone(), self.ask_body(gi, ahead));
+                // A refusal's body is the message, so it is kept too.
+                let ask = move || {
+                    net.post("/api/board/work", &body)
+                        .ok()
+                        .filter(|r| (200..300).contains(&r.status) || r.body["error"].is_string())
+                        .map(|r| r.body)
+                };
+                self.groups[gi].asking = Some((ahead, Instant::now(), std::thread::spawn(ask)));
             }
         }
     }
 
-    fn take_reply(&mut self, gi: usize, ahead: bool, reply: Option<Value>) {
+    fn take_reply(&mut self, gi: usize, ahead: bool, asked_at: Instant, reply: Option<Value>) {
         let wait = Instant::now() + NOTHING_WAIT;
         let Some(r) = reply else {
             self.ui.status(|s| s.state = "连不上服务器，稍后重试".into());
@@ -548,8 +677,19 @@ impl Fleet {
             self.groups[gi].next_ahead = wait;
             return;
         };
-        if let Some(n) = r["ahead"].as_u64() {
-            self.tasks_ahead = n as usize;
+        // NO WORK FOR THIS CLIENT AT ALL, and the site says whom to ask.
+        if r["error"] == json!("unrecognised_client") {
+            let msg = r["message"].as_str().unwrap_or("服务器不再给这个客户端派发任务").to_string();
+            if self.refused.is_none() {
+                self.ui.log(format!("{C_BAD}[服务器]{C_END} {msg}"));
+            }
+            self.refused = Some(msg);
+            return;
+        }
+        if r["error"].is_string() {
+            self.groups[gi].next_ask = wait;
+            self.groups[gi].next_ahead = wait;
+            return;
         }
         if r["stale"] == json!(true) {
             self.stale = true;
@@ -561,6 +701,34 @@ impl Fleet {
                 self.ui.log(format!("{C_BAD}[冷却]{C_END} 服务器复核时与本机结果不一致，暂停派活至 {until}"));
             }
             self.banned_until = Some(until);
+            return;
+        }
+        // A PACK of board rows.
+        let pack = &r["pack"];
+        if let (Some(rows), Some(lease)) = (pack["tasks"].as_array().filter(|t| !t.is_empty()), pack["lease"].as_str()) {
+            let verifier = self.groups[gi].verifier.clone();
+            if self.quit() || self.held_why().is_some() {
+                Self::release_lease(&self.net, &verifier, lease, None);
+                return;
+            }
+            let lease_ms = pack["lease_ms"].as_u64().unwrap_or(30 * 60_000);
+            let until = asked_at + Duration::from_millis(lease_ms).saturating_sub(LEASE_MARGIN);
+            self.next_id += 1;
+            self.ui.glog(gi, format!("{C_INFO}[领取]{C_END} 一包 {} 行榜单，租约 {:.0} 分钟{}", rows.len(), lease_ms as f64 / 60_000.0, if ahead { "（预取）" } else { "" }));
+            self.packs.push(Pack {
+                id: self.next_id,
+                group: gi,
+                verifier,
+                lease: lease.to_string(),
+                rows: rows.iter().cloned().collect(),
+                total: rows.len(),
+                running: 0,
+                answered: 0,
+                unsent: Vec::new(),
+                unsent_work: 0,
+                sent_at: Instant::now(),
+                until,
+            });
             return;
         }
         let w = r["work"].clone();
@@ -578,11 +746,29 @@ impl Fleet {
             return;
         }
         let verifier = self.groups[gi].verifier.clone();
-        self.start(gi, verifier, w);
+        self.start(gi, verifier, w, None);
+    }
+
+    /// THE NEXT ROW of the oldest pack with one, started — `false` when no pack has one.
+    fn start_row(&mut self) -> bool {
+        let now = Instant::now();
+        let Some(pi) = self.packs.iter().position(|p| !p.rows.is_empty() && now < p.until) else { return false };
+        let p = &mut self.packs[pi];
+        let Some(mut w) = p.rows.pop_front() else { return false };
+        p.running += 1;
+        w["lease"] = json!(p.lease);
+        let (gi, verifier, pid) = (p.group, p.verifier.clone(), p.id);
+        if !self.start(gi, verifier, w, Some(pid)) {
+            if let Some(p) = self.packs.iter_mut().find(|p| p.id == pid) {
+                p.running -= 1;
+            }
+            self.maybe_end_pack(pid);
+        }
+        true
     }
 
     /// A leased task becomes a held one: a board row asks the engine for its fight.
-    fn start(&mut self, gi: usize, verifier: String, w: Value) -> bool {
+    fn start(&mut self, gi: usize, verifier: String, w: Value, pack: Option<u64>) -> bool {
         let lease = w["lease"].as_str().unwrap_or("").to_string();
         let now = Instant::now();
         self.next_id += 1;
@@ -603,7 +789,8 @@ impl Fleet {
                     (Runner::Board(BoardRun::new(&o["request"], &ruler)), label, None)
                 }
                 Err(e) => {
-                    if !self.offline {
+                    // A pack's row is left unanswered, and goes back with the pack.
+                    if !self.offline && pack.is_none() {
                         Self::release_lease(&self.net, &verifier, &lease, None);
                     }
                     self.ui.glog(gi, format!("{C_BAD}[跳过]{C_END} 榜单 {label}：{e:#}"));
@@ -618,13 +805,15 @@ impl Fleet {
             lease,
             code,
             label,
-            w,
             runner,
             began: now,
             last_ran: now,
             renewed: now,
             renewing: None,
             lanes_used: HashSet::new(),
+            question: w["question"].as_str().unwrap_or("").to_string(),
+            pack,
+            w,
         });
         true
     }
@@ -644,8 +833,18 @@ impl Fleet {
 
     // ---- the lanes --------------------------------------------------------------
 
-    /// Fill every free lane: the oldest task with a job for it, honouring leaders.
+    /// Fill every free lane: the oldest task with a job for it, honouring
+    /// leaders; lanes still free start a pack's next row.
     fn dispatch(&mut self) {
+        for _ in 0..16 {
+            if self.fill_lanes() == 0 || !self.start_row() {
+                break;
+            }
+        }
+    }
+
+    /// …one pass; the lanes it left free that a board row could use.
+    fn fill_lanes(&mut self) -> usize {
         let lanes = self.lanes();
         self.pool.ensure(lanes);
         let native = self.pool.code().native.is_some();
@@ -664,6 +863,7 @@ impl Fleet {
             .iter()
             .filter_map(|t| match &t.runner { Runner::Riven(r) => r.leader.map(|l| (l, t.id)), _ => None })
             .collect();
+        let mut free = 0;
         for lane in 0..lanes {
             if self.pool.pending(lane) > 0 {
                 continue;
@@ -691,7 +891,11 @@ impl Fleet {
                     break;
                 }
             }
+            if self.pool.pending(lane) == 0 && (owner.is_none() || native) {
+                free += 1;
+            }
         }
+        free
     }
 
     /// One finished job, into its task; a task that is done is answered.
@@ -728,6 +932,9 @@ impl Fleet {
     fn answer(&mut self, t: Active, f: Finished) {
         let secs = t.began.elapsed().as_secs_f64();
         let lanes = t.lanes_used.len().max(1);
+        if let (Some(pid), Finished::Board(s)) = (t.pack, &f) {
+            return self.answer_row(&t, pid, s, lanes, secs);
+        }
         let (path, body, log_ok, work, recent) = match f {
             Finished::Board(s) => (
                 "/api/board/verify".to_string(),
@@ -799,7 +1006,39 @@ impl Fleet {
         }
         let net = self.net.clone();
         let handle = std::thread::spawn(move || net.post(&path, &body).map(|r| (200..300).contains(&r.status)).unwrap_or(false));
-        self.sending.push(Sending { group: t.group, handle, log_ok, work });
+        self.sending.push(Sending { group: t.group, handle, log_ok, work, rows: 1 });
+    }
+
+    /// A PACK'S ROW, measured: its answer joins the pack's, sent every half minute and as the pack ends.
+    fn answer_row(&mut self, t: &Active, pid: u64, s: &RowScore, lanes: usize, secs: f64) {
+        let now = Instant::now();
+        let g = &mut self.groups[t.group];
+        let wall = secs * 1000.0;
+        let ms = g.last_row.map_or(wall, |l| now.duration_since(l).as_secs_f64() * 1000.0).min(wall);
+        g.pace_ms = if g.pace_ms > 0.0 { g.pace_ms * 0.7 + ms * 0.3 } else { ms };
+        g.last_row = Some(now);
+        // `counts` and `lanes`: what the row cost, kept beside the answer to
+        // fit what a point is worth (never credited; 69-board-work.js).
+        let mut a = json!({ "question": t.question, "score": s.score, "metric": s.metric, "work": s.work,
+                            "compute_ms": s.compute_ms, "lanes": lanes });
+        if s.counts.is_object() {
+            a["counts"] = s.counts.clone();
+        }
+        self.ui.glog(t.group, format!("{C_OK}[完成]{C_END} 榜单  {}  = {:.4} {} · {:.2} 分 · {secs:.1}s", t.label, s.score, s.metric, points(s.work)));
+        self.recent.push((t.verifier.clone(), false, json!({ "identity": t.w["identity"], "ruler": t.w["ruler"], "mode": t.w["mode"] })));
+        if self.recent.len() > 100 {
+            self.recent.remove(0);
+        }
+        let Some(p) = self.packs.iter_mut().find(|p| p.id == pid) else { return };
+        p.running = p.running.saturating_sub(1);
+        p.answered += 1;
+        p.unsent.push(a);
+        p.unsent_work += s.work;
+        if p.rows.is_empty() && p.running == 0 {
+            self.send_pack(pid, true);
+        } else if p.sent_at.elapsed() >= ANSWER_EVERY {
+            self.send_pack(pid, false);
+        }
     }
 
     /// Answers that arrived, and the riven gains' leases kept alive.
@@ -810,14 +1049,16 @@ impl Fleet {
                 let s = self.sending.remove(i);
                 let ok = s.handle.join().unwrap_or(false);
                 if ok {
-                    self.ui.glog(s.group, s.log_ok);
+                    if !s.log_ok.is_empty() {
+                        self.ui.glog(s.group, s.log_ok);
+                    }
                     if let Some(g) = self.groups.get_mut(s.group) {
-                        g.done += 1;
+                        g.done += s.rows;
                         g.work += s.work;
                     }
                     let now = Instant::now();
                     self.ui.status(|st| {
-                        st.session_tasks += 1;
+                        st.session_tasks += s.rows;
                         st.session_work += s.work;
                         st.answered.push_back((now, s.work));
                         while st.answered.front().is_some_and(|a| now.duration_since(a.0) > Duration::from_secs(900)) {
@@ -854,9 +1095,29 @@ impl Fleet {
                 t.renewing = Some(std::thread::spawn(move || net.post_ok(&path, &body)));
             }
             let quiet = now.duration_since(t.last_ran) > STARVED && !self.tag_task.values().any(|v| *v == t.id);
-            if (!t.riven() && now.duration_since(t.began) > LEASE_SAFE) || quiet {
+            if quiet {
                 late.push(t.id);
             }
+        }
+        // PACKS: past their time, ended with what they have; else their answers every half minute.
+        let (mut ends, mut sends) = (Vec::new(), Vec::new());
+        for p in &mut self.packs {
+            if now >= p.until {
+                p.rows.clear();
+                ends.push(p.id);
+            } else if !p.unsent.is_empty() && p.sent_at.elapsed() >= ANSWER_EVERY {
+                sends.push(p.id);
+            }
+        }
+        for pid in sends {
+            self.send_pack(pid, false);
+        }
+        for pid in ends {
+            let rows: Vec<u64> = self.tasks.iter().filter(|t| t.pack == Some(pid)).map(|t| t.id).collect();
+            for id in rows {
+                self.drop_task(id, "：本包租约将到期，未完成的交还", false);
+            }
+            self.send_pack(pid, true);
         }
         for id in lost {
             self.drop_task(id, "：任务已转给别的电脑", false);
@@ -879,7 +1140,7 @@ impl Fleet {
             return;
         }
         let util = busy / cap;
-        let full = (0..self.open).all(|g| self.tasks.iter().any(|t| t.group == g));
+        let full = (0..self.open).all(|g| self.tasks.iter().any(|t| t.group == g) || self.packs.iter().any(|p| p.group == g));
         let now = Instant::now();
         let work_left = (0..self.open).all(|g| self.groups[g].next_ask <= now);
         if util < OPEN_BELOW && full && work_left && self.open < self.max_groups() {
@@ -908,26 +1169,30 @@ impl Fleet {
             .iter()
             .enumerate()
             .map(|(gi, g)| {
-                let held = self.tasks.iter().filter(|t| t.group == gi).count();
-                let state = if held > 1 {
-                    "计算中（含预取）"
-                } else if held == 1 {
-                    "计算中"
+                let packs: Vec<&Pack> = self.packs.iter().filter(|p| p.group == gi).collect();
+                let riven = self.tasks.iter().any(|t| t.group == gi && t.riven());
+                let more = if packs.len() + usize::from(riven) > 1 { "，已预取" } else { "" };
+                let state = if let Some(p) = packs.first() {
+                    format!("一包 {}/{} 行{more}", p.answered, p.total)
+                } else if riven {
+                    format!("紫卡搜索{more}")
                 } else if self.sending.iter().any(|s| s.group == gi) {
-                    "提交结果"
+                    "提交结果".into()
                 } else if g.asking.is_some() {
-                    "取任务"
+                    "取任务".into()
                 } else if gi >= open {
-                    "暂不接活"
+                    "暂不接活".into()
                 } else if g.next_ask > now {
-                    "暂无任务"
+                    "暂无任务".into()
                 } else {
-                    "等待"
+                    "等待".into()
                 };
-                GroupView { id: g.verifier.get(..8).unwrap_or(&g.verifier).to_string(), state: state.into(), open: gi < open, tasks: g.done, work: g.work }
+                GroupView { id: g.verifier.get(..8).unwrap_or(&g.verifier).to_string(), state, open: gi < open, tasks: g.done, work: g.work }
             })
             .collect();
-        let state = if let Some(u) = &self.banned_until {
+        let state = if self.refused.is_some() {
+            "服务器不派活（见日志）".to_string()
+        } else if let Some(u) = &self.banned_until {
             format!("冷却中，至 {u}")
         } else if self.tasks.is_empty() {
             "等待任务".to_string()
@@ -1018,7 +1283,7 @@ impl Fleet {
     pub fn replay(&mut self, w: &Value) -> Result<()> {
         self.offline = true;
         let v = self.groups[0].verifier.clone();
-        if !self.start(0, v, w.clone()) {
+        if !self.start(0, v, w.clone(), None) {
             bail!("task did not start");
         }
         while !self.tasks.is_empty() {
