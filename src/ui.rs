@@ -103,6 +103,12 @@ pub struct Status {
     pub lane_kind: Vec<Option<char>>,
     /// The hybrid setting in effect ("优先 P 核"), on an Intel hybrid.
     pub core_pref: Option<&'static str>,
+    /// WHAT THE LANES ARE GIVEN, the last few seconds: CPU time over their jobs'
+    /// wall time (1.0 = a whole core each), that as cores, and the logical
+    /// processors they ran on.
+    pub lane_yield: Option<f64>,
+    pub effective_cores: Option<f64>,
+    pub processors: usize,
     /// The budget: cores while away, cores while in use (0 pauses then).
     pub idle_cores: usize,
     pub active_cores: usize,
@@ -1020,6 +1026,16 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
             kv(c, x, yy, w, "预算", &format!("离开 {} 核", s.idle_cores), &format!("  使用时 {busy}"));
             yy += 1;
         }
+        // WHAT THE LANES REALLY GET: lanes crowded onto a few processors, or
+        // starved by other programs, are less than a core each.
+        if let (Some(eff), Some(share), true) = (s.effective_cores, s.lane_yield, yy < end) {
+            c.text(x + 1, yy, 7, "实得", DIM);
+            let st = Sty { fg: Some(if share < 0.6 { 203 } else if share < 0.85 { 179 } else { 255 }), bold: true, ..PLAIN };
+            let u = c.text(x + 8, yy, w.saturating_sub(9), &format!("{eff:.1} 核"), st);
+            let rest = format!("  {:.0}%/线程 · {} 处理器", share * 100.0, s.processors);
+            c.text(x + 8 + u, yy, w.saturating_sub(9 + u), &rest, DIM);
+            yy += 1;
+        }
         if let (Some(pref), true) = (s.core_pref, yy < end) {
             let (p, e) = s.lane_kind.iter().flatten().fold((0, 0), |a, k| if *k == 'P' { (a.0 + 1, a.1) } else { (a.0, a.1 + 1) });
             kv(c, x, yy, w, "大小核", pref, &format!("  在 P {p} / E {e}"));
@@ -1103,6 +1119,10 @@ fn compact(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame, v:
     );
     if let Some(t) = s.today_points {
         a += &format!(" · 今日 {} 分", group(t));
+    }
+    if let (Some(eff), Some(share)) = (s.effective_cores, s.lane_yield) {
+        let col = if share < 0.6 { C_BAD } else if share < 0.85 { C_GO } else { "" };
+        a += &format!(" · 实得 {col}{eff:.1}{C_END} 核");
     }
     match (&s.account, s.account_points) {
         (Some(_), Some(p)) => a += &format!(" · 账号 {} 分", group(p)),
@@ -1214,7 +1234,10 @@ mod tests {
             lane_map: vec![Some(0), Some(0), Some(0), Some(0), Some(1), Some(1), Some(1), None, Some(2), None],
             answered: [(now, 9_000_000_000)].into_iter().collect(),
             lane_kind: vec![Some('P'), Some('P'), Some('P'), Some('P'), Some('P'), Some('P'), Some('E'), None, Some('E'), None],
-            core_pref: Some("优先 P 核"),
+            core_pref: Some("自动分配"),
+            lane_yield: Some(0.52),
+            effective_cores: Some(4.2),
+            processors: 4,
             idle_cores: 10,
             active_cores: 2,
             ..Default::default()

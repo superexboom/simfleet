@@ -1,6 +1,6 @@
-# A tag v* builds simfleet.exe from this source on GitHub's Windows runner and
-# attaches the zip to that tag's release. The native engine is never included
-# (NOTICE.md).
+# A tag v* builds simfleet from this source on GitHub's Windows and Linux
+# runners and attaches both to that tag's release. The native engine is never
+# included: simfleet downloads the published build itself (native-engine.yml).
 name: release
 on:
   push:
@@ -8,31 +8,54 @@ on:
 permissions:
   contents: write
 jobs:
-  release:
-    runs-on: windows-latest
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows
+            runner: windows-latest
+          - os: linux
+            # The oldest glibc the runners have, so the binary runs on more systems.
+            runner: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --release --locked
-      - run: powershell -ExecutionPolicy Bypass -File tools/package.ps1
+      - shell: pwsh
+        run: ./tools/package.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: dist/simfleet-*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: in
+          merge-multiple: true
       - name: Publish
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${GITHUB_REF_NAME}"
-          sha=$(sha256sum dist/*.zip | cut -d' ' -f1)
-          cat > notes.md <<NOTES
-          simfleet ${tag} — WFSim 志愿计算客户端（Windows x64，单文件，无需安装 Rust 或运行库）。
-
-          - 解压后双击 \`simfleet.exe\`，第一次运行会询问是否同意计算和核心预算。
-          - 引擎在运行时从 wfsim.app 下载（WFSim 官方发布的 wasm），网站更新后自动跟上。
-          - 原生引擎不随发布分发，需要的话用 \`tools/build-native-engine.ps1\` 自行编译。
-
-          源码：https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_SHA}（AGPL-3.0-or-later）
-          基于 WFSim（https://github.com/magenie33/wfsim ，AGPL-3.0-or-later），非官方项目，与 WFSim、Digital Extremes 无关联。署名与第三方许可见压缩包内 NOTICE.md 与 THIRD-PARTY-LICENSES.md。
-
-          SHA-256: \`${sha}\`
-          NOTES
-          sed -i 's/^          //' notes.md
-          gh release create "$tag" dist/*.zip --title "simfleet $tag" --notes-file notes.md
+          sums=$(cd in && sha256sum simfleet-* | awk '{print "- `"$2"`: `"$1"`"}')
+          {
+            echo "simfleet ${tag} — WFSim 志愿计算客户端，单文件，无需安装 Rust 或运行库。"
+            echo
+            echo "- **Windows x64**（\`*-windows-x64.zip\`）：解压后双击 \`simfleet.exe\`。"
+            echo "- **Linux x64**（\`*-linux-x64.tar.gz\`，glibc 2.35 及以上，如 Ubuntu 22.04+、Debian 12+）：\`tar xzf\` 后运行 \`./simfleet/simfleet\`；没有键鼠检测，按「离开电脑时」的核心数计算。"
+            echo "- 第一次运行会询问是否同意计算和核心预算。引擎在运行时从 wfsim.app 下载（WFSim 官方发布的 wasm），网站更新后自动跟上；有对应的原生引擎时会自动下载并逐位校验后使用。"
+            echo
+            echo "源码：https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_SHA}（AGPL-3.0-or-later）"
+            echo "基于 WFSim（https://github.com/magenie33/wfsim ，AGPL-3.0-or-later），非官方项目，与 WFSim、Digital Extremes 无关联。署名与第三方许可见压缩包内 NOTICE.md 与 THIRD-PARTY-LICENSES.md。"
+            echo
+            echo "SHA-256:"
+            echo
+            echo "$sums"
+          } > notes.md
+          gh release create "$tag" in/simfleet-* -R "$GITHUB_REPOSITORY" --title "simfleet $tag" --notes-file notes.md

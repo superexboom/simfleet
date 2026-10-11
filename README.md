@@ -32,9 +32,11 @@
 
 **下载**：在 [Releases](https://github.com/superexboom/simfleet/releases) 下载 `simfleet-<版本>-windows-x64.zip` 并解压。只需要 Windows 10/11 x64，不需要装 Rust 或任何运行库。
 
+**Linux x64**：下载 `simfleet-<版本>-linux-x64.tar.gz`，`tar xzf` 后运行 `./simfleet/simfleet`（需要 glibc 2.35 及以上，如 Ubuntu 22.04+、Debian 12+）。Linux 上没有键鼠空闲检测，始终按「离开电脑时」的核心数计算；`priority = "idle"` 用的是 `SCHED_IDLE` 加 nice 19，只吃没人要的 CPU。放进 systemd 或 tmux 都行，收到 SIGTERM/SIGHUP 会先交还任务再退出。
+
 1. 把 `simfleet.exe` 放进一个文件夹（这个文件夹就是安装目录，配置和缓存都在里面；删掉文件夹就是卸载）。
 2. 双击运行。第一次会问三件事：是否同意计算、离开电脑时用几个核心、要不要登录。
-3. 之后每次双击就开始算。按 **P** 暂停/继续，**+ / -** 调整空闲核心数，**Q**（或 Ctrl+C、直接关窗口）退出——退出前会把手头的任务交还服务器，不会让任务白白挂 30 分钟。
+3. 之后每次双击就开始算。按 **P** 暂停/继续，**+ / -** 调整离开电脑时的核心数（加 **Shift** 调使用电脑时的），**Q**（或 Ctrl+C、直接关窗口）退出——退出前会把手头的任务交还服务器，不会让任务白白挂 30 分钟。
 
 不登录也能算：贡献先记在本机的计算者 id 上，**以后第一次登录时，之前攒的点数会一起转到账号名下**。
 
@@ -61,7 +63,7 @@ simfleet cpu             看 CPU 识别结果：是否 Intel 大小核、计算�
 | `idle_after_secs` | 60 | 键盘鼠标多久没动算「离开」 |
 | `pause_on_battery` | true | 用电池时暂停 |
 | `priority` | `idle` | 进程优先级：`idle` 只吃没人要的 CPU，`below_normal`，`normal` |
-| `core_type` | `auto` | 只对 **Intel 大小核**有效：`auto` 交给 Windows，`p` 优先性能核，`e` 优先能效核（见下）；AMD 等其他 CPU 一律不生效 |
+| `core_type` | `auto` | 只对 **Intel 大小核**有效：`auto` 先 P 核、再 E 核、最后 P 核超线程，`p` 优先性能核，`e` 优先能效核，`windows` 交给系统（见下）；AMD 等其他 CPU 一律不生效 |
 | `native_engine` | true | 有匹配的原生引擎时，榜单任务用原生（见下） |
 | `slots` | 0（自动） | 同时开几路（几个计算者 id），见下文「调度」；填数字就固定开几路 |
 
@@ -95,15 +97,20 @@ simfleet 用的是分布式/批处理调度里的成熟做法：
 
 ## Intel 大小核
 
-Intel 12 代以后的大小核 CPU 上，Windows 会把空闲优先级的后台程序（比如 simfleet）尽量放到 E 核上。`core_type` 可以改这个行为：
+Intel 12 代以后的大小核 CPU 上，Windows 会把空闲优先级的后台程序（比如 simfleet）挤在 E 核上，而且不会往空着的 P 核上溢出。在 i5-13400F（6 个 P 核 12 线程 + 4 个 E 核）上实测：交给 Windows 时 8 条计算线程挤在 4 个 E 核上轮流跑，每条只拿到半个核心，P 核却闲着。所以 simfleet 自己排，按**档位**一档一档地填：
 
-- `p`：计算线程先占满 P 核的全部线程，预算比 P 核多的部分再放到 E 核；同时告诉 Windows 不要按后台程序给它降频（关掉 EcoQoS）。更快，但更热、更费电。
-- `e`：反过来，先占满 E 核，并开启 EcoQoS。更省电，也更不打扰前台。
-- `auto`（默认）：不干预。
+| `core_type` | 计算线程依次放在 | 适合 |
+|---|---|---|
+| `auto`（默认） | 每个 P 核的第一个线程 → E 核 → P 核的第二个线程（超线程） | 最快：一个 E 核比 P 核的超线程多出的算力更多 |
+| `p` | P 核第一个线程 → P 核超线程 → E 核 | 尽量把活留在 P 核 |
+| `e` | E 核 → P 核第一个线程 → P 核超线程 | 更省电、更不打扰前台 |
+| `windows` | 不绑定，系统自己调度 | 想要原来的行为 |
 
-做法是给每个计算线程指定它那一类核心的 **CPU 集合**（`SetThreadSelectedCpuSets`）。Windows 只在这个集合里调度这个线程，不会被系统调度带到另一类核心上去，但可以在同类核心之间自由挪动。核心类别读的是 Windows 报告的每个逻辑处理器的效率等级（等级最高的是 P 核），而且只在 **CPU 厂商是 Intel、并且确实有两种以上等级**时才启用；AMD（包括带 Zen c 小核的型号）和其他 CPU 一律不动。
+13400F、预算 10 核、`auto` 时就是 6 条上 P 核、4 条上 E 核；预算 16 核时再加 6 条 P 核超线程。
 
-识别结果用 `simfleet cpu` 查看。运行时，面板右侧「核心」一行里每格的 `P`/`E` 是那条计算线程**实际**最近跑在哪种核心上；「大小核」一行统计当前在 P 核、E 核上的线程数，可以直接看出设置有没有生效。首次设置时，如果检测到 Intel 大小核，也会问一次这个选项。
+做法是给第 k 条计算线程指定它所在那一档的 **CPU 集合**（Windows `SetThreadSelectedCpuSets`，Linux `sched_setaffinity`），集合里正好是这一档的逻辑处理器，所以一档里的线程不会比处理器多，系统也只会在这一档里挪动它。`auto` 和 `p` 同时告诉 Windows 不要按后台程序给它降频（关掉 EcoQoS），`e` 则打开。核心类别读的是系统报告的每个逻辑处理器的效率等级（Windows 的 EfficiencyClass，Linux 的 `/sys/devices/cpu_core`、`cpu_atom`），物理核按线程兄弟分组；只在 **CPU 厂商是 Intel、并且确实有两种以上等级**时才启用，AMD（包括带 Zen c 小核的型号）和其他 CPU 一律不动。
+
+**看它实际拿到了多少**：每条计算线程都记录自己真正得到的 CPU 时间，面板右侧「实得」一行显示所有计算线程合起来实际得到几个核心、每条线程平均拿到一个核心的百分之几，以及它们实际落在几个逻辑处理器上。挤在少数核心上，或者被别的程序抢走了 CPU，都会直接显示成每线程远低于 100%，持续一分钟就在日志里提示一次。这一项对所有 CPU 都有效。「核心」一行里每格的 `P`/`E` 是那条线程最近实际跑在哪种核心上。识别结果和分配方案用 `simfleet cpu` 查看；首次设置时检测到 Intel 大小核也会问一次。
 
 ## Go 还是 Rust：实测
 
@@ -145,9 +152,11 @@ simfleet 因此有两个引擎：
 不用自己编译。本仓库的 [native-engine](.github/workflows/native-engine.yml) Action 每 30 分钟计算一次 WFSim `main` 分支的引擎号（wfsim.app 对 GitHub 的服务器会弹出人机验证，所以 Action 完全不访问网站；网站发布的引擎号就是它所用源码的哈希）。遇到还没发布过的引擎号，它会在那次提交上，用 WFSim 自己锁定的 Rust 和 wasm-bindgen 版本：
 
 1. 照 WFSim 的做法编译出 wasm，作为比对的参照；
-2. **把 Digital Extremes 的卡牌文本清空**（`tools/strip_card_text.py`）后编译原生引擎，编两份：`<引擎号>.dll`（任何 x86-64 都能跑）和 `<引擎号>-v3.dll`（x86-64-v3，即 AVX2、FMA、BMI2 这一代指令，2013 年以后的 CPU 基本都有）。WFSim 对这部分文本没有授权（见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)），所以发布的版本里不含它；引擎只拿这些文本做显示，不影响任何分数；
-3. 在 WFSim 仓库里提交的榜单快照上取 32 条真实榜单（4 把武器 × 4 把尺子 × 2 种模式），两份都和参照 wasm **逐位比对**（`simfleet check-native`），全部一致才发布；
-4. 发布为 Release `engine-<引擎号>`，附 sha256，说明里写明对应的 WFSim 提交、simfleet 提交和构建记录。
+2. **把 Digital Extremes 的卡牌文本清空**（`tools/strip_card_text.py`），打上 `native-engine/patches/` 里的提速补丁（见下），然后编译原生引擎。每个平台编两份：一份任何 x86-64 都能跑，一份是 x86-64-v3（即 AVX2、FMA、BMI2 这一代指令，2013 年以后的 CPU 基本都有）。Windows 是 `<引擎号>.dll` / `<引擎号>-v3.dll`，Linux 是 `lib<引擎号>.so` / `lib<引擎号>-v3.so`。WFSim 对卡牌文本没有授权（见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)），所以发布的版本里不含它；引擎只拿这些文本做显示，不影响任何分数；
+3. 在 WFSim 仓库里提交的榜单快照上取 32 条真实榜单（4 把武器 × 4 把尺子 × 2 种模式），每一份都和参照 wasm **逐位比对**（`simfleet check-native`），全部一致才发布。某个平台没通过就不发布它，那个平台继续用 wasm；
+4. 发布为 Release `engine-<引擎号>`，附 sha256，说明里写明对应的 WFSim 提交、simfleet 提交、打了哪些补丁和构建记录。已经发布的文件从不替换，只补缺的。
+
+**提速补丁**（`native-engine/patches/prepared-runs.patch`，只改 WFSim 的 `webapi/`，不碰引擎本身）：`/api/board/runs` 原来每一局都要重新解析战斗、解析构筑、重建参数，再顺带算一份用不上的报告；补丁让一次调用里的所有局共用一次准备，shard 不再算报告，`/api/board/score` 也不再把累加器转成 JSON 再读回来。每一局的输入完全相同，所以结果逐位不变——发布前的 32 行比对和每次启动的金丝雀都会验证。在网站当前引擎上实测 AVX2 版：1 核 3.40–3.86 s → 3.04–3.06 s，2 核 2.00–2.04 s → 1.69–1.76 s（约快 15%）。补丁打不上（上游改了这几个文件）时自动跳过、照常编译不打补丁的版本。
 
 simfleet 只用网站**实际发布**的引擎号：启动时在 `engines\` 里找对应的 dll，没有就去 Release 下载，校验 sha256，再在金丝雀榜单上和**网站自己的 wasm** 比对一次，一致才用；运行中用 wasm 时每 30 分钟再看一次有没有发布出来。不想用原生引擎，把 `simfleet.toml` 里的 `native_engine` 设为 `false`；只想用自己编译的，把 `native_engine_url` 设为 `""`。
 
@@ -162,11 +171,12 @@ simfleet 只用网站**实际发布**的引擎号：启动时在 `engines\` 里�
 
 AVX-512 没有额外收益：引擎是一场场按事件推进的战斗模拟，分支多、几乎没有能成批向量化的数值循环，提速来自更新的标量指令，AVX2 那一代就已经有了。同理也不适合 GPU：GPU 的超越函数与 CPU 不逐位一致，而 WFSim 要求两台不同机器的结果逐位相同才算数。想强制用某一版，设环境变量 `SIMFLEET_CPU=baseline` 或 `SIMFLEET_CPU=v3`。
 
-自己编译（要 git、Rust，`-Strip` 还要 Python）：
+自己编译（要 git、Rust，`-Strip` 还要 Python；默认打补丁，`-NoPatch` 不打）：
 
 ```
 powershell -ExecutionPolicy Bypass -File tools\build-native-engine.ps1 [-Strip] [-Cpu x86-64-v3]
-simfleet check-native          # 和网站的 wasm 比对 32 条网站上的榜单
+pwsh tools/build-native-engine.ps1 [-Strip] [-Cpu x86-64-v3]      # Linux
+simfleet check-native [--lanes N]   # 和网站的 wasm 比对 32 条网站上的榜单
 ```
 
 网站引擎更新后，旧的 dll 自动不再使用，回到 wasm，直到新的原生引擎发布出来。
@@ -183,12 +193,13 @@ simfleet check-native          # 和网站的 wasm 比对 32 条网站上的榜�
 ## 构建
 
 ```
-cargo build --release          # target\release\simfleet.exe
+cargo build --release          # target/release/simfleet(.exe)
 cargo test --release
 powershell -File tools\package.ps1   # dist\simfleet-<版本>-windows-x64.zip
+pwsh tools/package.ps1               # Linux：dist/simfleet-<版本>-linux-x64.tar.gz
 ```
 
-发布：推送 `v*` 标签后，GitHub Actions（`.github/workflows/release.yml`）会在 Windows 上从源码编译、打包，并把 zip 附到对应的 Release。
+发布：推送 `v*` 标签后，GitHub Actions（`.github/workflows/release.yml`）会分别在 Windows 和 Ubuntu 22.04 上从源码编译、测试、打包，把 zip 和 tar.gz 一起附到对应的 Release。
 
 ## 署名与许可
 

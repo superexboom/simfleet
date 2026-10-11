@@ -6,9 +6,9 @@ for a binary distribution. (simfleet itself is AGPL-3.0-or-later; see LICENSE.)
 
 ## Overview
 
-- **Apache License 2.0** (110 crates)
+- **Apache License 2.0** (122 crates)
 - **ISC License** (19 crates)
-- **MIT License** (16 crates)
+- **MIT License** (18 crates)
 - **GNU Affero General Public License v3.0 or later** (1 crate)
 - **BSD 3-Clause "New" or "Revised" License** (1 crate)
 - **Community Data License Agreement Permissive 2.0** (1 crate)
@@ -21,7 +21,7 @@ for a binary distribution. (simfleet itself is AGPL-3.0-or-later; see LICENSE.)
 
 Used by:
 
-- [simfleet 0.2.0](https://github.com/superexboom/simfleet)
+- [simfleet 0.4.0](https://github.com/superexboom/simfleet)
 
 ```
                     GNU AFFERO GENERAL PUBLIC LICENSE
@@ -916,7 +916,9 @@ Used by:
 - [cranelift-entity 0.136.2](https://github.com/bytecodealliance/wasmtime)
 - [cranelift-frontend 0.136.2](https://github.com/bytecodealliance/wasmtime)
 - [cranelift-native 0.136.2](https://github.com/bytecodealliance/wasmtime)
+- [linux-raw-sys 0.12.1](https://github.com/sunfishcode/linux-raw-sys)
 - [regalloc2 0.15.2](https://github.com/bytecodealliance/regalloc2)
+- [rustix 1.1.5](https://github.com/bytecodealliance/rustix)
 - [target-lexicon 0.13.5](https://github.com/bytecodealliance/target-lexicon)
 - [wasm-encoder 0.258.3](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-encoder)
 - [wasmparser 0.258.3](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasmparser)
@@ -1444,6 +1446,7 @@ Used by:
 - [windows-sys 0.52.0](https://github.com/microsoft/windows-rs)
 - [windows-sys 0.61.2](https://github.com/microsoft/windows-rs)
 - [windows-targets 0.52.6](https://github.com/microsoft/windows-rs)
+- [windows_x86_64_gnu 0.52.6](https://github.com/microsoft/windows-rs)
 - [windows_x86_64_msvc 0.52.6](https://github.com/microsoft/windows-rs)
 
 ```
@@ -1657,6 +1660,7 @@ Used by:
 
 Used by:
 
+- [memfd 0.6.6](https://github.com/lucab/memfd-rs)
 - [rustls-platform-verifier 0.7.1](https://github.com/rustls/rustls-platform-verifier)
 - [ureq 3.4.2](https://github.com/algesten/ureq)
 
@@ -3162,6 +3166,7 @@ Used by:
 - [cfg-if 1.0.5](https://github.com/rust-lang/cfg-if)
 - [either 1.19.0](https://github.com/rayon-rs/either)
 - [equivalent 1.0.2](https://github.com/indexmap-rs/equivalent)
+- [errno 0.3.14](https://github.com/lambda-fairy/rust-errno)
 - [flate2 1.1.10](https://github.com/rust-lang/flate2-rs)
 - [fnv 1.0.7](https://github.com/servo/rust-fnv)
 - [gimli 0.33.0](https://github.com/gimli-rs/gimli)
@@ -3171,17 +3176,24 @@ Used by:
 - [indexmap 2.14.2](https://github.com/indexmap-rs/indexmap)
 - [itertools 0.14.0](https://github.com/rust-itertools/itertools)
 - [leb128fmt 0.1.0](https://github.com/bluk/leb128fmt)
+- [linux-raw-sys 0.12.1](https://github.com/sunfishcode/linux-raw-sys)
 - [lock_api 0.4.14](https://github.com/Amanieu/parking_lot)
 - [log 0.4.34](https://github.com/rust-lang/log)
 - [object 0.40.0](https://github.com/gimli-rs/object)
 - [once_cell 1.21.4](https://github.com/matklad/once_cell)
+- [openssl-probe 0.2.1](https://github.com/rustls/openssl-probe)
 - [parking_lot 0.12.5](https://github.com/Amanieu/parking_lot)
 - [parking_lot_core 0.9.12](https://github.com/Amanieu/parking_lot)
 - [percent-encoding 2.3.2](https://github.com/servo/rust-url/)
 - [postcard 1.1.3](https://github.com/jamesmunns/postcard)
 - [ring 0.17.14](https://github.com/briansmith/ring)
+- [rustix 1.1.5](https://github.com/bytecodealliance/rustix)
+- [rustls-native-certs 0.8.4](https://github.com/rustls/rustls-native-certs)
 - [rustls 0.23.45](https://github.com/rustls/rustls)
 - [scopeguard 1.2.0](https://github.com/bluss/scopeguard)
+- [signal-hook-mio 0.2.5](https://github.com/vorner/signal-hook)
+- [signal-hook-registry 1.4.8](https://github.com/vorner/signal-hook)
+- [signal-hook 0.3.18](https://github.com/vorner/signal-hook)
 - [smallvec 1.16.3](https://github.com/servo/rust-smallvec)
 - [unicode-segmentation 1.13.3](https://github.com/unicode-rs/unicode-segmentation)
 - [unicode-width 0.2.2](https://github.com/unicode-rs/unicode-width)
@@ -4938,6 +4950,37 @@ third-party/chromium/LICENSE.
 
 Used by:
 
+- [mio 1.2.4](https://github.com/tokio-rs/mio)
+
+```
+Copyright (c) 2014 Carl Lerche and other MIO contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+```
+
+---
+
+## MIT License
+
+Used by:
+
 - [winreg 0.56.0](https://github.com/gentoo90/winreg-rs)
 
 ```
@@ -4960,6 +5003,25 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+```
+
+---
+
+## MIT License
+
+Used by:
+
+- [schannel 0.1.29](https://github.com/steffengy/schannel-rs)
+
+```
+Copyright (c) 2015 steffengy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ```
 

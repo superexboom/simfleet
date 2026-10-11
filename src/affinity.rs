@@ -1,25 +1,39 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! INTEL HYBRID CPUS — P-cores and E-cores — and which kind the lanes run on.
+//! WHERE THE LANES RUN, and what they actually get there.
 //!
-//! Left alone (`auto`), Windows decides, and it steers a background,
-//! idle-priority process like this one towards the E-cores. `p` fills the
-//! P-cores' logical processors first and spills over to the E-cores, `e` the
-//! reverse. Each lane thread is given its kind's CPU SET
-//! (`SetThreadSelectedCpuSets`): the scheduler keeps the thread inside it and
-//! moves it freely within it, so the choice holds without pinning a lane to
-//! one processor. `p` also asks Windows not to slow the process down as a
-//! background one (power throttling / EcoQoS off), `e` asks it to.
+//! INTEL HYBRID CPUS (P-cores and E-cores). Left to itself, Windows puts a
+//! background, idle-priority process like this one on the E-cores and keeps it
+//! there: on an i5-13400F (6 P-cores with two threads each, 4 E-cores) eight
+//! lanes were measured sharing the four E-cores while the P-cores idled, each
+//! lane getting half a core. So simfleet places them itself, in TIERS:
+//!
+//! - `auto` (the default): the P-cores' first threads, then the E-cores, then
+//!   the P-cores' second threads — the order a core adds the most to the
+//!   last: an E-core is worth more than a P-core's second thread;
+//! - `p`: the P-cores' first threads, their second threads, then the E-cores;
+//! - `e`: the E-cores, then the P-cores' first threads, then their second;
+//! - `windows`: nothing — the scheduler decides, as before.
+//!
+//! Lane k takes the tier its rank falls in, as a CPU SET
+//! (`SetThreadSelectedCpuSets`; on Linux the affinity, `sched_setaffinity`) of
+//! exactly that tier's logical processors, so a
+//! tier never holds more lanes than it has processors and Windows moves a lane
+//! only within its tier. `auto` and `p` also turn off the power throttling
+//! Windows gives a background process (EcoQoS), `e` turns it on.
 //!
 //! THE KIND OF EACH LOGICAL PROCESSOR is its efficiency class
-//! (`GetSystemCpuSetInformation`; the highest class is the P-cores). It is
-//! used only on an Intel CPU ("GenuineIntel") that reports two classes or
-//! more; on anything else, AMD included, nothing is changed.
+//! (`GetSystemCpuSetInformation`; the highest class is the P-cores — on Linux,
+//! whether /sys/devices/cpu_core lists it), and its physical core is its core
+//! index (its first thread sibling). Used only on an Intel CPU ("GenuineIntel")
+//! that reports two classes or more; on anything else, AMD included, nothing
+//! is changed.
 //!
-//! Where each lane ACTUALLY ran is recorded after every job, so the console
-//! shows whether Windows kept to it.
+//! ON EVERY MACHINE each lane records the processor its last job ran on and
+//! the CPU time it was actually given against its jobs' wall time, so the
+//! console shows what the lanes really get — lanes crowded onto a few
+//! processors, or starved by other programs, show as less than one core each.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -27,6 +41,7 @@ pub enum Prefer {
     Auto,
     P,
     E,
+    Windows,
 }
 
 impl Prefer {
@@ -34,14 +49,24 @@ impl Prefer {
         match s.trim().to_ascii_lowercase().as_str() {
             "p" | "pcore" | "p-core" | "performance" => Prefer::P,
             "e" | "ecore" | "e-core" | "efficiency" => Prefer::E,
+            "windows" | "os" | "system" | "none" => Prefer::Windows,
             _ => Prefer::Auto,
+        }
+    }
+    pub fn key(self) -> &'static str {
+        match self {
+            Prefer::Auto => "auto",
+            Prefer::P => "p",
+            Prefer::E => "e",
+            Prefer::Windows => "windows",
         }
     }
     pub fn name(self) -> &'static str {
         match self {
-            Prefer::Auto => "交给 Windows",
+            Prefer::Auto => "自动分配",
             Prefer::P => "优先 P 核",
             Prefer::E => "优先 E 核",
+            Prefer::Windows => "交给系统调度",
         }
     }
 }
@@ -60,6 +85,9 @@ pub struct Topology {
     pub vendor: String,
     pub cpus: Vec<Cpu>,
 }
+
+/// A tier: its name and the CPU set ids in it.
+type Tier = (&'static str, Vec<u32>);
 
 impl Topology {
     pub fn read() -> Topology {
@@ -84,71 +112,138 @@ impl Topology {
     pub fn is_p(&self, c: &Cpu) -> bool {
         c.class == self.p_class()
     }
+    /// Logical processors of a kind.
     pub fn count(&self, p: bool) -> usize {
         self.cpus.iter().filter(|c| self.is_p(c) == p).count()
     }
-    fn ids(&self, p: bool) -> Vec<u32> {
-        self.cpus.iter().filter(|c| self.is_p(c) == p).map(|c| c.id).collect()
+    /// Physical cores of a kind.
+    pub fn cores(&self, p: bool) -> usize {
+        let mut seen: Vec<(u16, u8)> = self.cpus.iter().filter(|c| self.is_p(c) == p).map(|c| (c.group, c.core)).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        seen.len()
     }
-    /// The kind each lane is given: lanes up to the preferred kind's logical
-    /// processors take it, the rest the other.
-    pub fn lane_is_p(&self, prefer: Prefer, lane: usize) -> Option<bool> {
-        let first = match prefer {
-            Prefer::Auto => return None,
-            Prefer::P => true,
-            Prefer::E => false,
+    /// A kind's logical processors split into each core's first thread and the rest.
+    fn threads(&self, p: bool) -> (Vec<u32>, Vec<u32>) {
+        let mut mine: Vec<&Cpu> = self.cpus.iter().filter(|c| self.is_p(c) == p).collect();
+        mine.sort_by_key(|c| (c.group, c.core, c.index));
+        let (mut first, mut rest) = (Vec::new(), Vec::new());
+        let mut last = None;
+        for c in mine {
+            if last == Some((c.group, c.core)) {
+                rest.push(c.id);
+            } else {
+                first.push(c.id);
+                last = Some((c.group, c.core));
+            }
+        }
+        (first, rest)
+    }
+    /// The tiers lanes fill, in order; empty for `windows`.
+    pub fn tiers(&self, prefer: Prefer) -> Vec<Tier> {
+        let (p1, p2) = self.threads(true);
+        let (e1, e2) = self.threads(false);
+        let t: Vec<Tier> = match prefer {
+            Prefer::Windows => return Vec::new(),
+            Prefer::Auto => vec![("P", p1), ("E", e1), ("P超线程", p2), ("E", e2)],
+            Prefer::P => vec![("P", p1), ("P超线程", p2), ("E", e1), ("E", e2)],
+            Prefer::E => vec![("E", e1), ("E", e2), ("P", p1), ("P超线程", p2)],
         };
-        Some(if lane < self.count(first) { first } else { !first })
+        t.into_iter().filter(|(_, ids)| !ids.is_empty()).collect()
+    }
+    /// The tier lane `lane` is given: the one its rank falls in.
+    pub fn lane_tier(tiers: &[Tier], lane: usize) -> Option<&Tier> {
+        let total: usize = tiers.iter().map(|t| t.1.len()).sum();
+        if total == 0 {
+            return None;
+        }
+        let mut k = lane % total;
+        for t in tiers {
+            if k < t.1.len() {
+                return Some(t);
+            }
+            k -= t.1.len();
+        }
+        None
     }
 }
 
 struct Plan {
-    topo: Topology,
     prefer: Prefer,
-    p_ids: Vec<u32>,
-    e_ids: Vec<u32>,
+    tiers: Vec<Tier>,
     /// Logical processor number (group 0) → P.
-    kind: HashMap<u8, bool>,
+    kind: Vec<Option<bool>>,
     single_group: bool,
 }
 
 static PLAN: OnceLock<Plan> = OnceLock::new();
 
 const LANES: usize = 256;
-/// Each lane's processor at its last job, plus one (0: not yet).
+/// Each lane's processor at its last job, plus one (0: not yet)…
 static LAST: [AtomicU32; LANES] = [const { AtomicU32::new(0) }; LANES];
+/// …and, over all its jobs, the CPU time it was given and their wall time (µs).
+static CPU_US: [AtomicU64; LANES] = [const { AtomicU64::new(0) }; LANES];
+static WALL_US: [AtomicU64; LANES] = [const { AtomicU64::new(0) }; LANES];
 
 /// Decide for this run. A line for the log: what was done, or why nothing was.
 pub fn init(prefer: Prefer) -> Option<String> {
     let topo = Topology::read();
     if let Err(why) = topo.hybrid() {
-        return (prefer != Prefer::Auto).then(|| format!("大小核亲和性：{why}"));
+        return (!matches!(prefer, Prefer::Auto | Prefer::Windows)).then(|| format!("大小核亲和性：{why}"));
     }
-    let (np, ne) = (topo.count(true), topo.count(false));
-    let kind = topo.cpus.iter().filter(|c| c.group == 0).map(|c| (c.index, topo.is_p(c))).collect();
-    let single_group = topo.cpus.iter().all(|c| c.group == 0);
-    let plan = Plan { p_ids: topo.ids(true), e_ids: topo.ids(false), topo, prefer, kind, single_group };
+    let mut kind = vec![None; 256];
+    for c in topo.cpus.iter().filter(|c| c.group == 0) {
+        kind[c.index as usize] = Some(topo.is_p(c));
+    }
+    let tiers = topo.tiers(prefer);
     match prefer {
-        Prefer::P => power_throttling(false),
+        Prefer::Auto | Prefer::P => power_throttling(false),
         Prefer::E => power_throttling(true),
-        Prefer::Auto => {}
+        Prefer::Windows => {}
     }
-    let _ = PLAN.set(plan);
-    Some(format!("Intel 大小核：P 核 {np} 个线程，E 核 {ne} 个；计算线程{}", prefer.name()))
+    let order: Vec<String> = tiers.iter().map(|(n, ids)| format!("{n}×{}", ids.len())).collect();
+    let line = format!(
+        "Intel 大小核：P 核 {} 个（{} 线程），E 核 {} 个（{} 线程）；{}{}",
+        topo.cores(true),
+        topo.count(true),
+        topo.cores(false),
+        topo.count(false),
+        prefer.name(),
+        if order.is_empty() { String::new() } else { format!("，计算线程依次放在 {}", order.join(" → ")) }
+    );
+    let single_group = topo.cpus.iter().all(|c| c.group == 0);
+    let _ = PLAN.set(Plan { prefer, tiers, kind, single_group });
+    Some(line)
 }
 
-/// At a lane thread's start: its kind's CPU set.
+/// At a lane thread's start: its tier's CPU set.
 pub fn apply_lane(lane: usize) {
     let Some(p) = PLAN.get() else { return };
-    let Some(is_p) = p.topo.lane_is_p(p.prefer, lane) else { return };
-    set_thread_cpus(if is_p { &p.p_ids } else { &p.e_ids });
+    if let Some((_, ids)) = Topology::lane_tier(&p.tiers, lane) {
+        set_thread_cpus(ids);
+    }
 }
 
-/// After a lane's job: where it ran.
-pub fn note_cpu(lane: usize) {
-    if lane < LANES && PLAN.get().is_some() {
-        LAST[lane].store(current_cpu() + 1, Ordering::Relaxed);
+/// A lane's job measured: where it ran, the CPU time it was given, its wall time.
+pub fn note_job(lane: usize, cpu_us: u64, wall_us: u64) {
+    if lane < LANES {
+        LAST[lane].store(crate::sys::current_cpu() + 1, Ordering::Relaxed);
+        CPU_US[lane].fetch_add(cpu_us, Ordering::Relaxed);
+        WALL_US[lane].fetch_add(wall_us, Ordering::Relaxed);
     }
+}
+
+/// Over all lanes so far: CPU time given and wall time worked (µs).
+pub fn lane_totals() -> (u64, u64) {
+    (0..LANES).fold((0, 0), |a, l| (a.0 + CPU_US[l].load(Ordering::Relaxed), a.1 + WALL_US[l].load(Ordering::Relaxed)))
+}
+
+/// The distinct logical processors the first `n` lanes last ran on.
+pub fn processors_used(n: usize) -> usize {
+    let mut seen: Vec<u32> = (0..n.min(LANES)).map(|l| LAST[l].load(Ordering::Relaxed)).filter(|v| *v > 0).collect();
+    seen.sort_unstable();
+    seen.dedup();
+    seen.len()
 }
 
 /// Where each of the first `n` lanes last ran: 'P', 'E', or nothing known.
@@ -157,12 +252,12 @@ pub fn lane_kinds(n: usize) -> Vec<Option<char>> {
     (0..n.min(LANES))
         .map(|l| match LAST[l].load(Ordering::Relaxed) {
             0 => None,
-            v => p.kind.get(&((v - 1) as u8)).map(|&is_p| if is_p { 'P' } else { 'E' }),
+            v => p.kind.get((v - 1) as usize).copied().flatten().map(|is_p| if is_p { 'P' } else { 'E' }),
         })
         .collect()
 }
 
-/// The setting in effect, for the console: "优先 P 核", or nothing when not hybrid.
+/// The setting in effect, on an Intel hybrid.
 pub fn active() -> Option<Prefer> {
     PLAN.get().map(|p| p.prefer)
 }
@@ -215,7 +310,37 @@ fn cpu_sets() -> Vec<Cpu> {
     }
 }
 
-#[cfg(not(windows))]
+/// LINUX: the kernel lists a hybrid's kinds in /sys/devices/cpu_core/cpus (P)
+/// and /sys/devices/cpu_atom/cpus (E); a core is its threads' first sibling.
+/// The "id" is the logical processor itself, as sched_setaffinity takes it.
+#[cfg(target_os = "linux")]
+fn cpu_sets() -> Vec<Cpu> {
+    let read = |p: &str| std::fs::read_to_string(p).ok();
+    let list = |text: &str| -> Vec<u32> {
+        let mut out = Vec::new();
+        for part in text.trim().split(',').filter(|p| !p.is_empty()) {
+            let mut ends = part.split('-').filter_map(|x| x.trim().parse::<u32>().ok());
+            if let Some(a) = ends.next() {
+                out.extend(a..=ends.next().unwrap_or(a));
+            }
+        }
+        out
+    };
+    let p_cores = read("/sys/devices/cpu_core/cpus").map(|t| list(&t)).unwrap_or_default();
+    let Some(online) = read("/sys/devices/system/cpu/online").map(|t| list(&t)) else { return Vec::new() };
+    online
+        .into_iter()
+        .filter(|&n| n < 256)
+        .map(|n| {
+            let sib = read(&format!("/sys/devices/system/cpu/cpu{n}/topology/thread_siblings_list"))
+                .and_then(|t| list(&t).into_iter().min())
+                .unwrap_or(n);
+            Cpu { id: n, group: 0, index: n as u8, core: sib.min(255) as u8, class: u8::from(p_cores.contains(&n)) }
+        })
+        .collect()
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn cpu_sets() -> Vec<Cpu> {
     Vec::new()
 }
@@ -231,19 +356,22 @@ fn set_thread_cpus(ids: &[u32]) {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn set_thread_cpus(ids: &[u32]) {
+    // SAFETY: a zeroed cpu_set_t, filled with the ids, for this thread (0).
+    unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        for &i in ids {
+            libc::CPU_SET(i as usize, &mut set);
+        }
+        if !ids.is_empty() {
+            libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set);
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn set_thread_cpus(_ids: &[u32]) {}
-
-#[cfg(windows)]
-fn current_cpu() -> u32 {
-    // SAFETY: no arguments.
-    unsafe { windows_sys::Win32::System::Threading::GetCurrentProcessorNumber() }
-}
-
-#[cfg(not(windows))]
-fn current_cpu() -> u32 {
-    0
-}
 
 /// EcoQoS for the whole process: on (`slow`) or off.
 #[cfg(windows)]
@@ -271,10 +399,14 @@ fn power_throttling(slow: bool) {
 #[cfg(not(windows))]
 fn power_throttling(_slow: bool) {}
 
-/// `simfleet cpu`: what was detected and what each lane would be given.
+/// `simfleet cpu`: what was detected and where each lane would go.
 pub fn report(prefer: Prefer, lanes: usize) -> String {
     let t = Topology::read();
-    let mut s = format!("CPU 厂商：{}\n逻辑处理器：{} 个\n", if t.vendor.is_empty() { "?" } else { &t.vendor }, t.cpus.len());
+    let mut s = format!(
+        "CPU 厂商：{}\n逻辑处理器：{} 个\n",
+        if t.vendor.is_empty() { "?" } else { &t.vendor },
+        if t.cpus.is_empty() { crate::sys::cores() } else { t.cpus.len() }
+    );
     let mut by_class: std::collections::BTreeMap<u8, Vec<String>> = Default::default();
     for c in &t.cpus {
         by_class.entry(c.class).or_default().push(format!("{}(核{})", c.index, c.core));
@@ -285,13 +417,22 @@ pub fn report(prefer: Prefer, lanes: usize) -> String {
     match t.hybrid() {
         Err(why) => s += &format!("{why}。core_type 设置不会生效。\n"),
         Ok(()) => {
-            s += &format!("判定：Intel 大小核，P 核（等级最高的）{} 个线程，E 核 {} 个。\n", t.count(true), t.count(false));
-            s += &format!("当前设置 core_type = {}：", prefer.name());
-            if prefer == Prefer::Auto {
-                s += "不绑定，Windows 自行调度（空闲优先级的后台进程通常会被放到 E 核）。\n";
+            s += &format!(
+                "判定：Intel 大小核，P 核 {} 个（{} 线程），E 核 {} 个（{} 线程）。\n",
+                t.cores(true),
+                t.count(true),
+                t.cores(false),
+                t.count(false)
+            );
+            s += &format!("当前设置 core_type = {}（{}）：", prefer.key(), prefer.name());
+            let tiers = t.tiers(prefer);
+            if tiers.is_empty() {
+                s += "不绑定，由系统自行调度（Windows 上空闲优先级的后台进程通常会被挤在 E 核上）。\n";
             } else {
-                let kinds: Vec<&str> = (0..lanes).map(|l| if t.lane_is_p(prefer, l) == Some(true) { "P" } else { "E" }).collect();
-                s += &format!("前 {lanes} 个计算线程依次放在 {}\n", kinds.join(" "));
+                let order: Vec<String> = tiers.iter().map(|(n, ids)| format!("{n}×{}", ids.len())).collect();
+                s += &format!("计算线程依次放在 {}\n", order.join(" → "));
+                let kinds: Vec<&str> = (0..lanes).map(|l| Topology::lane_tier(&tiers, l).map_or("?", |t| t.0)).collect();
+                s += &format!("预算 {lanes} 核时：{}\n", kinds.join(" "));
             }
         }
     }
@@ -302,31 +443,65 @@ pub fn report(prefer: Prefer, lanes: usize) -> String {
 mod tests {
     use super::*;
 
-    fn topo(classes: &[u8]) -> Topology {
+    /// (class, core) per logical processor.
+    fn topo(cpus: &[(u8, u8)]) -> Topology {
         Topology {
             vendor: "GenuineIntel".into(),
-            cpus: classes.iter().enumerate().map(|(i, &class)| Cpu { id: 256 + i as u32, group: 0, index: i as u8, core: i as u8, class }).collect(),
+            cpus: cpus.iter().enumerate().map(|(i, &(class, core))| Cpu { id: 256 + i as u32, group: 0, index: i as u8, core, class }).collect(),
         }
     }
 
+    /// An i5-13400F: 6 P-cores with two threads each, 4 E-cores.
+    fn i5_13400f() -> Topology {
+        let mut v: Vec<(u8, u8)> = (0..12).map(|i| (1, i / 2)).collect();
+        v.extend((0..4).map(|i| (0, 6 + i)));
+        topo(&v)
+    }
+
+    fn kinds(t: &Topology, prefer: Prefer, n: usize) -> Vec<&'static str> {
+        let tiers = t.tiers(prefer);
+        (0..n).map(|l| Topology::lane_tier(&tiers, l).unwrap().0).collect()
+    }
+
     #[test]
-    fn lanes_fill_the_preferred_kind_first() {
-        // 4 P threads, 2 E.
-        let t = topo(&[1, 1, 1, 1, 0, 0]);
+    fn auto_fills_p_cores_then_e_cores_then_second_threads() {
+        let t = i5_13400f();
         assert!(t.hybrid().is_ok());
-        let p: Vec<_> = (0..6).map(|l| t.lane_is_p(Prefer::P, l).unwrap()).collect();
-        assert_eq!(p, [true, true, true, true, false, false]);
-        let e: Vec<_> = (0..6).map(|l| t.lane_is_p(Prefer::E, l).unwrap()).collect();
-        assert_eq!(e, [false, false, true, true, true, true]);
-        assert_eq!(t.lane_is_p(Prefer::Auto, 0), None);
+        assert_eq!((t.cores(true), t.count(true), t.cores(false), t.count(false)), (6, 12, 4, 4));
+        let k = kinds(&t, Prefer::Auto, 16);
+        assert_eq!(k[..6], ["P"; 6]);
+        assert_eq!(k[6..10], ["E"; 4]);
+        assert_eq!(k[10..], ["P超线程"; 6]);
+        // Each core's first thread is in the P tier, its second in the other.
+        let tiers = t.tiers(Prefer::Auto);
+        assert_eq!(tiers[0].1, vec![256, 258, 260, 262, 264, 266]);
+    }
+
+    #[test]
+    fn p_and_e_put_their_kind_first() {
+        let t = i5_13400f();
+        let p = kinds(&t, Prefer::P, 16);
+        assert_eq!(p[..12].iter().filter(|k| k.starts_with('P')).count(), 12);
+        assert_eq!(p[12..], ["E"; 4]);
+        let e = kinds(&t, Prefer::E, 6);
+        assert_eq!(e, ["E", "E", "E", "E", "P", "P"]);
+        assert!(t.tiers(Prefer::Windows).is_empty());
     }
 
     #[test]
     fn only_intel_hybrids_count() {
-        assert!(topo(&[1, 1, 1, 1]).hybrid().is_err());
-        let mut amd = topo(&[1, 1, 0, 0]);
+        assert!(topo(&[(1, 0), (1, 0), (1, 1), (1, 1)]).hybrid().is_err());
+        let mut amd = topo(&[(1, 0), (1, 1), (0, 2), (0, 3)]);
         amd.vendor = "AuthenticAMD".into();
         assert!(amd.hybrid().is_err());
+    }
+
+    #[test]
+    fn the_setting_reads_loosely() {
+        assert_eq!(Prefer::parse(" P "), Prefer::P);
+        assert_eq!(Prefer::parse("efficiency"), Prefer::E);
+        assert_eq!(Prefer::parse("Windows"), Prefer::Windows);
+        assert_eq!(Prefer::parse(""), Prefer::Auto);
     }
 
     /// Windows keeps a thread inside the CPU set it was given (any CPU):
@@ -344,7 +519,7 @@ mod tests {
             let mut seen = std::collections::BTreeSet::new();
             let t0 = std::time::Instant::now();
             while t0.elapsed() < std::time::Duration::from_millis(1500) {
-                seen.insert(current_cpu());
+                seen.insert(crate::sys::current_cpu());
             }
             seen
         })
@@ -352,12 +527,5 @@ mod tests {
         .unwrap();
         println!("allowed {allowed:?}, ran on {seen:?}");
         assert!(seen.iter().all(|c| allowed.contains(c)));
-    }
-
-    #[test]
-    fn the_setting_reads_loosely() {
-        assert_eq!(Prefer::parse(" P "), Prefer::P);
-        assert_eq!(Prefer::parse("efficiency"), Prefer::E);
-        assert_eq!(Prefer::parse(""), Prefer::Auto);
     }
 }

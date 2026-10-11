@@ -96,7 +96,24 @@ fn on_console_close() {
         SetConsoleCtrlHandler(Some(handler), 1);
     }
 }
-#[cfg(not(windows))]
+/// Unix: Ctrl+C outside the dashboard, `kill`, a closed terminal — each asks
+/// the loop to stop, which gives the leases back first.
+#[cfg(unix)]
+fn on_console_close() {
+    extern "C" fn handler(_sig: libc::c_int) {
+        // An atomic store: safe in a signal handler.
+        if let Some(c) = CTL.get() {
+            c.quit.store(true, Ordering::Relaxed);
+        }
+    }
+    // SAFETY: the handler only stores an atomic.
+    unsafe {
+        for s in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+            libc::signal(s, handler as *const () as libc::sighandler_t);
+        }
+    }
+}
+#[cfg(not(any(windows, unix)))]
 fn on_console_close() {}
 
 fn ask(q: &str) -> String {
@@ -182,16 +199,12 @@ fn wizard(paths: &Paths, old: Option<Config>, full: bool) -> Result<Option<Confi
     let topo = affinity::Topology::read();
     if topo.hybrid().is_ok() {
         let a = ask(&format!(
-            "\n检测到 Intel 大小核（P 核 {} 个线程，E 核 {} 个）。计算放在哪种核心上？\n  回车 = 交给 Windows（通常会放到 E 核），p = 优先 P 核（更快），e = 优先 E 核（更省电、更不打扰）：",
+            "\n检测到 Intel 大小核（P 核 {} 个、{} 线程，E 核 {} 个）。计算线程怎么放？\n  回车 = 自动（先 P 核，再 E 核，最后 P 核超线程，最快），p = 优先 P 核，e = 优先 E 核（更省电、更不打扰），windows = 交给系统：",
+            topo.cores(true),
             topo.count(true),
-            topo.count(false)
+            topo.cores(false)
         ));
-        c.core_type = match affinity::Prefer::parse(&a) {
-            affinity::Prefer::P => "p",
-            affinity::Prefer::E => "e",
-            affinity::Prefer::Auto => "auto",
-        }
-        .into();
+        c.core_type = affinity::Prefer::parse(&a).key().into();
     }
     println!("\n预算：离开时 {} 核，使用时 {}。可随时编辑 {}", c.idle_cores,
         if c.active_cores == 0 { "暂停".to_string() } else { format!("{} 核", c.active_cores) }, paths.config.display());
@@ -389,7 +402,7 @@ fn bench(paths: &Paths, cfg: &Config, lanes_arg: Option<usize>) -> Result<()> {
 /// Offline (the release workflow, which cannot reach wfsim.app): `--engine <id>
 /// --wasm <file> --boards <dir>` take the engine id, the reference wasm built
 /// from the same commit, and a WFSim checkout's `site/board/`.
-fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boards: Option<String>) -> Result<()> {
+fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boards: Option<String>, lanes: Option<usize>) -> Result<()> {
     let mut cfg = Config::fresh(sys::cores());
     cfg.native_engine = true;
     cfg.native_engine_url = String::new();
@@ -414,7 +427,7 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boa
     if code.native.is_none() {
         bail!("{} 下没有可用的原生引擎（或金丝雀不一致）", paths.engines.display());
     }
-    let lanes = sys::cores();
+    let lanes = lanes.unwrap_or_else(sys::cores);
     let (mut same, mut skipped) = (0, 0);
     for weapon in ["braton_prime", "dual_toxocyst", "torid", "burston_prime"] {
         let rows = match &boards {
@@ -609,7 +622,7 @@ fn main() {
                 let c = paths.load()?.unwrap_or_else(|| Config::fresh(sys::cores()));
                 print!("{}", affinity::report(affinity::Prefer::parse(&c.core_type), c.idle_cores.max(c.active_cores)));
             }
-            "check-native" => check_native(&paths, flag("--engine"), flag("--wasm"), flag("--boards"))?,
+            "check-native" => check_native(&paths, flag("--engine"), flag("--wasm"), flag("--boards"), flag("--lanes").and_then(|x| x.parse().ok()))?,
             "bench" => {
                 let c = paths.load()?.unwrap_or_else(|| Config::fresh(1));
                 bench(&paths, &c, flag("--lanes").and_then(|x| x.parse().ok()))?;

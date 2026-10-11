@@ -350,10 +350,11 @@ impl Pool {
                             }
                             Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         };
-                        let t = Instant::now();
+                        let (t, cpu) = (Instant::now(), crate::sys::thread_cpu_us());
                         let out = exec.run(job.backend, &job.call);
                         let ms = t.elapsed().as_secs_f64() * 1000.0;
-                        crate::affinity::note_cpu(lane);
+                        // WHAT THE LANE WAS GIVEN: CPU time against wall time.
+                        crate::affinity::note_job(lane, crate::sys::thread_cpu_us().saturating_sub(cpu), (ms * 1000.0) as u64);
                         if done.send(Done { tag: job.tag, lane, ms, out }).is_err() {
                             break;
                         }

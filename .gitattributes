@@ -1,0 +1,2 @@
+# Patches apply to WFSim's LF sources byte for byte: never converted.
+*.patch -text

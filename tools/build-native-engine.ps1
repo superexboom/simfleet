@@ -1,6 +1,7 @@
 # Build the native engine for the engine wfsim.app serves right now.
 #
-#   powershell -ExecutionPolicy Bypass -File tools\build-native-engine.ps1 [-Strip]
+#   powershell -ExecutionPolicy Bypass -File tools\build-native-engine.ps1 [-Strip]   # Windows
+#   pwsh tools/build-native-engine.ps1 [-Strip]                                        # Linux
 #
 # You normally do not need this: simfleet downloads the published build of the
 # served engine on its own (the native-engine workflow). This is for building
@@ -9,17 +10,20 @@
 # Needs git and a Rust toolchain (https://rustup.rs); -Strip needs Python. Clones
 # WFSim into .wfsim-src (or updates it), finds the newest commit whose engine id
 # equals the served one, optionally blanks Digital Extremes' card text
-# (tools/strip_card_text.py, required before a build is published), builds
-# native-engine/ against it, and writes engines\<engine id>.dll next to
-# simfleet.exe (with -Cpu x86-64-v3: engines\<engine id>-v3.dll, the AVX2
-# build simfleet prefers on CPUs that have it). simfleet checks it against the
-# wasm before it uses it;
+# (tools/strip_card_text.py, required before a build is published), applies
+# native-engine/patches/*.patch (speed only, the same bits; -NoPatch skips them,
+# and a patch that no longer applies is skipped with a warning), builds
+# native-engine/ against it, and writes engines/<engine id>.dll (Linux:
+# engines/lib<engine id>.so) next to simfleet (with -Cpu x86-64-v3:
+# <engine id>-v3, the AVX2 build simfleet prefers on CPUs that have it).
+# simfleet checks it against the wasm before it uses it;
 # `simfleet check-native` checks it on 32 real board rows.
 param(
     [string]$Server = "https://wfsim.app",
     [int]$Depth = 60,
     [string]$Out = "",
     [switch]$Strip,
+    [switch]$NoPatch,
     # A WFSim commit already known to carry the engine (the workflow's check).
     [string]$Commit = "",
     # The engine id to build, instead of asking wfsim.app (the workflow cannot).
@@ -28,9 +32,12 @@ param(
     [string]$Cpu = ""
 )
 $ErrorActionPreference = "Stop"
+# Windows PowerShell 5.1 has no $IsWindows, and runs only on Windows.
+$win = ($null -eq $IsWindows) -or $IsWindows
 $root = Split-Path -Parent $PSScriptRoot
 $src = Join-Path $root ".wfsim-src"
-$exe = Join-Path $root "target\release\simfleet.exe"
+$exe = Join-Path (Join-Path (Join-Path $root "target") "release") $(if ($win) { "simfleet.exe" } else { "simfleet" })
+$python = if ($win) { "python" } else { "python3" }
 if (-not (Test-Path $exe)) { cargo build --release --manifest-path (Join-Path $root "Cargo.toml") }
 if (-not $Out) { $Out = Join-Path (Split-Path -Parent $exe) "engines" }
 
@@ -63,21 +70,46 @@ if (-not $found) {
 }
 Write-Host "commit $found has engine $want"
 if ($Strip) {
-    python (Join-Path $root "tools\strip_card_text.py") $src
+    & $python (Join-Path (Join-Path $root "tools") "strip_card_text.py") $src
     if ($LASTEXITCODE -ne 0) { exit 1 }
 }
+# THE PATCHES, each applied whole or not at all; the engine id stays WFSim's,
+# since the answers are the same bits (check-native holds them to that).
+$applied = @()
+if (-not $NoPatch) {
+    foreach ($p in Get-ChildItem (Join-Path (Join-Path $root "native-engine") "patches") -Filter *.patch -ErrorAction SilentlyContinue | Sort-Object Name) {
+        # A refusal is git writing to stderr, which Windows PowerShell would stop on.
+        $ErrorActionPreference = "Continue"
+        git -C $src apply --check $p.FullName 2>&1 | Out-Null
+        $ok = $LASTEXITCODE -eq 0
+        $ErrorActionPreference = "Stop"
+        if ($ok) {
+            git -C $src apply $p.FullName
+            $applied += $p.Name
+            Write-Host "patch applied: $($p.Name)"
+        } else {
+            Write-Warning "patch $($p.Name) no longer applies to $found; building without it"
+        }
+    }
+}
 $env:SFE_ENGINE_ID = $want
-$env:CARGO_TARGET_DIR = Join-Path $root "target\native-engine"
+$env:CARGO_TARGET_DIR = Join-Path (Join-Path $root "target") "native-engine"
 $suffix = ""
 if ($Cpu) {
     $suffix = if ($Cpu -match '^x86-64-(v\d)$') { "-" + $Matches[1] } else { "-$Cpu" }
     $env:RUSTFLAGS = "-C target-cpu=$Cpu"
     $env:CARGO_TARGET_DIR += "-$Cpu"
 }
-Copy-Item (Join-Path $src "Cargo.lock") (Join-Path $root "native-engine\Cargo.lock") -Force
-cargo build --release --manifest-path (Join-Path $root "native-engine\Cargo.toml")
-if ($LASTEXITCODE -ne 0) { exit 1 }
+$ne = Join-Path $root "native-engine"
+Copy-Item (Join-Path $src "Cargo.lock") (Join-Path $ne "Cargo.lock") -Force
+cargo build --release --manifest-path (Join-Path $ne "Cargo.toml")
+$built = $LASTEXITCODE
+# The checkout goes back as it was, patched or not.
+if ($applied.Count -gt 0) { git -C $src checkout -q -- webapi engine }
+if ($built -ne 0) { exit 1 }
 New-Item -ItemType Directory -Force $Out | Out-Null
-Copy-Item (Join-Path $env:CARGO_TARGET_DIR "release\simfleet_native_engine.dll") (Join-Path $Out "$want$suffix.dll") -Force
+$lib, $name = if ($win) { "simfleet_native_engine.dll", "$want$suffix.dll" } else { "libsimfleet_native_engine.so", "lib$want$suffix.so" }
+Copy-Item (Join-Path (Join-Path $env:CARGO_TARGET_DIR "release") $lib) (Join-Path $Out $name) -Force
 "$found" | Set-Content -Encoding ascii (Join-Path $Out "$want.commit")
-Write-Host "done: $Out\$want$suffix.dll"
+($applied -join "`n") | Set-Content -Encoding ascii (Join-Path $Out "$want$suffix.patches")
+Write-Host "done: $(Join-Path $Out $name)$(if ($applied.Count) { " (patched: $($applied -join ', '))" })"

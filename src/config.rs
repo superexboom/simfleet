@@ -36,8 +36,9 @@ pub struct Config {
     pub pause_on_battery: bool,
     /// "idle" (never slows anything), "below_normal" or "normal".
     pub priority: String,
-    /// Intel hybrid CPUs: "auto" (Windows decides), "p" (P-cores first) or
-    /// "e" (E-cores first). Ignored on any other CPU, AMD included (affinity.rs).
+    /// Intel hybrid CPUs: "auto" (P-cores, then E-cores, then the P-cores'
+    /// second threads), "p" (P-cores first), "e" (E-cores first) or "windows"
+    /// (the scheduler decides). Ignored on any other CPU, AMD included (affinity.rs).
     #[serde(default = "default_core_type")]
     pub core_type: String,
     /// Use a native engine build from `engines/` for board orders when one
@@ -153,7 +154,7 @@ impl Paths {
         let body = toml::to_string_pretty(c)?;
         let text = format!(
             "# simfleet — WFSim 志愿计算客户端的配置。可以直接编辑；运行中按键调整的核心数会在退出时写回。\n\
-             # core_type（只对 Intel 大小核有效）：auto 交给 Windows，p 优先性能核，e 优先能效核。\n\
+             # core_type（只对 Intel 大小核有效）：auto 先 P 核、再 E 核、最后 P 核超线程；p 优先性能核；e 优先能效核；windows 交给系统。\n\
              # verifier 是本机的计算者 id，account.session 是登录凭据：都请勿发给别人。\n\n{body}"
         );
         let tmp = self.config.with_extension("toml.tmp");

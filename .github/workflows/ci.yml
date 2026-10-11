@@ -1,14 +1,24 @@
 name: ci
 on:
   push:
-    branches: [main]
+    branches: [main, "ci/**"]
   pull_request:
 jobs:
   build:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --release --locked
       - run: cargo build --release --locked
+      - name: Smoke
+        shell: bash
+        run: |
+          bin=target/release/simfleet; [ -f "$bin.exe" ] && bin="$bin.exe"
+          "$bin" version
+          "$bin" cpu

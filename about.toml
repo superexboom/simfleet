@@ -1,8 +1,8 @@
-# cargo-about: the licences of what ships inside simfleet.exe (tools/package.ps1).
+# cargo-about: the licences of what ships inside simfleet (tools/package.ps1, the Linux tarball).
 accepted = [
     "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "MIT", "ISC", "Zlib", "BSD-3-Clause",
     "0BSD", "Unlicense", "Unicode-3.0", "CDLA-Permissive-2.0", "AGPL-3.0", "AGPL-3.0-or-later",
 ]
-targets = ["x86_64-pc-windows-msvc"]
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
 ignore-build-dependencies = true
 ignore-dev-dependencies = true

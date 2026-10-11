@@ -1,0 +1,99 @@
+diff --git a/webapi/src/board_rows.rs b/webapi/src/board_rows.rs
+index 3c23140a3..ae1af7cb7 100644
+--- a/webapi/src/board_rows.rs
++++ b/webapi/src/board_rows.rs
+@@ -12,7 +12,7 @@ use wfsim_engine::board::builds::ValidBuild;
+ 
+ use crate::kitgun::board_assembly_of;
+ use crate::request::get_str;
+-use crate::simulate::{riven_request, simulate_merged_json, simulate_request, simulate_shard_json};
++use crate::simulate::{riven_request, simulate_request, simulate_shard_json};
+ 
+ fn ids(rec: &Value, key: &str) -> Vec<String> {
+     rec.get(key)
+@@ -233,8 +233,8 @@ pub fn fold_runs(
+ 
+ /// THE REPORT A FOLDED ACCUMULATOR MAKES — the scorer's `run_budgeted` ending.
+ pub fn measured(req: &Value, acc: &wfsim_engine::fight::Shard) -> Value {
+-    let shard = serde_json::to_value(acc).unwrap_or(Value::Null);
+-    simulate_merged_json(req, std::slice::from_ref(&shard))
++    // The accumulator as it is, not through JSON and back (simfleet).
++    crate::simulate::simulate_merged_shard_json(req, acc.clone())
+ }
+ 
+ /// THE ROW'S NUMBER IN THE RULER'S OWN UNITS. `score` off the wire is kill
+@@ -284,14 +284,12 @@ pub fn board_runs_json(v: &Value) -> Value {
+     let req = v.get("request").cloned().unwrap_or(Value::Null);
+     let from = v.get("from").and_then(Value::as_u64).unwrap_or(0) as u32;
+     let count = v.get("count").and_then(Value::as_u64).unwrap_or(0) as u32;
+-    let mut shards = Vec::with_capacity(count as usize);
+-    for k in from..from.saturating_add(count) {
+-        let piece = simulate_shard_json(&req, k, 1, &mut |_, _| {});
+-        if serde_json::from_value::<wfsim_engine::fight::Shard>(piece.clone()).is_err() {
+-            return piece;
+-        }
+-        shards.push(piece);
+-    }
++    // ONE SETUP FOR THE CALL, still one shard a run (simfleet).
++    let prepared = match crate::simulate::prepare(&req) {
++        Ok(p) => p,
++        Err(e) => return e,
++    };
++    let shards: Vec<Value> = (from..from.saturating_add(count)).map(|k| prepared.shard_json(k)).collect();
+     json!({ "ok": true, "shards": shards })
+ }
+ 
+diff --git a/webapi/src/simulate.rs b/webapi/src/simulate.rs
+index af5314bee..0e0c8d3c0 100644
+--- a/webapi/src/simulate.rs
++++ b/webapi/src/simulate.rs
+@@ -161,6 +161,37 @@ pub fn simulate_merged_json(v: &Value, shards: &[Value]) -> Value {
+     simulate_from(v, Work::Merged(Box::new(merged)), &mut |_, _| {})
+ }
+ 
++/// …AND THE MERGE FROM AN ACCUMULATOR ALREADY IN MEMORY, so a caller holding
++/// one does not write it out as JSON only to read it back (simfleet).
++pub fn simulate_merged_shard_json(v: &Value, merged: wfsim_engine::fight::Shard) -> Value {
++    simulate_from(v, Work::Merged(Box::new(merged)), &mut |_, _| {})
++}
++
++/// A FIGHT PREPARED ONCE FOR MANY OF ITS RUNS (simfleet). `simulate_shard_json`
++/// parses the fight, resolves the build and builds `FightParams` on every call,
++/// and a board row is fought one run a shard, so `/api/board/runs` paid that
++/// setup once a run. The same `params` and `seed` reach the same
++/// `fight::shard`, so every shard is the bits it was.
++pub struct Prepared {
++    params: wfsim_engine::fight::FightParams,
++    seed: u64,
++    want_series: bool,
++}
++
++impl Prepared {
++    /// Run `k`'s shard, as `simulate_shard_json(v, k, 1, ..)` returns it.
++    pub fn shard_json(&self, k: u32) -> Value {
++        let s = wfsim_engine::fight::shard(&self.params, k, 1, self.seed, self.want_series, &mut |_| {});
++        serde_json::to_value(&s).unwrap_or_else(|e| err_json(format!("shard: {e}")))
++    }
++}
++
++/// `ready` for a caller that will run many shards of one request: no report.
++pub fn prepare(v: &Value) -> Result<Prepared, Value> {
++    let Ready { fight, params, .. } = ready(v, false)?;
++    Ok(Prepared { params, seed: fight.seed, want_series: get_bool(v, "run_series", false) })
++}
++
+ /// WHAT THIS CALL IS DOING — the three ways a simulation is run, sharing one
+ /// path so a shard and a whole run cannot build different params.
+ enum Work {
+@@ -470,7 +501,10 @@ pub(crate) fn ready(v: &Value, report: bool) -> Result<Ready, Value> {
+ }
+ 
+ fn simulate_from(v: &Value, work: Work, on_run: &mut impl FnMut(u32, u32)) -> Value {
+-    let Ready { fight, panel: report_panel, params, seat_weapons, forma } = match ready(v, true) {
++    // A SHARD IS NOT A REPORT: the shard path returns before it reads `forma`,
++    // the build's cost, so it is not worked out for one (simfleet).
++    let report = !matches!(work, Work::Shard(..));
++    let Ready { fight, panel: report_panel, params, seat_weapons, forma } = match ready(v, report) {
+         Ok(r) => r,
+         Err(e) => return e,
+     };

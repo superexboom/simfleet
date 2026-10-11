@@ -3,19 +3,22 @@
 # wfsim.app answers GitHub's runners with a bot challenge, so nothing here asks
 # it anything. Every 30 minutes a small Linux job computes the engine id of
 # WFSim's main (tools/engine_id.py — the id the site serves is that of the
-# source it was built from). For an id with no release `engine-<id>` yet, a
-# Windows job at that commit, with WFSim's own pinned toolchain:
+# source it was built from) and looks at what release `engine-<id>` holds. For
+# each platform with a file missing, a job at that commit, with WFSim's own
+# pinned toolchain:
 #
 #   1. builds the wasm the way WFSim builds it (the reference),
-#   2. blanks Digital Extremes' card text (tools/strip_card_text.py, NOTICE.md)
-#      and builds native-engine/ twice: <id>.dll for any x86-64, and
-#      <id>-v3.dll for x86-64-v3 (AVX2; about 10% faster, the same bits),
+#   2. blanks Digital Extremes' card text (tools/strip_card_text.py, NOTICE.md),
+#      applies native-engine/patches (speed only, the same bits) and builds
+#      native-engine/ twice: for any x86-64, and for x86-64-v3 (AVX2; about
+#      10% faster, the same bits) — Windows <id>.dll / <id>-v3.dll, Linux
+#      lib<id>.so / lib<id>-v3.so,
 #   3. holds both to the reference wasm on 32 board rows of WFSim's committed
-#      board snapshot (`simfleet check-native`),
-#   4. publishes the release engine-<id>.
+#      board snapshot (`simfleet check-native`).
 #
-# A release from before the -v3 build gets it added, next to the published
-# baseline (which is checked again, not rebuilt).
+# Then the files that passed and were missing are published to engine-<id>;
+# nothing published is ever replaced. A platform whose build does not match
+# the wasm publishes nothing, and simfleet computes with the wasm there.
 #
 # simfleet only uses the id the site actually serves, and checks the build
 # against the site's own wasm on a canary row before every use.
@@ -35,7 +38,8 @@ jobs:
     outputs:
       engine: ${{ steps.c.outputs.engine }}
       commit: ${{ steps.c.outputs.commit }}
-      mode: ${{ steps.c.outputs.mode }}
+      windows: ${{ steps.c.outputs.windows }}
+      linux: ${{ steps.c.outputs.linux }}
     steps:
       - uses: actions/checkout@v5
       - id: c
@@ -47,30 +51,53 @@ jobs:
           commit=$(git -C wfsim rev-parse HEAD)
           engine=$(python3 tools/engine_id.py wfsim | head -1)
           echo "WFSim main $commit carries engine $engine"
-          if assets=$(gh release view "engine-$engine" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null); then
-            if grep -qx "$engine-v3.dll" <<< "$assets"; then echo "already published"; exit 0; fi
-            echo "published without the -v3 build; adding it"
-            echo "mode=v3" >> "$GITHUB_OUTPUT"
-          else
-            echo "mode=new" >> "$GITHUB_OUTPUT"
+          assets=$(gh release view "engine-$engine" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null || true)
+          missing() { for f in "$@"; do grep -qx "$f" <<< "$assets" || return 0; done; return 1; }
+          win=false; lin=false
+          missing "$engine.dll" "$engine-v3.dll" && win=true
+          missing "lib$engine.so" "lib$engine-v3.so" && lin=true
+          echo "windows needed: $win, linux needed: $lin"
+          echo "windows=$win" >> "$GITHUB_OUTPUT"
+          echo "linux=$lin" >> "$GITHUB_OUTPUT"
+          if [ "$win" = true ] || [ "$lin" = true ]; then
+            echo "engine=$engine" >> "$GITHUB_OUTPUT"
+            echo "commit=$commit" >> "$GITHUB_OUTPUT"
           fi
-          echo "engine=$engine" >> "$GITHUB_OUTPUT"
-          echo "commit=$commit" >> "$GITHUB_OUTPUT"
 
   build:
     needs: check
     if: needs.check.outputs.engine != ''
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows
+            runner: windows-latest
+            exe: target/release/simfleet.exe
+            lib: ""
+            ext: dll
+          - os: linux
+            # The oldest glibc the runners have, so the library loads on more systems.
+            runner: ubuntu-22.04
+            exe: target/release/simfleet
+            lib: lib
+            ext: so
+    runs-on: ${{ matrix.runner }}
     env:
       ENGINE: ${{ needs.check.outputs.engine }}
       COMMIT: ${{ needs.check.outputs.commit }}
-      MODE: ${{ needs.check.outputs.mode }}
+      GO: ${{ matrix.os == 'windows' && needs.check.outputs.windows || needs.check.outputs.linux }}
     steps:
       - uses: actions/checkout@v5
+        if: env.GO == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: env.GO == 'true'
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --locked
+        if: env.GO == 'true'
+      - if: env.GO == 'true'
+        run: cargo build --release --locked
       - name: WFSim at the commit, and its toolchain
+        if: env.GO == 'true'
         id: w
         shell: bash
         run: |
@@ -83,9 +110,11 @@ jobs:
           echo "WFSim pins rust $rust, wasm-bindgen $bindgen"
           rustup toolchain install "$rust" --profile minimal --target wasm32-unknown-unknown
       - uses: taiki-e/install-action@v2
+        if: env.GO == 'true'
         with:
           tool: wasm-bindgen@${{ steps.w.outputs.bindgen }}
       - name: The reference wasm, built as WFSim builds it
+        if: env.GO == 'true'
         shell: bash
         env:
           RUSTUP_TOOLCHAIN: ${{ steps.w.outputs.rust }}
@@ -94,76 +123,94 @@ jobs:
           cd .wfsim-src
           cargo build --release --locked -p wfsim-wasm --target wasm32-unknown-unknown
           wasm-bindgen "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/wfsim_wasm.wasm" --target no-modules --no-typescript --out-dir ../reference
-      - name: The native engine, card text blanked
-        if: env.MODE == 'new'
+      - name: The native engine, card text blanked, for any x86-64 and for x86-64-v3
+        if: env.GO == 'true'
         shell: pwsh
         env:
           RUSTUP_TOOLCHAIN: ${{ steps.w.outputs.rust }}
         run: |
-          powershell -ExecutionPolicy Bypass -File tools/build-native-engine.ps1 -Strip -Commit $env:COMMIT -Engine $env:ENGINE
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: The published baseline
-        if: env.MODE == 'v3'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p target/release/engines && cd target/release/engines
-          gh release download "engine-$ENGINE" -R "$GITHUB_REPOSITORY" -p "$ENGINE.dll" -p "$ENGINE.dll.sha256"
-          sha256sum -c "$ENGINE.dll.sha256"
-      - name: The x86-64-v3 (AVX2) build, card text blanked
-        shell: pwsh
-        env:
-          RUSTUP_TOOLCHAIN: ${{ steps.w.outputs.rust }}
-        run: |
-          powershell -ExecutionPolicy Bypass -File tools/build-native-engine.ps1 -Strip -Commit $env:COMMIT -Engine $env:ENGINE -Cpu x86-64-v3
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($cpu in "", "x86-64-v3") {
+            ./tools/build-native-engine.ps1 -Strip -Commit $env:COMMIT -Engine $env:ENGINE -Cpu $cpu
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Hold both to the reference wasm on WFSim's committed board
+        if: env.GO == 'true'
         shell: bash
         run: |
           for cpu in baseline v3; do
             echo "== $cpu"
-            SIMFLEET_CPU=$cpu target/release/simfleet.exe check-native --engine "$ENGINE" --wasm reference/wfsim_wasm_bg.wasm --boards .wfsim-src/site/board
+            SIMFLEET_CPU=$cpu ${{ matrix.exe }} check-native --engine "$ENGINE" --wasm reference/wfsim_wasm_bg.wasm --boards .wfsim-src/site/board
           done
-      - name: Publish
+      - name: The files
+        if: env.GO == 'true'
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUST: ${{ steps.w.outputs.rust }}
         run: |
-          cd target/release/engines
-          test -f "$ENGINE.dll" && test -f "$ENGINE-v3.dll"
-          for f in "$ENGINE.dll" "$ENGINE-v3.dll"; do
-            test -f "$f.sha256" || sha256sum "$f" | awk -v f="$f" '{print $1"  "f}' > "$f.sha256"
+          mkdir -p out
+          for v in "" -v3; do
+            f="${{ matrix.lib }}$ENGINE$v.${{ matrix.ext }}"
+            ( cd target/release/engines && sha256sum "$f" | awk -v f="$f" '{print $1"  "f}' > "$f.sha256" && cp "$f" "$f.sha256" ../../../out/ )
+            cat "target/release/engines/$ENGINE$v.patches" >> out/patches 2>/dev/null || true
           done
-          sum() { cut -d' ' -f1 "$1.sha256"; }
+      - uses: actions/upload-artifact@v4
+        if: env.GO == 'true'
+        with:
+          name: engine-${{ matrix.os }}
+          path: out/
+
+  publish:
+    needs: [check, build]
+    if: always() && needs.check.outputs.engine != ''
+    runs-on: ubuntu-latest
+    env:
+      ENGINE: ${{ needs.check.outputs.engine }}
+      COMMIT: ${{ needs.check.outputs.commit }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: in
+      - name: Publish what passed and is missing
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(in/engine-*/*.dll in/engine-*/*.so)
+          if [ ${#files[@]} -eq 0 ]; then echo "no platform passed"; exit 0; fi
+          have=$(gh release view "engine-$ENGINE" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null || true)
+          up=()
+          for f in "${files[@]}"; do
+            grep -qx "$(basename "$f")" <<< "$have" || up+=("$f" "$f.sha256")
+          done
+          if [ ${#up[@]} -eq 0 ]; then echo "published meanwhile"; exit 0; fi
+          patches=$(cat in/engine-*/patches 2>/dev/null | grep . | sort -u | sed 's/.*/`&`/' | paste -sd, - || true)
           run="[this run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
-          if [ "$MODE" = v3 ]; then
+          tree="https://github.com/$GITHUB_REPOSITORY/tree/$GITHUB_SHA"
+          sums=""
+          for ((i = 0; i < ${#up[@]}; i += 2)); do
+            sums+="- \`$(basename "${up[i]}")\`: \`$(cut -d' ' -f1 "${up[i+1]}")\`"$'\n'
+          done
+          via="native-engine/ at simfleet [\`$GITHUB_SHA\`]($tree)"
+          if [ -n "$patches" ]; then
+            via+=", with $patches from [native-engine/patches]($tree/native-engine/patches) (one setup for a call's runs and no report for a shard: speed only, the same bits)"
+          fi
+          if [ -n "$have" ]; then
             gh release view "engine-$ENGINE" -R "$GITHUB_REPOSITORY" --json body -q .body > notes.md
-            cat >> notes.md <<NOTES
-
-          **Added later: \`$ENGINE-v3.dll\`**, the same engine built for x86-64-v3 (AVX2, FMA, BMI2; about 10% faster on board rows). simfleet uses it on CPUs that have those instructions. Built by $run at simfleet [\`$GITHUB_SHA\`](https://github.com/$GITHUB_REPOSITORY/tree/$GITHUB_SHA), Rust $RUST, card text blanked the same way; it and the published baseline both matched the wasm built from WFSim \`$COMMIT\` bit for bit on 32 board rows.
-
-          SHA-256 (v3): \`$(sum "$ENGINE-v3.dll")\`
-          NOTES
-            sed -i 's/^          //' notes.md
-            gh release upload "engine-$ENGINE" "$ENGINE-v3.dll" "$ENGINE-v3.dll.sha256" -R "$GITHUB_REPOSITORY"
+            printf '\n**Added later**, built by %s from %s, card text blanked and checked the same way:\n\n%s' "$run" "$via" "$sums" >> notes.md
+            gh release upload "engine-$ENGINE" "${up[@]}" -R "$GITHUB_REPOSITORY"
             gh release edit "engine-$ENGINE" -R "$GITHUB_REPOSITORY" --notes-file notes.md
             exit 0
           fi
-          if gh release view "engine-$ENGINE" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then echo "published meanwhile"; exit 0; fi
-          cat > notes.md <<NOTES
-          Native build of WFSim engine **$ENGINE** for simfleet (Windows x64). simfleet downloads it on its own when wfsim.app serves this engine; there is nothing to install.
-
-          - **Two builds.** \`$ENGINE-v3.dll\` is for x86-64-v3 CPUs (AVX2, FMA, BMI2; about 10% faster on board rows) and \`$ENGINE.dll\` runs on any x86-64. simfleet picks the one the CPU runs; both give the same bits.
-          - **Source.** WFSim commit [\`$COMMIT\`](https://github.com/magenie33/wfsim/tree/$COMMIT) (AGPL-3.0-or-later, by magenie33 and WFSim contributors), through [native-engine/](https://github.com/$GITHUB_REPOSITORY/tree/$GITHUB_SHA/native-engine) at simfleet [\`$GITHUB_SHA\`](https://github.com/$GITHUB_REPOSITORY/tree/$GITHUB_SHA), Rust $RUST. Built by $run.
-          - **No card text.** Digital Extremes' card text was blanked from WFSim's \`data/\` before the build ([tools/strip_card_text.py](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/tools/strip_card_text.py)), since WFSim grants nothing for it ([LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)). The engine only displays that text; no score depends on it.
-          - **Checked.** Both matched the wasm built from the same commit bit for bit on 32 rows of WFSim's committed board (\`simfleet check-native\`), and simfleet checks the one it uses against wfsim.app's own wasm on a canary row before every use.
-          - Unofficial; not made or endorsed by WFSim or Digital Extremes. *Warframe* is a trademark of Digital Extremes Ltd.
-
-          SHA-256: \`$(sum "$ENGINE.dll")\`<br>
-          SHA-256 (v3): \`$(sum "$ENGINE-v3.dll")\`
-          NOTES
-          sed -i 's/^          //' notes.md
-          gh release create "engine-$ENGINE" "$ENGINE.dll" "$ENGINE.dll.sha256" "$ENGINE-v3.dll" "$ENGINE-v3.dll.sha256" -R "$GITHUB_REPOSITORY" \
+          {
+            echo "Native build of WFSim engine **$ENGINE** for simfleet. simfleet downloads it on its own when wfsim.app serves this engine; there is nothing to install."
+            echo
+            echo "- **Builds.** Windows \`$ENGINE.dll\` and Linux \`lib$ENGINE.so\` run on any x86-64, the \`-v3\` ones on x86-64-v3 CPUs (AVX2, FMA, BMI2; about 10% faster on board rows). simfleet picks the one the CPU runs; all give the same bits. A platform missing below did not match the wasm, and computes with it."
+            echo "- **Source.** WFSim commit [\`$COMMIT\`](https://github.com/magenie33/wfsim/tree/$COMMIT) (AGPL-3.0-or-later, by magenie33 and WFSim contributors), through $via. Built by $run."
+            echo "- **No card text.** Digital Extremes' card text was blanked from WFSim's \`data/\` before the build ([tools/strip_card_text.py](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/tools/strip_card_text.py)), since WFSim grants nothing for it ([LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)). The engine only displays that text; no score depends on it."
+            echo "- **Checked.** Each matched the wasm built from the same commit bit for bit on 32 rows of WFSim's committed board (\`simfleet check-native\`), and simfleet checks the one it uses against wfsim.app's own wasm on a canary row before every use."
+            echo "- Unofficial; not made or endorsed by WFSim or Digital Extremes. *Warframe* is a trademark of Digital Extremes Ltd."
+            echo
+            echo "SHA-256:"
+            echo
+            printf '%s' "$sums"
+          } > notes.md
+          gh release create "engine-$ENGINE" "${up[@]}" -R "$GITHUB_REPOSITORY" \
             --title "native engine $ENGINE" --notes-file notes.md --latest=false --target "$GITHUB_SHA"

@@ -37,8 +37,12 @@ What simfleet takes from WFSim:
   `engine-<id>`, whose notes name that commit (the corresponding source). Before
   the build, **Digital Extremes' card text is blanked** from WFSim's `data/`
   (`tools/strip_card_text.py`): WFSim makes no grant for that text
-  (LICENSE-DATA.md §4), so no published build carries it. The engine only
-  displays card text; every published build matched the wasm built from the
+  (LICENSE-DATA.md §4), so no published build carries it. The patches in
+  `native-engine/patches/` are then applied to WFSim's `webapi/` (they change
+  how fast a board row's runs are set up, never what they compute) and named
+  in the release notes; the corresponding source is that commit, the card-text
+  script and those patches. The engine only displays card text; every
+  published build matched the wasm built from the
   same commit bit for bit on real board rows before release, and simfleet
   checks it against wfsim.app's own wasm before every use.
 

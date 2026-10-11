@@ -380,6 +380,11 @@ pub struct Fleet {
     control_busy: f64,
     control_cap: f64,
     meter: Meter,
+    /// The lanes' CPU and wall time when last read, and when it was read.
+    yield_seen: (Instant, u64, u64),
+    /// Since when the lanes have been given too little, and when that was last said.
+    starved_since: Option<Instant>,
+    starved_said: Option<Instant>,
     pub session_dropped: bool,
     pub offline: bool,
 }
@@ -418,6 +423,9 @@ impl Fleet {
             control_busy: 0.0,
             control_cap: 0.0,
             meter: Meter::new(),
+            yield_seen: (Instant::now(), 0, 0),
+            starved_since: None,
+            starved_said: None,
             session_dropped: false,
             offline: false,
         };
@@ -1214,7 +1222,56 @@ impl Fleet {
         });
     }
 
+    /// WHAT THE LANES ARE GIVEN, every few seconds: the CPU time their jobs got
+    /// against their wall time. Lanes that get far less than a core each for a
+    /// minute are said so, once in ten minutes.
+    fn lane_yield(&mut self) {
+        let (at, cpu0, wall0) = self.yield_seen;
+        if at.elapsed() < Duration::from_secs(5) {
+            return;
+        }
+        let (cpu, wall) = crate::affinity::lane_totals();
+        let real_us = at.elapsed().as_secs_f64() * 1e6;
+        self.yield_seen = (Instant::now(), cpu, wall);
+        let (dc, dw) = (cpu.saturating_sub(cpu0) as f64, wall.saturating_sub(wall0) as f64);
+        let lanes = self.lanes();
+        if dw < 1e6 {
+            self.ui.status(|s| {
+                s.lane_yield = None;
+                s.effective_cores = None;
+            });
+            return;
+        }
+        let share = (dc / dw).min(1.0);
+        let processors = crate::affinity::processors_used(lanes);
+        self.ui.status(|s| {
+            s.lane_yield = Some(share);
+            s.effective_cores = Some(dc / real_us);
+            s.processors = processors;
+        });
+        let now = Instant::now();
+        if share >= 0.6 || lanes < 2 {
+            self.starved_since = None;
+            return;
+        }
+        let since = *self.starved_since.get_or_insert(now);
+        if now.duration_since(since) < Duration::from_secs(60) || self.starved_said.is_some_and(|t| now.duration_since(t) < Duration::from_secs(600)) {
+            return;
+        }
+        self.starved_said = Some(now);
+        let why = if crate::affinity::active() == Some(crate::affinity::Prefer::Windows) {
+            "；Intel 大小核上 Windows 会把后台程序挤在 E 核，把 core_type 改成 auto 试试"
+        } else {
+            "，多半是被别的程序占用了（simfleet 只用别人不用的 CPU）"
+        };
+        self.ui.log(format!(
+            "{C_GO}[CPU]{C_END} {lanes} 条计算线程每条只拿到 {:.0}% 的算力（分布在 {processors} 个逻辑处理器上）{why}",
+            share * 100.0
+        ));
+    }
+
     fn measure(&mut self) {
+        self.lane_yield();
         let lanes = if self.held_why().is_some() { 0 } else { self.lanes() };
         let (window, total) = self.meter.read(self.pool.busy_ms, lanes, self.tasks.len());
         self.ui.status(|s| {

@@ -21,6 +21,8 @@ pub fn idle_ms() -> u64 {
         GetTickCount().wrapping_sub(li.dwTime) as u64
     }
 }
+/// No input to watch here (a server, or a Linux desktop): always away, so the
+/// budget is `idle_cores`.
 #[cfg(not(windows))]
 pub fn idle_ms() -> u64 {
     u64::MAX
@@ -38,9 +40,14 @@ pub fn on_battery() -> bool {
         s.ACLineStatus == 0 && s.BatteryFlag != 128
     }
 }
+/// Linux: a battery that says it is discharging.
 #[cfg(not(windows))]
 pub fn on_battery() -> bool {
-    false
+    let Ok(dir) = std::fs::read_dir("/sys/class/power_supply") else { return false };
+    dir.flatten().any(|e| {
+        let read = |f: &str| std::fs::read_to_string(e.path().join(f)).unwrap_or_default();
+        read("type").trim() == "Battery" && read("status").trim() == "Discharging"
+    })
 }
 
 /// The whole process steps aside for anything else the machine runs:
@@ -59,7 +66,26 @@ pub fn set_priority(kind: &str) {
         SetPriorityClass(GetCurrentProcess(), class);
     }
 }
-#[cfg(not(windows))]
+/// Unix: `idle` is SCHED_IDLE where there is one, and nice 19; `below_normal`
+/// nice 10. Set before any thread starts, so every thread inherits it.
+#[cfg(unix)]
+pub fn set_priority(kind: &str) {
+    let nice = match kind {
+        "normal" => return,
+        "below_normal" => 10,
+        _ => 19,
+    };
+    // SAFETY: plain calls on this process / thread.
+    unsafe {
+        #[cfg(target_os = "linux")]
+        if nice == 19 {
+            let p = libc::sched_param { sched_priority: 0 };
+            libc::sched_setscheduler(0, libc::SCHED_IDLE, &p);
+        }
+        libc::setpriority(libc::PRIO_PROCESS, 0, nice);
+    }
+}
+#[cfg(not(any(windows, unix)))]
 pub fn set_priority(_kind: &str) {}
 
 pub fn now_ms() -> u64 {
@@ -108,7 +134,19 @@ pub fn utc_offset_min() -> i64 {
         d
     }
 }
-#[cfg(not(windows))]
+#[cfg(unix)]
+pub fn utc_offset_min() -> i64 {
+    // SAFETY: localtime_r fills the struct it is given.
+    unsafe {
+        let now = libc::time(std::ptr::null_mut());
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&now, &mut tm).is_null() {
+            return 0;
+        }
+        tm.tm_gmtoff as i64 / 60
+    }
+}
+#[cfg(not(any(windows, unix)))]
 pub fn utc_offset_min() -> i64 {
     0
 }
@@ -136,7 +174,65 @@ pub fn random_hex(bytes: usize) -> String {
 }
 
 pub fn hostname() -> String {
-    std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_else(|_| "pc".into())
+    if let Ok(h) = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")) {
+        return h;
+    }
+    #[cfg(unix)]
+    {
+        let mut b = [0u8; 256];
+        // SAFETY: the buffer and its length.
+        if unsafe { libc::gethostname(b.as_mut_ptr() as *mut libc::c_char, b.len()) } == 0 {
+            let n = b.iter().position(|&c| c == 0).unwrap_or(b.len());
+            if n > 0 {
+                return String::from_utf8_lossy(&b[..n]).to_string();
+            }
+        }
+    }
+    "pc".into()
+}
+
+/// The logical processor this thread runs on now.
+#[cfg(windows)]
+pub fn current_cpu() -> u32 {
+    // SAFETY: no arguments.
+    unsafe { windows_sys::Win32::System::Threading::GetCurrentProcessorNumber() }
+}
+#[cfg(target_os = "linux")]
+pub fn current_cpu() -> u32 {
+    // SAFETY: no arguments.
+    unsafe { libc::sched_getcpu().max(0) as u32 }
+}
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn current_cpu() -> u32 {
+    0
+}
+
+/// CPU time this thread has been given, in µs.
+#[cfg(windows)]
+pub fn thread_cpu_us() -> u64 {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
+    let t = |f: FILETIME| ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64;
+    let z = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let (mut made, mut ended, mut k, mut u) = (z, z, z, z);
+    // SAFETY: plain out-parameters on this thread's pseudo-handle.
+    if unsafe { GetThreadTimes(GetCurrentThread(), &mut made, &mut ended, &mut k, &mut u) } == 0 {
+        return 0;
+    }
+    (t(k) + t(u)) / 10
+}
+#[cfg(unix)]
+pub fn thread_cpu_us() -> u64 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: the struct it fills.
+    if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) } != 0 {
+        return 0;
+    }
+    ts.tv_sec as u64 * 1_000_000 + ts.tv_nsec as u64 / 1000
+}
+#[cfg(not(any(windows, unix)))]
+pub fn thread_cpu_us() -> u64 {
+    0
 }
 
 /// CPU time so far, in 100 ns: all cores together (busy and idle), the idle
@@ -161,9 +257,19 @@ pub fn cpu_times() -> Option<(u64, u64, u64)> {
     Some((t(kernel) + t(user), t(idle), t(pk) + t(pu)))
 }
 
+/// Linux, from /proc, in clock ticks.
 #[cfg(not(windows))]
 pub fn cpu_times() -> Option<(u64, u64, u64)> {
-    None
+    let stat = std::fs::read_to_string("/proc/stat").ok()?;
+    let f: Vec<u64> = stat.lines().next()?.split_whitespace().skip(1).take(8).filter_map(|x| x.parse().ok()).collect();
+    if f.len() < 5 {
+        return None;
+    }
+    let me = std::fs::read_to_string("/proc/self/stat").ok()?;
+    // The command may hold spaces; the fields after its ')' are fixed.
+    let rest: Vec<&str> = me.rsplit_once(')')?.1.split_whitespace().collect();
+    let (utime, stime): (u64, u64) = (rest.get(11)?.parse().ok()?, rest.get(12)?.parse().ok()?);
+    Some((f.iter().sum(), f[3] + f[4], utime + stime))
 }
 
 /// Physical memory in use and in all, and this process's working set, in bytes.
@@ -186,9 +292,16 @@ pub fn memory() -> Option<(u64, u64, u64)> {
     }
 }
 
+/// Linux, from /proc.
 #[cfg(not(windows))]
 pub fn memory() -> Option<(u64, u64, u64)> {
-    None
+    let kb = |text: &str, key: &str| -> Option<u64> {
+        text.lines().find(|l| l.starts_with(key))?.split_whitespace().nth(1)?.parse::<u64>().ok().map(|k| k * 1024)
+    };
+    let info = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let (total, avail) = (kb(&info, "MemTotal:")?, kb(&info, "MemAvailable:")?);
+    let me = std::fs::read_to_string("/proc/self/status").ok().and_then(|s| kb(&s, "VmRSS:")).unwrap_or(0);
+    Some((total - avail.min(total), total, me))
 }
 
 #[cfg(test)]
