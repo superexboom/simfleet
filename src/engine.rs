@@ -194,17 +194,24 @@ impl WasmInst {
 }
 
 type ApiFn = unsafe extern "C" fn(*const u8, usize, *const u8, usize, *mut usize) -> *mut u8;
+type OptimizeFn = unsafe extern "C" fn(*const u8, usize, *mut usize) -> *mut u8;
 type FreeFn = unsafe extern "C" fn(*mut u8, usize);
 type IdFn = unsafe extern "C" fn() -> *const std::ffi::c_char;
 
-/// A native engine library (native-engine/): `sfe_api`, `sfe_free`, `sfe_engine_id`.
+/// A native engine library (native-engine/): `sfe_api`, `sfe_free`,
+/// `sfe_engine_id`, and in a build with the optimizer patch `sfe_optimize`.
 pub struct NativeLib {
     _lib: libloading::Library,
     api: ApiFn,
+    optimize: Option<OptimizeFn>,
     free: FreeFn,
     pub engine_id: String,
     /// The CPU level it was built for: "" or "-v3" (`work::native_variants`).
     pub variant: &'static str,
+    /// ITS OPTIMIZER held to the wasm (work.rs `riven_canary`, on its own
+    /// thread): 0 not asked, 1 checking, 2 the same answer, 3 not — and why.
+    riven: std::sync::atomic::AtomicU8,
+    riven_why: std::sync::Mutex<String>,
 }
 
 impl NativeLib {
@@ -216,18 +223,81 @@ impl NativeLib {
             let api: ApiFn = *lib.get::<ApiFn>(b"sfe_api\0")?;
             let free: FreeFn = *lib.get::<FreeFn>(b"sfe_free\0")?;
             let id: IdFn = *lib.get::<IdFn>(b"sfe_engine_id\0")?;
+            let optimize = lib.get::<OptimizeFn>(b"sfe_optimize\0").ok().map(|f| *f);
             let engine_id = std::ffi::CStr::from_ptr(id()).to_string_lossy().to_string();
-            Ok(NativeLib { _lib: lib, api, free, engine_id, variant: "" })
+            Ok(NativeLib {
+                _lib: lib,
+                api,
+                optimize,
+                free,
+                engine_id,
+                variant: "",
+                riven: Default::default(),
+                riven_why: Default::default(),
+            })
         }
     }
 
     pub fn api(&self, path: &str, body: &str) -> Result<String> {
+        // SAFETY: the library's own entry point over byte buffers.
         unsafe {
             let mut n = 0usize;
             let p = (self.api)(path.as_ptr(), path.len(), body.as_ptr(), body.len(), &mut n);
-            if p.is_null() {
-                bail!("native engine failed on {path}");
+            self.take(p, n, path)
+        }
+    }
+
+    /// The build has the optimizer (`sfe_optimize`)…
+    pub fn has_optimize(&self) -> bool {
+        self.optimize.is_some()
+    }
+    /// …and it was held to the wasm: riven gains may run here.
+    pub fn can_optimize(&self) -> bool {
+        self.optimize.is_some() && self.riven_state() == 2
+    }
+    pub fn riven_state(&self) -> u8 {
+        self.riven.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    pub fn riven_why(&self) -> String {
+        self.riven_why.lock().map(|w| w.clone()).unwrap_or_default()
+    }
+    pub fn riven_checking(&self) {
+        self.riven.store(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    pub fn riven_checked(&self, r: Result<()>) {
+        if let Err(e) = &r {
+            if let Ok(mut w) = self.riven_why.lock() {
+                *w = format!("{e:#}");
             }
+        }
+        self.riven.store(if r.is_ok() { 2 } else { 3 }, std::sync::atomic::Ordering::Relaxed);
+    }
+    /// The canary's verdict, waited for (a replay, a check).
+    pub fn wait_riven(&self) -> u8 {
+        while self.riven_state() == 1 {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        self.riven_state()
+    }
+
+    /// `optimize(body)`, as the wasm's, on the calling thread (a quick_fleet
+    /// lead's state is that thread's, so a lead always runs on one lane).
+    pub fn optimize(&self, body: &str) -> Result<String> {
+        let Some(f) = self.optimize else { bail!("this native engine has no optimizer") };
+        // SAFETY: as `api`.
+        unsafe {
+            let mut n = 0usize;
+            let p = f(body.as_ptr(), body.len(), &mut n);
+            self.take(p, n, "optimize")
+        }
+    }
+
+    unsafe fn take(&self, p: *mut u8, n: usize, what: &str) -> Result<String> {
+        if p.is_null() {
+            bail!("native engine failed on {what}");
+        }
+        // SAFETY: what the library returned, freed by the library.
+        unsafe {
             let out = String::from_utf8_lossy(std::slice::from_raw_parts(p, n)).to_string();
             (self.free)(p, n);
             Ok(out)
@@ -264,8 +334,12 @@ impl Exec {
         Exec { code, wasm: None }
     }
     pub fn run(&mut self, backend: Backend, call: &Call) -> Result<String> {
-        if let (Backend::Native, Call::Api(path, body), Some(n)) = (backend, call, &self.code.native) {
-            return n.api(path, body);
+        if let (Backend::Native, Some(n)) = (backend, &self.code.native) {
+            match call {
+                Call::Api(path, body) => return n.api(path, body),
+                Call::Optimize(body) if n.can_optimize() => return n.optimize(body),
+                Call::Optimize(_) => {}
+            }
         }
         if self.wasm.is_none() {
             self.wasm = Some(WasmInst::new(&self.code.wasm)?);

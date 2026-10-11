@@ -28,10 +28,17 @@
 //! - THE NETWORK IS NEVER WAITED ON: asks, renewals and answers run on their own
 //!   threads. A plain ask (not `ahead`) makes the server take back what that id
 //!   holds, so it is only sent by an id that holds nothing and is sending nothing.
-//! - HOW MANY GROUPS IS MEASURED, not guessed: every half minute, a machine below
-//!   85% utilisation whose groups all hold work, while the server still has work,
-//!   opens one more (up to a quarter of its cores); one saturated with a task
-//!   starved of lanes stops refilling its newest group.
+//! - A RIVEN GAIN'S JOBS GO FIRST. Its search is a chain — a lead step, then the
+//!   round's scoring — so a step kept waiting holds the whole search back, while
+//!   a board piece is a quarter second and anything else can wait for one.
+//! - HOW MANY GROUPS IS MEASURED, not guessed, and goes both ways: every 20
+//!   seconds, from the lanes' utilisation, the board work held (in seconds of
+//!   the whole budget, from what a row has cost) and whether the server still
+//!   hands every group work. One more opens when lanes idle with little held and
+//!   every group busy; the newest stops asking when the work held would keep
+//!   the budget busy for minutes, when the server has none to spare, or when the
+//!   budget shrank — at most the cap (`max_slots`, `[`/`]`), one step at a time,
+//!   and not straight back after closing.
 //!
 //! Every computation is the page's own, step for step (work.rs), so a result is
 //! bit for bit what a browser sends, however the lanes were shared.
@@ -55,10 +62,18 @@ use std::time::{Duration, Instant};
 /// A held task given back when nothing of it has run for this long (its lanes
 /// went to older tasks, or the budget shrank under it).
 const STARVED: Duration = Duration::from_secs(180);
-/// How often the group count is reconsidered, and the bands it moves on.
-const CONTROL_EVERY: Duration = Duration::from_secs(30);
+/// How often the group count is reconsidered, and what moves it: below this
+/// utilisation with less than `HELD_LOW` seconds of board work held, one more
+/// opens; more than `HELD_HIGH` held (or `HELD_FULL` on saturated lanes) closes
+/// the newest. A close keeps the count from opening again for `REOPEN_AFTER`.
+const CONTROL_EVERY: Duration = Duration::from_secs(20);
 const OPEN_BELOW: f64 = 0.85;
-const CLOSE_ABOVE: f64 = 0.97;
+const HELD_LOW: f64 = 10.0;
+const HELD_FULL: f64 = 60.0;
+const HELD_HIGH: f64 = 120.0;
+const REOPEN_AFTER: Duration = Duration::from_secs(60);
+/// A group the server told "nothing" this recently says the server has none to spare.
+const NOTHING_RECENT: Duration = Duration::from_secs(60);
 /// A group the server told "nothing for you" asks again after this.
 const NOTHING_WAIT: Duration = Duration::from_secs(10);
 /// A pack's answers so far go back this often (69-board-work.js `ANSWER_EVERY_MS`)…
@@ -66,8 +81,11 @@ const ANSWER_EVERY: Duration = Duration::from_secs(30);
 /// …the next pack is asked once what is left of this one would take under this
 /// at the group's pace (`REFILL_MS`)…
 const REFILL_MS: f64 = 15_000.0;
-/// …and a pack stops this long before its lease ends (`LEASE_MARGIN_MS`).
-const LEASE_MARGIN: Duration = Duration::from_secs(60);
+/// A ROW'S LEASE IS A HEARTBEAT (worker/tasks.js `renewRow`): renewed once it
+/// is this close to its end, before the row starts and while it runs, and
+/// tried again this much later when a renewal got no answer.
+const RENEW_BEFORE: Duration = Duration::from_secs(120);
+const RENEW_RETRY: Duration = Duration::from_secs(30);
 
 // ---- one task's computation, as jobs ------------------------------------------
 
@@ -159,6 +177,9 @@ impl BoardRun {
 /// A RIVEN GAIN (08-checkpoint-api.js `quickFleet`): lead steps on the leader's
 /// instance, each round's builds scored in slices — two a lane — on any lane.
 struct Riven {
+    /// Where its search runs, fixed when it starts: its lead's state lives
+    /// there (a wasm instance, or a native lane's thread).
+    backend: Backend,
     request: Value,
     leader: Option<usize>,
     step: usize,
@@ -177,8 +198,9 @@ struct Riven {
 }
 
 impl Riven {
-    fn new(request: Value) -> Riven {
+    fn new(request: Value, backend: Backend) -> Riven {
         Riven {
+            backend,
             request,
             leader: None,
             step: 0,
@@ -288,6 +310,9 @@ struct Active {
     /// A board row's pack, and its question there.
     pack: Option<u64>,
     question: String,
+    /// The row's lease end as last renewed, and when a failed renewal is tried again.
+    row_until: Instant,
+    renew_retry: Instant,
 }
 
 /// A PACK of board rows under one lease: its rows not started yet, and its
@@ -304,6 +329,7 @@ struct Pack {
     unsent: Vec<Value>,
     unsent_work: u64,
     sent_at: Instant,
+    /// When the lease handed out with the pack ends; each row renews its own.
     until: Instant,
 }
 
@@ -339,6 +365,8 @@ struct Group {
     /// by): rows finishing side by side count the time between them.
     pace_ms: f64,
     last_row: Option<Instant>,
+    /// When the server last had nothing for it.
+    nothing_at: Option<Instant>,
 }
 
 /// An answer on its way to the server.
@@ -379,6 +407,12 @@ pub struct Fleet {
     control_at: Instant,
     control_busy: f64,
     control_cap: f64,
+    /// When the group count last went down.
+    closed_at: Option<Instant>,
+    /// The riven canary's verdict as last seen (engine.rs `riven_state`).
+    riven_seen: u8,
+    /// A board row's cost in lane milliseconds, smoothed: what the work held is measured in.
+    row_cost_ms: f64,
     meter: Meter,
     /// The lanes' CPU and wall time when last read, and when it was read.
     yield_seen: (Instant, u64, u64),
@@ -422,6 +456,9 @@ impl Fleet {
             control_at: Instant::now(),
             control_busy: 0.0,
             control_cap: 0.0,
+            closed_at: None,
+            row_cost_ms: 0.0,
+            riven_seen: 0,
             meter: Meter::new(),
             yield_seen: (Instant::now(), 0, 0),
             starved_since: None,
@@ -461,6 +498,7 @@ impl Fleet {
                 work: 0,
                 pace_ms: 0.0,
                 last_row: None,
+                nothing_at: None,
             });
         }
     }
@@ -491,15 +529,27 @@ impl Fleet {
             self.ctl.active_cores.load(Ordering::Relaxed).max(1)
         }
     }
+    /// THE CAP on groups: `max_slots` (0: by the machine's size), and no more
+    /// than half the lanes the budget allows now — one group's pack starts
+    /// rows on every lane.
     fn max_groups(&self) -> usize {
-        if self.cfg.slots > 0 {
-            self.cfg.slots
-        } else {
-            self.ctl.max_cores.div_ceil(4).max(1)
-        }
+        let cap = match self.ctl.max_slots.load(Ordering::Relaxed) {
+            0 => crate::config::auto_max_slots(self.ctl.max_cores),
+            n => n,
+        };
+        (self.lanes() / 2).max(1).min(cap)
     }
     fn backend(&self) -> Backend {
         if self.pool.code().native.is_some() { Backend::Native } else { Backend::Wasm }
+    }
+    /// A RIVEN GAIN natively when the build has the optimizer and gave the
+    /// wasm's answer on the riven canary (work.rs), unless `native_riven` is off.
+    fn riven_backend(&self) -> Backend {
+        if self.cfg.native_riven && self.pool.code().native.as_ref().is_some_and(|n| n.can_optimize()) {
+            Backend::Native
+        } else {
+            Backend::Wasm
+        }
     }
 
     fn ask_body(&self, gi: usize, ahead: bool) -> Value {
@@ -720,7 +770,7 @@ impl Fleet {
                 return;
             }
             let lease_ms = pack["lease_ms"].as_u64().unwrap_or(30 * 60_000);
-            let until = asked_at + Duration::from_millis(lease_ms).saturating_sub(LEASE_MARGIN);
+            let until = asked_at + Duration::from_millis(lease_ms);
             self.next_id += 1;
             self.ui.glog(gi, format!("{C_INFO}[领取]{C_END} 一包 {} 行榜单，租约 {:.0} 分钟{}", rows.len(), lease_ms as f64 / 60_000.0, if ahead { "（预取）" } else { "" }));
             self.packs.push(Pack {
@@ -745,6 +795,7 @@ impl Fleet {
                 self.groups[gi].next_ahead = wait;
             } else {
                 self.groups[gi].next_ask = wait;
+                self.groups[gi].nothing_at = Some(Instant::now());
             }
             return;
         }
@@ -759,8 +810,7 @@ impl Fleet {
 
     /// THE NEXT ROW of the oldest pack with one, started — `false` when no pack has one.
     fn start_row(&mut self) -> bool {
-        let now = Instant::now();
-        let Some(pi) = self.packs.iter().position(|p| !p.rows.is_empty() && now < p.until) else { return false };
+        let Some(pi) = self.packs.iter().position(|p| !p.rows.is_empty()) else { return false };
         let p = &mut self.packs[pi];
         let Some(mut w) = p.rows.pop_front() else { return false };
         p.running += 1;
@@ -785,7 +835,7 @@ impl Fleet {
             let code = w["code"].as_str().unwrap_or("").to_string();
             let label = format!("{} · {} [{}]", w["weapon"].as_str().unwrap_or("?"), w["ruler"].as_str().unwrap_or(""), code);
             self.ui.glog(gi, format!("{C_GO}[开始]{C_END} 紫卡增益  {label}"));
-            (Runner::Riven(Riven::new(w["request"].clone())), label, Some(code))
+            (Runner::Riven(Riven::new(w["request"].clone(), self.riven_backend())), label, Some(code))
         } else {
             let (ruler, mode) = (w["ruler"].as_str().unwrap_or("").to_string(), w["mode"].as_str().unwrap_or("").to_string());
             let label = format!("{} · {ruler} · {mode}", w["record"]["weapon"].as_str().unwrap_or("?"));
@@ -819,6 +869,8 @@ impl Fleet {
             renewed: now,
             renewing: None,
             lanes_used: HashSet::new(),
+            row_until: pack.and_then(|pid| self.packs.iter().find(|p| p.id == pid)).map_or(now + Duration::from_secs(1800), |p| p.until),
+            renew_retry: now,
             question: w["question"].as_str().unwrap_or("").to_string(),
             pack,
             w,
@@ -871,20 +923,23 @@ impl Fleet {
             .iter()
             .filter_map(|t| match &t.runner { Runner::Riven(r) => r.leader.map(|l| (l, t.id)), _ => None })
             .collect();
+        // A RIVEN GAIN'S JOBS FIRST (see the module's note), then the rest by age.
+        let order: Vec<usize> =
+            (0..self.tasks.len()).filter(|&i| self.tasks[i].riven()).chain((0..self.tasks.len()).filter(|&i| !self.tasks[i].riven())).collect();
         let mut free = 0;
         for lane in 0..lanes {
             if self.pool.pending(lane) > 0 {
                 continue;
             }
             let owner = leader_of.get(&lane).copied();
-            for ti in 0..self.tasks.len() {
+            for &ti in &order {
                 let t = &mut self.tasks[ti];
                 let mine = owner == Some(t.id);
                 let tag = self.pool.next_tag();
                 let job = match &mut t.runner {
                     // A board piece on a leader's lane only when it needs no wasm there.
                     Runner::Board(b) if owner.is_none() || native => b.job(tag, lanes).map(|c| (backend, c)),
-                    Runner::Riven(r) if owner.is_none() || mine => r.job(lane, tag).map(|c| (Backend::Wasm, c)),
+                    Runner::Riven(r) if owner.is_none() || mine => r.job(lane, tag).map(|c| (r.backend, c)),
                     _ => None,
                 };
                 if let Some((backend, call)) = job {
@@ -1027,6 +1082,8 @@ impl Fleet {
         g.last_row = Some(now);
         // `counts` and `lanes`: what the row cost, kept beside the answer to
         // fit what a point is worth (never credited; 69-board-work.js).
+        let cost = s.compute_ms as f64;
+        self.row_cost_ms = if self.row_cost_ms > 0.0 { self.row_cost_ms * 0.8 + cost * 0.2 } else { cost };
         let mut a = json!({ "question": t.question, "score": s.score, "metric": s.metric, "work": s.work,
                             "compute_ms": s.compute_ms, "lanes": lanes });
         if s.counts.is_object() {
@@ -1083,15 +1140,28 @@ impl Fleet {
         let now = Instant::now();
         let mut lost = Vec::new();
         let mut late = Vec::new();
+        let mut taken = Vec::new();
         for t in &mut self.tasks {
             if let Some(h) = t.renewing.take() {
-                if h.is_finished() {
-                    if h.join().ok().flatten().is_some_and(|r| r["held"] == json!(false)) {
-                        lost.push(t.id);
-                    }
-                } else {
+                if !h.is_finished() {
                     t.renewing = Some(h);
+                } else {
+                    let r = h.join().ok().flatten();
+                    if r.as_ref().is_some_and(|r| r["held"] == json!(false)) {
+                        if t.pack.is_some() { taken.push(t.id) } else { lost.push(t.id) }
+                    } else if t.pack.is_some() {
+                        // A ROW'S HEARTBEAT: the lease runs on from when it was sent.
+                        match r.as_ref().and_then(|r| r["renew_ms"].as_u64()) {
+                            Some(ms) => t.row_until = t.renewed + Duration::from_millis(ms),
+                            None => t.renew_retry = now + RENEW_RETRY,
+                        }
+                    }
                 }
+            }
+            if t.pack.is_some() && !self.offline && t.renewing.is_none() && now + RENEW_BEFORE >= t.row_until && now >= t.renew_retry {
+                t.renewed = now;
+                let (net, body) = (self.net.clone(), json!({ "lease": t.lease, "verifier": t.verifier, "question": t.question }));
+                t.renewing = Some(std::thread::spawn(move || net.post_ok("/api/board/renew", &body)));
             }
             if t.riven() && !self.offline && t.renewing.is_none() && now.duration_since(t.renewed) > RIVEN_RENEW {
                 t.renewed = now;
@@ -1107,25 +1177,14 @@ impl Fleet {
                 late.push(t.id);
             }
         }
-        // PACKS: past their time, ended with what they have; else their answers every half minute.
-        let (mut ends, mut sends) = (Vec::new(), Vec::new());
-        for p in &mut self.packs {
-            if now >= p.until {
-                p.rows.clear();
-                ends.push(p.id);
-            } else if !p.unsent.is_empty() && p.sent_at.elapsed() >= ANSWER_EVERY {
-                sends.push(p.id);
-            }
-        }
+        // PACKS: their answers every half minute. A pack ends when its rows do;
+        // a row another computer took meanwhile is passed by.
+        let sends: Vec<u64> = self.packs.iter().filter(|p| !p.unsent.is_empty() && p.sent_at.elapsed() >= ANSWER_EVERY).map(|p| p.id).collect();
         for pid in sends {
             self.send_pack(pid, false);
         }
-        for pid in ends {
-            let rows: Vec<u64> = self.tasks.iter().filter(|t| t.pack == Some(pid)).map(|t| t.id).collect();
-            for id in rows {
-                self.drop_task(id, "：本包租约将到期，未完成的交还", false);
-            }
-            self.send_pack(pid, true);
+        for id in taken {
+            self.drop_task(id, "：这一行已由别的电脑接手，跳过", false);
         }
         for id in lost {
             self.drop_task(id, "：任务已转给别的电脑", false);
@@ -1136,36 +1195,103 @@ impl Fleet {
     }
 
     /// THE GROUP COUNT, from what the meter saw over the last half minute.
-    fn control(&mut self) {
-        if self.cfg.slots > 0 || self.control_at.elapsed() < CONTROL_EVERY {
+    /// The riven canary's verdict, said once it lands.
+    fn riven_verdict(&mut self) {
+        let Some(n) = self.pool.code().native.as_ref() else { return };
+        let st = n.riven_state();
+        if st == self.riven_seen {
             return;
         }
-        let (busy, cap) = (self.meter.busy_total - self.control_busy, self.meter.cap_total - self.control_cap);
-        self.control_at = Instant::now();
+        self.riven_seen = st;
+        match st {
+            2 => self.ui.log(format!("{C_INFO}[引擎]{C_END} 紫卡搜索与 wasm 逐位一致，之后开始的紫卡增益改用原生")),
+            3 => self.ui.log(format!("{C_GO}[引擎]{C_END} 紫卡搜索与 wasm 不一致，紫卡增益仍用 wasm：{}", n.riven_why())),
+            _ => return,
+        }
+        let label = crate::work::backend_label(self.pool.code());
+        self.ui.status(|s| s.backend = label.into());
+    }
+
+    /// THE BOARD WORK HELD, in seconds of the whole budget: the rows not
+    /// started and what is left of those running, at what a row has cost.
+    /// `None` until a row has been measured.
+    fn held_secs(&self) -> Option<f64> {
+        if self.row_cost_ms <= 0.0 {
+            return None;
+        }
+        let waiting: f64 = self.packs.iter().map(|p| p.rows.len() as f64).sum();
+        let running: f64 = self
+            .tasks
+            .iter()
+            .filter_map(|t| match &t.runner {
+                Runner::Board(b) if b.runs > 0 => Some(1.0 - b.folded as f64 / b.runs as f64),
+                _ => None,
+            })
+            .sum();
+        Some((waiting + running) * self.row_cost_ms / self.lanes().max(1) as f64 / 1000.0)
+    }
+
+    /// THE GROUP COUNT, both ways (see the module's note). A fixed `slots` is
+    /// kept, under the cap.
+    fn control(&mut self) {
+        let cap = self.max_groups();
+        let now = Instant::now();
+        if self.cfg.slots > 0 {
+            let want = self.cfg.slots.min(cap);
+            if want != self.open {
+                self.open = want;
+                self.ensure_groups(want);
+            }
+            return;
+        }
+        // THE CAP comes first, and at once: a key press, a smaller budget.
+        if self.open > cap {
+            self.ui.log(format!("{C_INFO}[调度]{C_END} 并发上限 {cap}，第 {}～{} 路做完手头的活后不再接", cap + 1, self.open));
+            self.open = cap;
+            self.closed_at = Some(now);
+            return;
+        }
+        if self.control_at.elapsed() < CONTROL_EVERY {
+            return;
+        }
+        let (busy, lane_ms) = (self.meter.busy_total - self.control_busy, self.meter.cap_total - self.control_cap);
+        self.control_at = now;
         self.control_busy = self.meter.busy_total;
         self.control_cap = self.meter.cap_total;
-        if cap < 1000.0 {
+        if lane_ms < 1000.0 {
             return;
         }
-        let util = busy / cap;
-        let full = (0..self.open).all(|g| self.tasks.iter().any(|t| t.group == g) || self.packs.iter().any(|p| p.group == g));
-        let now = Instant::now();
-        let work_left = (0..self.open).all(|g| self.groups[g].next_ask <= now);
-        if util < OPEN_BELOW && full && work_left && self.open < self.max_groups() {
+        let util = busy / lane_ms;
+        let held = self.held_secs();
+        let h = held.unwrap_or(0.0);
+        let busy_groups = (0..self.open).all(|g| self.tasks.iter().any(|t| t.group == g) || self.packs.iter().any(|p| p.group == g));
+        let told_nothing = (0..self.open).any(|g| self.groups[g].nothing_at.is_some_and(|t| now.duration_since(t) < NOTHING_RECENT));
+        let reopen_ok = self.closed_at.is_none_or(|t| now.duration_since(t) >= REOPEN_AFTER);
+        let close = |why: String| (self.open > 1).then_some(why);
+        let closing = if told_nothing && util < OPEN_BELOW {
+            close("服务器暂时没有更多任务可分".into())
+        } else if h > HELD_HIGH {
+            close(format!("手上的榜单够全部核心算 {h:.0} 秒"))
+        } else if util > 0.95 && h > HELD_FULL {
+            close(format!("核心已满，手上还有 {h:.0} 秒的活"))
+        } else {
+            None
+        };
+        if let Some(why) = closing {
+            self.open -= 1;
+            self.closed_at = Some(now);
+            self.ui.log(format!("{C_INFO}[调度]{C_END} {why}，第 {} 路做完手头的活后不再接（现 {} 路）", self.open + 1, self.open));
+        } else if util < OPEN_BELOW && h < HELD_LOW && busy_groups && !told_nothing && reopen_ok && self.open < cap {
             self.open += 1;
             self.ensure_groups(self.open);
-            self.ui.log(format!("{C_INFO}[调度]{C_END} 核心利用率 {:.0}%，加开第 {} 路", util * 100.0, self.open));
-        } else if util > CLOSE_ABOVE && self.open > 1 {
-            let starving = self.tasks.iter().any(|t| now.duration_since(t.last_ran) > Duration::from_secs(20));
-            if starving {
-                self.open -= 1;
-                self.ui.log(format!("{C_INFO}[调度]{C_END} 核心已满，第 {} 路做完手头任务后不再接活", self.open + 1));
-            }
+            let held = held.map_or(String::new(), |h| format!("，手上只剩 {h:.0} 秒的活"));
+            self.ui.log(format!("{C_INFO}[调度]{C_END} 核心利用率 {:.0}%{held}，加开第 {} 路", util * 100.0, self.open));
         }
     }
 
     fn show(&mut self) {
         let (lanes, idle, open) = (self.lanes(), self.idle(), self.open);
+        let (max_groups, held_secs) = (if self.cfg.slots > 0 { self.cfg.slots.min(self.max_groups()) } else { self.max_groups() }, self.held_secs());
         let running = |id: u64| self.lane_job.iter().filter(|l| **l == Some(id)).count();
         let lines: Vec<TaskLine> = self.tasks.iter().map(|t| t.line(running(t.id))).collect();
         let group_of: HashMap<u64, usize> = self.tasks.iter().map(|t| (t.id, t.group)).collect();
@@ -1215,6 +1341,8 @@ impl Fleet {
             s.groups = open;
             s.group_views = views;
             s.lane_map = lane_map;
+            s.max_groups = max_groups;
+            s.held_secs = held_secs;
             s.lane_kind = crate::affinity::lane_kinds(lanes);
             s.core_pref = crate::affinity::active().map(|p| p.name());
             s.idle_cores = self.ctl.idle_cores.load(Ordering::Relaxed);
@@ -1231,7 +1359,6 @@ impl Fleet {
             return;
         }
         let (cpu, wall) = crate::affinity::lane_totals();
-        let real_us = at.elapsed().as_secs_f64() * 1e6;
         self.yield_seen = (Instant::now(), cpu, wall);
         let (dc, dw) = (cpu.saturating_sub(cpu0) as f64, wall.saturating_sub(wall0) as f64);
         let lanes = self.lanes();
@@ -1244,9 +1371,13 @@ impl Fleet {
         }
         let share = (dc / dw).min(1.0);
         let processors = crate::affinity::processors_used(lanes);
+        // AS CORES: the share each lane gets, over the lanes working now. A job
+        // is counted when it ends, so a window's own CPU over its wall time
+        // would read a long riven step as more cores than there are.
+        let working = self.lane_job.iter().take(lanes).filter(|j| j.is_some()).count();
         self.ui.status(|s| {
             s.lane_yield = Some(share);
-            s.effective_cores = Some(dc / real_us);
+            s.effective_cores = Some(share * working as f64);
             s.processors = processors;
         });
         let now = Instant::now();
@@ -1323,6 +1454,7 @@ impl Fleet {
                 self.show();
                 self.measure();
                 self.control();
+                self.riven_verdict();
             }
             if self.tasks.is_empty() && self.sending.is_empty() {
                 if self.stats_at.is_none_or(|t| t.elapsed() > STATS_EVERY) {
@@ -1388,6 +1520,7 @@ impl Fleet {
     }
 
     fn swap_code(&mut self, code: Arc<Code>) {
+        self.riven_seen = 0;
         let backend = crate::work::backend_label(&code);
         self.pool = Pool::new(code.clone());
         self.meter.rebase();

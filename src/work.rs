@@ -80,7 +80,9 @@ pub fn native_variants() -> Vec<&'static str> {
 /// How the console names the backend a `Code` computes board rows on.
 pub fn backend_label(code: &Code) -> &'static str {
     match &code.native {
+        Some(n) if n.variant == "-v3" && n.can_optimize() => "原生 AVX2（含紫卡）",
         Some(n) if n.variant == "-v3" => "原生 AVX2",
+        Some(n) if n.can_optimize() => "原生（含紫卡）",
         Some(_) => "原生",
         None => "wasm",
     }
@@ -191,7 +193,21 @@ pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release
         }
     }
     ui.status(|s| s.note.clear());
-    Ok(Arc::new(code))
+    let code = Arc::new(code);
+    // A RIVEN GAIN natively too, once a search gives the wasm's answer: held to
+    // it on a thread of its own (a dozen seconds), riven gains starting on the
+    // wasm meanwhile (fleet.rs takes the verdict as it lands).
+    if let Some(n) = code.native.as_ref().filter(|n| cfg.native_riven && n.has_optimize()) {
+        n.riven_checking();
+        let c = code.clone();
+        let _ = std::thread::Builder::new().name("riven-canary".into()).stack_size(8 << 20).spawn(move || {
+            let r = riven_canary(&c);
+            if let Some(n) = &c.native {
+                n.riven_checked(r);
+            }
+        });
+    }
+    Ok(code)
 }
 
 /// A PUBLISHED NATIVE ENGINE for this engine id, if one exists yet
@@ -263,6 +279,62 @@ pub fn call(exec: &mut Exec, backend: Backend, path: &'static str, body: String)
         bail!("{path}: {}", v["error"].as_str().unwrap_or("engine refused"));
     }
     Ok(v)
+}
+
+/// THE RIVEN CANARY: a small quick search, led and scored as the fleet does
+/// it (`quick_fleet` lead and score steps, the scoring in two slices), run
+/// on the wasm and on the native optimizer, must end in the same answer.
+fn riven_canary(code: &Arc<Code>) -> Result<()> {
+    let start = |slots: Value, fixed: Value| json!({ "slots": slots, "evolutions": [], "arcane": [], "fixed": fixed });
+    let three = json!([{ "kind": "mods", "idx": 0 }, { "kind": "mods", "idx": 1 }, { "kind": "mods", "idx": 2 }]);
+    // Three cards pinned, so the descent is short; ten-run screening, so the
+    // rough items travel the fleet too.
+    let req = json!({
+        "weapon": "braton_prime", "enemy": "thrax_centurion", "level": 100,
+        "duration": 2.0, "runs": 2, "finalists": 1, "candidate_runs": 10, "strategy": "quick",
+        "starts": [start(json!(["hellfire", "infected_clip", "stormbringer"]), three)],
+    });
+    let search = |native: bool| -> Result<Value> {
+        let mut exec = Exec::new(code.clone());
+        let mut step = |body: &Value| -> Result<Value> {
+            let s = body.to_string();
+            let out = match (native, &code.native) {
+                (true, Some(n)) => n.optimize(&s)?,
+                (true, None) => bail!("no native engine"),
+                (false, _) => exec.run(Backend::Wasm, &Call::Optimize(s))?,
+            };
+            jsnum::parse(&out)
+        };
+        let (mut scores, mut work, mut fights) = (json!([]), 0u64, 0u64);
+        for n in 0..500 {
+            let mut lead = req.clone();
+            lead["quick_fleet"] = json!({ "lead": true, "fresh": n == 0, "scores": scores });
+            let r = step(&lead)?;
+            let pending = match r["pending"].as_array() {
+                Some(p) if truthy(&r["pending"]) => p.clone(),
+                _ => return Ok(json!({ "results": r["results"], "final_work": r["final_work"], "work": work, "fights": fights })),
+            };
+            let mut got = Vec::new();
+            for part in pending.chunks(pending.len().div_ceil(2).max(1)) {
+                let mut b = req.clone();
+                b["quick_fleet"] = json!({ "score": part });
+                let o = step(&b)?;
+                work += o["work"].as_u64().unwrap_or(0);
+                fights += o["fights"].as_u64().unwrap_or(0);
+                got.extend(o["scores"].as_array().cloned().unwrap_or_default());
+            }
+            scores = Value::Array(got);
+        }
+        bail!("the search never settled")
+    };
+    let (a, b) = (search(false)?, search(true)?);
+    if a["results"].as_array().is_none_or(|r| r.is_empty()) {
+        bail!("the wasm found nothing");
+    }
+    if a != b {
+        bail!("{} ≠ {}", a.to_string().chars().take(160).collect::<String>(), b.to_string().chars().take(160).collect::<String>());
+    }
+    Ok(())
 }
 
 /// The native engine must give the wasm's answer on every step of a row.

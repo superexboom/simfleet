@@ -29,6 +29,8 @@ pub struct Ctl {
     pub idle_cores: AtomicUsize,
     pub active_cores: AtomicUsize,
     pub max_cores: usize,
+    /// The cap on groups; 0 is by the machine's size.
+    pub max_slots: AtomicUsize,
 }
 
 /// One held task.
@@ -94,8 +96,10 @@ pub struct Status {
     pub utilisation: Option<f64>,
     pub utilisation_total: Option<f64>,
     pub tasks: Vec<TaskLine>,
-    /// Groups taking work now.
+    /// Groups taking work now, the cap on them, and the board work held (s).
     pub groups: usize,
+    pub max_groups: usize,
+    pub held_secs: Option<f64>,
     pub group_views: Vec<GroupView>,
     /// Each lane the budget allows now: the group whose job it runs, if any.
     pub lane_map: Vec<Option<usize>>,
@@ -336,8 +340,15 @@ impl Ui {
         let mut size = (0u16, 0u16);
         let mut view = View::default();
         let mut meter = SysMeter::default();
+        let mut full_at = Instant::now();
         loop {
             let (w, h) = crossterm::terminal::size().unwrap_or((100, 30));
+            // A WHOLE FRAME every ten seconds as well: whatever a console did to
+            // the screen behind our back (a resize mid-frame) is painted over.
+            if full_at.elapsed() > Duration::from_secs(10) {
+                full_at = Instant::now();
+                prev.clear();
+            }
             if (w, h) != size {
                 size = (w, h);
                 prev.clear();
@@ -421,6 +432,16 @@ impl Ui {
                     ctl.idle_cores.store(n, Ordering::Relaxed);
                     self.log(format!("离开电脑时用 {n} 个核心"));
                 }
+            }
+            // [ / ] THE CAP ON GROUPS, from what it is now (by the machine's size, at 0).
+            KeyCode::Char(ch @ ('[' | ']')) => {
+                let now = match ctl.max_slots.load(Ordering::Relaxed) {
+                    0 => crate::config::auto_max_slots(ctl.max_cores),
+                    n => n,
+                };
+                let n = if ch == ']' { (now + 1).min(64) } else { now.saturating_sub(1).max(1) };
+                ctl.max_slots.store(n, Ordering::Relaxed);
+                self.log(format!("并发上限 {n} 路"));
             }
             KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Tab => {
                 v.full_log = !v.full_log;
@@ -749,6 +770,9 @@ fn title(c: &mut Canvas, f: &Frame) {
     let right = w.saturating_sub(c.tw(&clock));
     // MOST USEFUL FIRST: a narrow window cuts from the right.
     let mut info = format!("  已运行 {}   核心 {}/{} {}", hms(f.up.as_secs()), s.lanes_now, f.ctl.max_cores, if s.idle { "空闲" } else { "使用中" });
+    if s.max_groups > 0 {
+        info += &format!("   并发 {}/{}", s.groups, s.max_groups);
+    }
     if let Some(n) = s.computing_now {
         info += &format!("   全站在线 {n}");
     }
@@ -767,6 +791,7 @@ fn footer(c: &mut Canvas, f: &Frame, v: &View) {
         ("P", if paused { "继续" } else { "暂停" }),
         ("+/-", "空闲核心"),
         ("Shift +/-", "使用时核心"),
+        ("[ ]", "并发上限"),
         ("L", if v.full_log { "面板" } else { "日志" }),
         ("PgUp/PgDn", "翻页"),
         ("Q", "退出"),
@@ -1026,6 +1051,11 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
             kv(c, x, yy, w, "预算", &format!("离开 {} 核", s.idle_cores), &format!("  使用时 {busy}"));
             yy += 1;
         }
+        if yy < end && s.max_groups > 0 {
+            let held = s.held_secs.map_or(String::new(), |h| format!(" · 积压 {h:.0}s"));
+            kv(c, x, yy, w, "并发", &format!("{} 路", s.groups), &format!("  上限 {}{held}", s.max_groups));
+            yy += 1;
+        }
         // WHAT THE LANES REALLY GET: lanes crowded onto a few processors, or
         // starved by other programs, are less than a core each.
         if let (Some(eff), Some(share), true) = (s.effective_cores, s.lane_yield, yy < end) {
@@ -1205,7 +1235,14 @@ mod tests {
     #[test]
     #[ignore]
     fn preview() {
-        let ctl = Ctl { paused: AtomicBool::new(false), quit: AtomicBool::new(false), idle_cores: AtomicUsize::new(10), active_cores: AtomicUsize::new(10), max_cores: 16 };
+        let ctl = Ctl {
+            paused: AtomicBool::new(false),
+            quit: AtomicBool::new(false),
+            idle_cores: AtomicUsize::new(10),
+            active_cores: AtomicUsize::new(10),
+            max_cores: 16,
+            max_slots: AtomicUsize::new(0),
+        };
         let now = Instant::now();
         let s = Status {
             state: "计算中".into(),
@@ -1230,6 +1267,8 @@ mod tests {
                 TaskLine { group: 2, label: "ocucor · standard_multi_target · base".into(), done: 0, total: 1000, secs: 0, lanes: 0, ..Default::default() },
             ],
             groups: 3,
+            max_groups: 8,
+            held_secs: Some(34.0),
             group_views: (0..3).map(|i| GroupView { id: format!("a7i8qm{i:02}"), state: "计算中".into(), open: i < 3, tasks: 700 + i as u64, work: 7_800_000_000_000 }).collect(),
             lane_map: vec![Some(0), Some(0), Some(0), Some(0), Some(1), Some(1), Some(1), None, Some(2), None],
             answered: [(now, 9_000_000_000)].into_iter().collect(),

@@ -47,7 +47,7 @@ simfleet — WFSim 志愿计算客户端（非官方，基于 WFSim 引擎）
   simfleet engine-id <dir> 计算一份 WFSim 源码的引擎号（原生引擎构建脚本用）
 
 运行时按键: P 暂停/继续 · + / - 空闲时的核心数 · Shift 加 + / - 使用电脑时的核心数（0 = 使用时暂停）
-          L 全屏日志 · PgUp/PgDn 翻页 · Q 退出（会先把手头任务交还）
+          [ / ] 并发上限 · L 全屏日志 · PgUp/PgDn 翻页 · Q 退出（会先把手头任务交还）
 
 源码与许可: https://github.com/superexboom/simfleet （AGPL-3.0-or-later）
 基于 WFSim（https://github.com/magenie33/wfsim，AGPL-3.0-or-later），非官方项目。
@@ -249,6 +249,7 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<(
         idle_cores: AtomicUsize::new(cores_override.unwrap_or(cfg.idle_cores).clamp(1, max)),
         active_cores: AtomicUsize::new(cfg.active_cores.min(max)),
         max_cores: max,
+        max_slots: AtomicUsize::new(cfg.max_slots),
     });
     let _ = CTL.set(ctl.clone());
     on_console_close();
@@ -312,6 +313,7 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<(
     ui.flush_plain();
     cfg.idle_cores = ctl.idle_cores.load(Ordering::Relaxed);
     cfg.active_cores = ctl.active_cores.load(Ordering::Relaxed);
+    cfg.max_slots = ctl.max_slots.load(Ordering::Relaxed);
     paths.save(&cfg)?;
     if let Some(s) = summary {
         println!(
@@ -482,6 +484,15 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boa
         bail!("只比对了 {same} 行（跳过 {skipped}），不足以放行");
     }
     println!("原生引擎 {rel_engine} 与 wasm 在 {same} 行榜单上逐位一致（跳过 {skipped} 行）");
+    // THE OPTIMIZER, where the build has one: reported, not refused — simfleet
+    // holds it to the site's wasm again before any riven gain runs on it.
+    if let Some(n) = code.native.as_ref().filter(|n| n.has_optimize()) {
+        match n.wait_riven() {
+            2 => println!("紫卡搜索：原生与 wasm 逐位一致"),
+            3 => println!("警告：紫卡搜索与 wasm 不一致（{}）；运行时同样会校验，这个版本只用于榜单", n.riven_why()),
+            _ => println!("紫卡搜索：没有校验"),
+        }
+    }
     Ok(())
 }
 
@@ -608,12 +619,17 @@ fn main() {
                 let ui = Ui::new();
                 let rel = work::fetch_release(&net)?;
                 let code = work::load_code(&net, &paths, &cfg, &ui, &rel)?;
+                // A replay of a riven gain runs where the fleet's would: natively once the canary says so.
+                if let Some(n) = &code.native {
+                    eprintln!("riven canary: {}", ["not asked", "checking", "same answer", "differs"][n.wait_riven() as usize]);
+                }
                 let ctl = Arc::new(Ctl {
                     paused: AtomicBool::new(false),
                     quit: AtomicBool::new(false),
                     idle_cores: AtomicUsize::new(lanes),
                     active_cores: AtomicUsize::new(lanes),
                     max_cores: lanes,
+                    max_slots: AtomicUsize::new(0),
                 });
                 let mut f = fleet::Fleet::new(net, cfg, paths_clone(&paths), ctl, ui, rel, code);
                 f.replay(&w)?;

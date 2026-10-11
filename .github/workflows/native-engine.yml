@@ -190,7 +190,7 @@ jobs:
           done
           via="native-engine/ at simfleet [\`$GITHUB_SHA\`]($tree)"
           if [ -n "$patches" ]; then
-            via+=", with $patches from [native-engine/patches]($tree/native-engine/patches) (one setup for a call's runs and no report for a shard: speed only, the same bits)"
+            via+=", with $patches from [native-engine/patches]($tree/native-engine/patches) (a board row set up once a call, and the optimizer on one thread as the wasm build runs it: the same bits — a build with the optimizer patch also runs riven gains, once simfleet's riven canary agrees with the site's wasm)"
           fi
           if [ -n "$have" ]; then
             gh release view "engine-$ENGINE" -R "$GITHUB_REPOSITORY" --json body -q .body > notes.md

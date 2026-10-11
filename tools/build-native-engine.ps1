@@ -102,10 +102,13 @@ if ($Cpu) {
 }
 $ne = Join-Path $root "native-engine"
 Copy-Item (Join-Path $src "Cargo.lock") (Join-Path $ne "Cargo.lock") -Force
-cargo build --release --manifest-path (Join-Path $ne "Cargo.toml")
+# A RIVEN GAIN natively needs the optimizer patch: the entry point is built only with it.
+$features = @()
+if ($applied -contains "optimizer-one-thread.patch") { $features = @("--features", "riven") }
+cargo build --release --manifest-path (Join-Path $ne "Cargo.toml") @features
 $built = $LASTEXITCODE
 # The checkout goes back as it was, patched or not.
-if ($applied.Count -gt 0) { git -C $src checkout -q -- webapi engine }
+if ($applied.Count -gt 0) { git -C $src checkout -q -- webapi engine optimizer }
 if ($built -ne 0) { exit 1 }
 New-Item -ItemType Directory -Force $Out | Out-Null
 $lib, $name = if ($win) { "simfleet_native_engine.dll", "$want$suffix.dll" } else { "libsimfleet_native_engine.so", "lib$want$suffix.so" }

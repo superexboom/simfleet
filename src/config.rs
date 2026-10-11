@@ -49,10 +49,18 @@ pub struct Config {
     #[serde(default = "default_native_url")]
     pub native_engine_url: String,
     /// Computer ids run at once (each one holds a task and one asked ahead),
-    /// as players open several browsers; 0 lets simfleet open as many as keep
-    /// the cores busy, up to a quarter of them.
+    /// as players open several browsers; 0 lets simfleet open and close them
+    /// as the load asks (fleet.rs `control`).
     #[serde(default)]
     pub slots: usize,
+    /// THE MOST groups at once (`[`/`]` change it while running); 0 is by the
+    /// machine's size (`auto_max_slots`).
+    #[serde(default)]
+    pub max_slots: usize,
+    /// Riven gains on the native engine too, when its build has the optimizer
+    /// and it gave the wasm's answer on the riven canary.
+    #[serde(default = "yes")]
+    pub native_riven: bool,
     /// The ids beyond `verifier`, made as groups open. Keep them to yourself too.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_verifiers: Vec<String>,
@@ -81,6 +89,15 @@ fn default_native_url() -> String {
 fn default_core_type() -> String {
     "auto".into()
 }
+fn yes() -> bool {
+    true
+}
+
+/// `max_slots = 0`: an eighth of the logical processors, 2 to 12. One group's
+/// pack can start rows on every lane, so a few feed a big machine.
+pub fn auto_max_slots(cores: usize) -> usize {
+    (cores / 8).clamp(2, 12)
+}
 
 impl Config {
     pub fn fresh(idle_cores: usize) -> Self {
@@ -98,6 +115,8 @@ impl Config {
             native_engine: true,
             native_engine_url: NATIVE_URL.into(),
             slots: 0,
+            max_slots: 0,
+            native_riven: true,
             extra_verifiers: Vec::new(),
             account: Account::default(),
         }

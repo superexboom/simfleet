@@ -12,7 +12,14 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wfsim-webapi = { path = "../.wfsim-src/webapi" }
+# Only with patches/optimizer-one-thread.patch applied (`riven`): see src/lib.rs.
+wfsim-optimizer = { path = "../.wfsim-src/optimizer", optional = true }
 serde_json = { version = "1", features = ["raw_value", "float_roundtrip"] }
+
+[features]
+# A riven gain's search natively (`sfe_optimize`); build-native-engine.ps1
+# turns it on when the optimizer patch applied.
+riven = ["dep:wfsim-optimizer"]
 
 [profile.release]
 codegen-units = 1
