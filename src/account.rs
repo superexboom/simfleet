@@ -66,10 +66,14 @@ pub fn claim_as(net: &Net, verifier: &str, group: usize) -> Result<()> {
     Ok(())
 }
 
-/// The account's own contribution page (`/api/account/devices`).
-pub fn devices(net: &Net) -> Option<Value> {
-    let r = net.get("/api/account/devices").ok()?;
-    (r.status == 200 && r.body["ok"] == json!(true)).then_some(r.body)
+/// The account's own contribution page (`/api/account/devices`), or why there
+/// is none: the session refused (HTTP 401), or what went wrong on the way.
+pub fn devices(net: &Net) -> Result<Value> {
+    let r = net.get("/api/account/devices")?;
+    if r.status == 200 && r.body["ok"] == json!(true) {
+        return Ok(r.body);
+    }
+    bail!("HTTP {} {}", r.status, r.body["error"].as_str().unwrap_or(""))
 }
 
 pub fn logout(net: &Net) {

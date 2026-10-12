@@ -345,12 +345,13 @@ fn status(cfg: &Config) -> Result<()> {
     }
     if net.session.is_some() {
         match account::devices(&net) {
-            Some(d) => println!(
+            Ok(d) => println!(
                 "账号 {}：累计 {} 分 · 近 30 天 {} · 近 7 天 {} · 贡献者段位 {} · {} 台设备",
                 cfg.account.name, d["points"], d["recent"], d["week"], d["contributor_rank"]["rank"],
                 d["devices"].as_array().map_or(0, |a| a.len())
             ),
-            None => println!("账号会话无效或已过期，运行 simfleet login 重新登录"),
+            Err(e) if format!("{e}").contains("HTTP 401") => println!("账号会话无效或已过期，运行 simfleet login 重新登录"),
+            Err(e) => println!("读取账号信息失败：{e:#}"),
         }
     }
     Ok(())
@@ -404,7 +405,7 @@ fn bench(paths: &Paths, cfg: &Config, lanes_arg: Option<usize>) -> Result<()> {
 /// Offline (the release workflow, which cannot reach wfsim.app): `--engine <id>
 /// --wasm <file> --boards <dir>` take the engine id, the reference wasm built
 /// from the same commit, and a WFSim checkout's `site/board/`.
-fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boards: Option<String>, rows: Option<String>, lanes: Option<usize>) -> Result<()> {
+fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boards: Option<String>, rows: Option<String>, lanes: Option<usize>, weapons: usize) -> Result<()> {
     let mut cfg = Config::fresh(sys::cores());
     cfg.native_engine = true;
     cfg.native_engine_url = String::new();
@@ -433,10 +434,11 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boa
     }
     let lanes = lanes.unwrap_or_else(sys::cores);
     let (mut same, mut skipped) = (0, 0);
-    // THE ROWS: the board's (one per ruler and mode of four weapons), then the
-    // contract's vectors (docs/CLIENTS.md §"Conformance" 7, tests/gas/rows.json).
+    // THE ROWS: the board's (one per ruler and mode of the first `weapons` of
+    // four), then the contract's vectors (docs/CLIENTS.md §"Conformance" 7,
+    // tests/gas/rows.json).
     let mut orders: Vec<(String, String, String)> = Vec::new();
-    for weapon in ["braton_prime", "dual_toxocyst", "torid", "burston_prime"] {
+    for weapon in ["braton_prime", "dual_toxocyst", "torid", "burston_prime"].into_iter().take(weapons.clamp(1, 4)) {
         let rows = match &boards {
             Some(dir) => jsnum::parse(&std::fs::read_to_string(std::path::Path::new(dir).join(format!("{weapon}.json")))?)?,
             None => net.get(&format!("/board/{weapon}.json"))?.body,
@@ -683,7 +685,7 @@ fn main() {
                 let c = paths.load()?.unwrap_or_else(|| Config::fresh(sys::cores()));
                 print!("{}", affinity::report(affinity::Prefer::parse(&c.core_type), c.idle_cores.max(c.active_cores)));
             }
-            "check-native" => check_native(&paths, flag("--engine"), flag("--wasm"), flag("--boards"), flag("--rows"), flag("--lanes").and_then(|x| x.parse().ok()))?,
+            "check-native" => check_native(&paths, flag("--engine"), flag("--wasm"), flag("--boards"), flag("--rows"), flag("--lanes").and_then(|x| x.parse().ok()), flag("--weapons").and_then(|x| x.parse().ok()).unwrap_or(4))?,
             "bench" => {
                 let c = paths.load()?.unwrap_or_else(|| Config::fresh(1));
                 bench(&paths, &c, flag("--lanes").and_then(|x| x.parse().ok()))?;

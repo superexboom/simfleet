@@ -91,6 +91,12 @@ const REOPEN_AFTER: Duration = Duration::from_secs(60);
 const NOTHING_RECENT: Duration = Duration::from_secs(60);
 /// A group the server told "nothing for you" asks again after this.
 const NOTHING_WAIT: Duration = Duration::from_secs(10);
+/// …and after this when it says it is busy (worker/verify.js `COMPUTE_CAP`:
+/// too many computers asking, and this id has answered nothing lately).
+const BUSY_WAIT: Duration = Duration::from_secs(60);
+/// How often `/release.json` is read for the engine the site serves: its
+/// library is published before the site serves it (docs/CLIENTS.md).
+const RELEASE_EVERY: Duration = Duration::from_secs(60);
 /// A pack's answers so far go back this often (69-board-work.js `ANSWER_EVERY_MS`)…
 const ANSWER_EVERY: Duration = Duration::from_secs(30);
 /// …the next pack is asked once what is left of this one would take under this
@@ -336,6 +342,13 @@ pub struct Fleet {
     native_checked: Instant,
     /// A native build being fetched and checked, off the dispatcher: for the engine named.
     native_load: Option<(String, JoinHandle<Option<Arc<Code>>>)>,
+    /// The bottom line's numbers being asked for (`refresh_stats`).
+    stats_job: Option<JoinHandle<()>>,
+    /// `/release.json` being read, and when it last was (`follow_engine`).
+    release_read: Option<JoinHandle<Option<Value>>>,
+    release_at: Instant,
+    /// When "the site is busy" was last said.
+    busy_said: Option<Instant>,
     /// THE ENGINE THE SITE SERVES NOW, being made ready off the dispatcher…
     engine_load: Option<(String, JoinHandle<Option<(Release, Arc<Code>)>>)>,
     /// …ready: no more work is asked, and once what is held is done, it runs.
@@ -392,6 +405,10 @@ impl Fleet {
             stats_at: None,
             native_checked: Instant::now(),
             native_load: None,
+            stats_job: None,
+            release_read: None,
+            release_at: Instant::now(),
+            busy_said: None,
             engine_load: None,
             switch_to: None,
             engine_retry: Instant::now(),
@@ -738,6 +755,16 @@ impl Fleet {
         }
         let w = r["work"].clone();
         if !w.is_object() {
+            // THE SITE IS BUSY: asked again a minute later, not ten seconds.
+            let wait = if r["busy"] == json!(true) {
+                if self.busy_said.is_none_or(|t| t.elapsed() > Duration::from_secs(600)) {
+                    self.busy_said = Some(Instant::now());
+                    self.ui.log(format!("{C_GO}[服务器]{C_END} 服务器繁忙，暂不给新的计算机派活，1 分钟后再领"));
+                }
+                Instant::now() + BUSY_WAIT
+            } else {
+                wait
+            };
             if ahead {
                 self.groups[gi].next_ahead = wait;
             } else {
@@ -1479,10 +1506,8 @@ impl Fleet {
         if busy || Instant::now() < self.engine_retry {
             return;
         }
-        self.ui.log(format!(
-            "{C_INFO}[引擎]{C_END} 网站引擎已更新 {} → {engine}；本机的引擎在 {until} 前仍被接受，新引擎在后台准备，准备好后接着用",
-            self.rel.engine
-        ));
+        let kept = if until.is_empty() { "本机的引擎不再被接受".to_string() } else { format!("本机的引擎在 {until} 前仍被接受") };
+        self.ui.log(format!("{C_INFO}[引擎]{C_END} 网站引擎已更新 {} → {engine}；{kept}，新引擎在后台准备，准备好后接着用", self.rel.engine));
         let (net, paths, cfg, ui) = (self.net.clone(), self.paths.clone(), self.cfg.clone(), self.ui.clone());
         let h = std::thread::spawn(move || {
             let rel = fetch_release(&net).ok()?;
@@ -1495,6 +1520,28 @@ impl Fleet {
     /// A prepared engine is taken up once nothing is held on the old one: no
     /// more is asked meanwhile, and what is held is finished (and answered) first.
     fn follow_engine(&mut self) {
+        // THE SITE'S OWN WORD, read every minute: what it serves, and until when
+        // it still takes ours (`accepted`).
+        if self.release_read.as_ref().is_some_and(|h| h.is_finished()) {
+            if let Some(Some(r)) = self.release_read.take().and_then(|h| h.join().ok()) {
+                if let Some(e) = r["engine"].as_str().filter(|e| *e != self.rel.engine && e.len() == 12) {
+                    let until = r["accepted"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .find(|a| a["engine"].as_str() == Some(self.rel.engine.as_str()))
+                        .and_then(|a| a["until"].as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    self.served_moved(e.to_string(), until);
+                }
+            }
+        }
+        if self.release_read.is_none() && !self.offline && self.release_at.elapsed() >= RELEASE_EVERY {
+            self.release_at = Instant::now();
+            let net = self.net.clone();
+            self.release_read = Some(std::thread::spawn(move || net.get("/release.json").ok().filter(|r| r.status == 200).map(|r| r.body)));
+        }
         if self.engine_load.as_ref().is_some_and(|(_, h)| h.is_finished()) {
             let (engine, h) = self.engine_load.take().expect("checked above");
             match h.join().ok().flatten() {
@@ -1585,26 +1632,90 @@ impl Fleet {
         ));
     }
 
-    /// The bottom line's numbers, summed over this machine's ids.
+    /// The bottom line's numbers, summed over this machine's ids — asked on a
+    /// thread of their own, so a slow site never holds the lanes up. A failed
+    /// ask keeps what was shown; only a session the site refuses is signed out.
     fn refresh_stats(&mut self) {
+        if self.stats_job.as_ref().is_some_and(|h| !h.is_finished()) {
+            return;
+        }
         self.stats_at = Some(Instant::now());
         let since = sys::local_midnight_utc_hour();
-        let (mut device, mut today, mut any) = (0u64, 0u64, false);
-        for g in &self.groups {
-            if let Some(p) = self.net.post_ok("/api/board/points", &json!({ "verifier": g.verifier, "since": since })) {
-                any = true;
-                device += p["points"].as_u64().unwrap_or(0);
-                today += p["today"]["points"].as_u64().unwrap_or(0);
+        let groups: Vec<(String, Vec<Value>, Vec<Value>)> = self
+            .groups
+            .iter()
+            .map(|g| {
+                let mine = |riven: bool| -> Vec<Value> {
+                    self.recent.iter().filter(|(v, k, _)| *v == g.verifier && *k == riven).map(|(_, _, x)| x.clone()).collect()
+                };
+                (g.verifier.clone(), mine(false), mine(true))
+            })
+            .collect();
+        let (net, ui, name) = (self.net.clone(), self.ui.clone(), self.cfg.account.name.clone());
+        self.stats_job = Some(std::thread::spawn(move || {
+            let (mut device, mut today, mut any) = (0u64, 0u64, false);
+            for (v, _, _) in &groups {
+                if let Some(p) = net.post_ok("/api/board/points", &json!({ "verifier": v, "since": since })) {
+                    any = true;
+                    device += p["points"].as_u64().unwrap_or(0);
+                    today += p["today"]["points"].as_u64().unwrap_or(0);
+                }
             }
-        }
-        let dev = self.net.session.as_ref().and_then(|_| account::devices(&self.net));
-        // THE SITE'S SIDE - who is computing, what is owed, the week's ranking - on
-        // its own thread; the ranking is the page's own (`/api/contributors`).
-        let (net, ui) = (self.net.clone(), self.ui.clone());
-        std::thread::spawn(move || {
+            let dev = net.session.as_ref().map(|_| account::devices(&net));
+            // THE SITE'S SIDE - who is computing, what is owed, the week's ranking;
+            // the ranking is the page's own (`/api/contributors`).
             let demand = net.get("/api/board/demand").ok().map(|r| r.body).filter(|b| b["ok"] == json!(true));
             let top = net.get("/api/contributors?period=week&limit=40").ok().map(|r| r.body).filter(|b| b["ok"] == json!(true));
+            let (mut confirmed, mut waiting, mut told) = (0u64, 0u64, false);
+            for (v, orders, tasks) in &groups {
+                if !orders.is_empty() {
+                    if let Some(m) = net.post_ok("/api/board/mine", &json!({ "verifier": v, "orders": orders })) {
+                        told = true;
+                        for o in m["orders"].as_array().into_iter().flatten() {
+                            match o["state"].as_str() {
+                                Some("confirmed") => confirmed += 1,
+                                Some("waiting") | Some("checking") => waiting += 1,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                if !tasks.is_empty() {
+                    if let Some(m) = net.post_ok("/api/appraise/mine", &json!({ "verifier": v, "tasks": tasks })) {
+                        told = true;
+                        for o in m["tasks"].as_array().into_iter().flatten() {
+                            match o["state"].as_str() {
+                                Some("confirmed") => confirmed += 1,
+                                Some("waiting") => waiting += 1,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
             ui.status(|s| {
+                if any {
+                    s.device_points = Some(device);
+                    s.today_points = Some(today);
+                }
+                match &dev {
+                    Some(Ok(d)) => {
+                        s.account = Some(if name.is_empty() { "已登录".into() } else { name });
+                        s.account_points = d["points"].as_u64();
+                        s.contributor_rank = d["contributor_rank"]["rank"].as_u64();
+                    }
+                    // The site refused the session: signed out.
+                    Some(Err(e)) if format!("{e}").contains("HTTP 401") => {
+                        s.account = None;
+                        s.account_points = None;
+                    }
+                    // Anything else (a slow or failing site) keeps what was shown.
+                    Some(Err(_)) => {}
+                    None => {
+                        s.account = None;
+                        s.account_points = None;
+                    }
+                }
                 if let Some(d) = &demand {
                     s.computing_now = d["computing"].as_u64();
                     s.owed = Some(["new_builds", "rescores", "sweeps", "refreshes"].iter().map(|k| d["owed"][k].as_u64().unwrap_or(0)).sum());
@@ -1625,55 +1736,12 @@ impl Fleet {
                         })
                         .collect();
                 }
+                if told || groups.iter().all(|(_, o, t)| o.is_empty() && t.is_empty()) {
+                    s.confirmed = confirmed;
+                    s.waiting = waiting;
+                }
             });
-        });
-        let (mut confirmed, mut waiting) = (0u64, 0u64);
-        for g in &self.groups {
-            let mine = |riven: bool| -> Vec<Value> {
-                self.recent.iter().filter(|(v, k, _)| *v == g.verifier && *k == riven).map(|(_, _, x)| x.clone()).collect()
-            };
-            let orders = mine(false);
-            if !orders.is_empty() {
-                if let Some(m) = self.net.post_ok("/api/board/mine", &json!({ "verifier": g.verifier, "orders": orders })) {
-                    for o in m["orders"].as_array().into_iter().flatten() {
-                        match o["state"].as_str() {
-                            Some("confirmed") => confirmed += 1,
-                            Some("waiting") | Some("checking") => waiting += 1,
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            let tasks = mine(true);
-            if !tasks.is_empty() {
-                if let Some(m) = self.net.post_ok("/api/appraise/mine", &json!({ "verifier": g.verifier, "tasks": tasks })) {
-                    for o in m["tasks"].as_array().into_iter().flatten() {
-                        match o["state"].as_str() {
-                            Some("confirmed") => confirmed += 1,
-                            Some("waiting") => waiting += 1,
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
-        let name = self.cfg.account.name.clone();
-        self.ui.status(|s| {
-            if any {
-                s.device_points = Some(device);
-                s.today_points = Some(today);
-            }
-            if let Some(d) = &dev {
-                s.account = Some(if name.is_empty() { "已登录".into() } else { name });
-                s.account_points = d["points"].as_u64();
-                s.contributor_rank = d["contributor_rank"]["rank"].as_u64();
-            } else {
-                s.account = None;
-                s.account_points = None;
-            }
-            s.confirmed = confirmed;
-            s.waiting = waiting;
-        });
+        }));
     }
 }
 

@@ -171,7 +171,7 @@ simfleet 因此有两个引擎：
 
 1. 照 WFSim 的做法编译出 wasm，作为比对的参照；
 2. **把 Digital Extremes 的卡牌文本清空**（`tools/strip_card_text.py`），然后用这次提交原样的代码编译原生引擎（WFSim 的 [客户端约定](https://github.com/magenie33/wfsim/blob/main/docs/CLIENTS.md)：原生版必须是网站那次提交、未经修改）。每个平台编两份：一份任何 x86-64 都能跑，一份是 x86-64-v3（即 AVX2、FMA、BMI2 这一代指令，2013 年以后的 CPU 基本都有）。Windows 是 `<引擎号>.dll` / `<引擎号>-v3.dll`，Linux 是 `lib<引擎号>.so` / `lib<引擎号>-v3.so`。WFSim 对卡牌文本没有授权（见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)），所以发布的版本里不含它；引擎只拿这些文本做显示，不影响任何分数；
-3. 在 WFSim 仓库里提交的榜单快照上取 32 条真实榜单（4 把武器 × 4 把尺子 × 2 种模式），每一份都和参照 wasm **逐位比对**（`simfleet check-native`：分数、work 和 gas），全部一致才发布。某个平台没通过就不发布它，那个平台继续用 wasm；
+3. 在 WFSim 仓库里提交的榜单快照上取一把武器（Braton Prime）的 8 条真实榜单（4 把尺子 × 2 种模式），每一份都和参照 wasm **逐位比对**（`simfleet check-native`：分数、work 和 gas），全部一致才发布。某个平台没通过就不发布它，那个平台继续用 wasm；
 4. 发布为 Release `engine-<引擎号>`，附 sha256，说明里写明对应的 WFSim 提交、simfleet 提交和构建记录。已经发布的文件从不替换，只补缺的。
 
 **本地发布更快**：Action 因为访问不了网站，每次都得先自己编一份参照 wasm，很慢。维护者在自己电脑上运行 `tools\publish-native-engine.ps1`：编两份 Windows 版，每份都直接和**网站正在用的 wasm** 比对 32 条榜单、WFSim 客户端约定里的 gas 测试向量（`tests/gas/rows.json`）和紫卡校验，全部通过才上传缺的文件。Linux 版仍由 Action 补上——它发现 Windows 版已经在了，就只编 Linux。
@@ -198,7 +198,7 @@ AVX-512 没有额外收益：引擎是一场场按事件推进的战斗模拟，
 ```
 powershell -ExecutionPolicy Bypass -File tools\build-native-engine.ps1 [-Strip] [-Cpu x86-64-v3]
 pwsh tools/build-native-engine.ps1 [-Strip] [-Cpu x86-64-v3]      # Linux
-simfleet check-native [--rows tests/gas/rows.json] [--lanes N]   # 和网站的 wasm 逐位比对
+simfleet check-native [--rows tests/gas/rows.json] [--lanes N] [--weapons 1-4]   # 和网站的 wasm 逐位比对（默认 4 把武器、32 条）
 powershell -ExecutionPolicy Bypass -File tools\publish-native-engine.ps1 [-Lanes N] [-Jobs N] [-NoUpload]   # 维护者：编译、检查、发布
 ```
 

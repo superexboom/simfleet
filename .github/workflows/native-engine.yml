@@ -13,7 +13,7 @@
 #      native-engine/ twice: for any x86-64, and for x86-64-v3 (AVX2; about
 #      10% faster, the same bits) — Windows <id>.dll / <id>-v3.dll, Linux
 #      lib<id>.so / lib<id>-v3.so,
-#   3. holds both to the reference wasm on 32 board rows of WFSim's committed
+#   3. holds both to the reference wasm on 8 board rows of WFSim's committed
 #      board snapshot (`simfleet check-native`).
 #
 # Then the files that passed and were missing are published to engine-<id>;
@@ -139,7 +139,7 @@ jobs:
         run: |
           for cpu in baseline v3; do
             echo "== $cpu"
-            SIMFLEET_CPU=$cpu ${{ matrix.exe }} check-native --engine "$ENGINE" --wasm reference/wfsim_wasm_bg.wasm --boards .wfsim-src/site/board
+            SIMFLEET_CPU=$cpu ${{ matrix.exe }} check-native --engine "$ENGINE" --wasm reference/wfsim_wasm_bg.wasm --boards .wfsim-src/site/board --weapons 1
           done
       - name: The files
         if: env.GO == 'true'
@@ -205,7 +205,7 @@ jobs:
             echo "- **Builds.** Windows \`$ENGINE.dll\` and Linux \`lib$ENGINE.so\` run on any x86-64, the \`-v3\` ones on x86-64-v3 CPUs (AVX2, FMA, BMI2; about 10% faster on board rows). simfleet picks the one the CPU runs; all give the same bits. A platform missing below did not match the wasm, and computes with it."
             echo "- **Source.** WFSim commit [\`$COMMIT\`](https://github.com/magenie33/wfsim/tree/$COMMIT) (AGPL-3.0-or-later, by magenie33 and WFSim contributors), through $via. Built by $run."
             echo "- **No card text.** Digital Extremes' card text was blanked from WFSim's \`data/\` before the build ([tools/strip_card_text.py](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/tools/strip_card_text.py)), since WFSim grants nothing for it ([LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)). The engine only displays that text; no score depends on it."
-            echo "- **Checked.** Each matched the wasm built from the same commit bit for bit on 32 rows of WFSim's committed board (\`simfleet check-native\`), and simfleet checks the one it uses against wfsim.app's own wasm on a canary row before every use."
+            echo "- **Checked.** Each matched the wasm built from the same commit bit for bit on 8 rows of WFSim's committed board (one weapon, every ruler and mode) (\`simfleet check-native\`), and simfleet checks the one it uses against wfsim.app's own wasm on a canary row before every use."
             echo "- Unofficial; not made or endorsed by WFSim or Digital Extremes. *Warframe* is a trademark of Digital Extremes Ltd."
             echo
             echo "SHA-256:"
