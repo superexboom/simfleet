@@ -97,10 +97,11 @@ fn yes() -> bool {
     true
 }
 
-/// `max_slots = 0`: an eighth of the logical processors, 2 to 12. One group's
-/// pack can start rows on every lane, so a few feed a big machine.
+/// `max_slots = 0`: a quarter of the logical processors, 2 to 16. A pack is
+/// at most twenty rows, which a big machine runs through in seconds, and the
+/// controller opens a group only while lanes idle (fleet.rs `control`).
 pub fn auto_max_slots(cores: usize) -> usize {
-    (cores / 8).clamp(2, 12)
+    (cores / 4).clamp(2, 16)
 }
 
 impl Config {

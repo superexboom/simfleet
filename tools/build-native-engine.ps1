@@ -98,6 +98,9 @@ $suffix = ""
 if ($Cpu) {
     $suffix = if ($Cpu -match '^x86-64-(v\d)$') { "-" + $Matches[1] } else { "-$Cpu" }
     $env:RUSTFLAGS = "-C target-cpu=$Cpu"
+    # RUSTFLAGS replaces .cargo/config.toml's flags, the static C runtime with
+    # them: asked for again, or the build needs the VC++ redistributable.
+    if ($env:OS -eq "Windows_NT") { $env:RUSTFLAGS += " -C target-feature=+crt-static" }
     $env:CARGO_TARGET_DIR += "-$Cpu"
 }
 $ne = Join-Path $root "native-engine"

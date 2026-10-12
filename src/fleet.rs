@@ -54,12 +54,12 @@ use crate::engine::{Backend, Call, Code, Done, Exec, Job, Pool};
 use crate::net::Net;
 use crate::ui::{group, points, Ctl, GroupView, Ranked, TaskLine, Ui, C_BAD, C_END, C_GO, C_INFO, C_OK};
 use crate::work::{
-    board_payload, call, fetch_release, load_code, truthy, Release, RowScore, PIECE_MS, PROTOCOL, RIVEN_RENEW, STATS_EVERY,
+    board_payload, call, fetch_release, load_code, truthy, BoardRun, Release, RowScore, PROTOCOL, RIVEN_RENEW, STATS_EVERY,
 };
 use crate::{account, jsnum, sys};
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -70,13 +70,22 @@ use std::time::{Duration, Instant};
 const STARVED: Duration = Duration::from_secs(180);
 /// How often the group count is reconsidered, and what moves it: below this
 /// utilisation with less than `HELD_LOW` seconds of board work held, one more
-/// opens; more than `HELD_HIGH` held (or `HELD_FULL` on saturated lanes) closes
-/// the newest. A close keeps the count from opening again for `REOPEN_AFTER`.
+/// opens; more than `HELD_HIGH` held (or `HELD_FULL` on lanes above
+/// `FULL_ABOVE`) closes the newest. A close keeps the count from opening again
+/// for `REOPEN_AFTER`.
+///
+/// IN PACKS: a pack is about a minute of the group's work (worker/verify.js
+/// `PACK_MS`, at most `PACK_MAX` rows) and a group holds one and one asked
+/// ahead, so one group alone holds up to two minutes — and on a big machine a
+/// pack of twenty quick rows lasts seconds. So a group opens while lanes idle
+/// more than one part in twenty with less than a pack in hand, and closes only
+/// when what is held would keep every lane busy for minutes.
 const CONTROL_EVERY: Duration = Duration::from_secs(20);
-const OPEN_BELOW: f64 = 0.85;
-const HELD_LOW: f64 = 10.0;
-const HELD_FULL: f64 = 60.0;
-const HELD_HIGH: f64 = 120.0;
+const OPEN_BELOW: f64 = 0.95;
+const FULL_ABOVE: f64 = 0.98;
+const HELD_LOW: f64 = 60.0;
+const HELD_FULL: f64 = 180.0;
+const HELD_HIGH: f64 = 300.0;
 const REOPEN_AFTER: Duration = Duration::from_secs(60);
 /// A group the server told "nothing" this recently says the server has none to spare.
 const NOTHING_RECENT: Duration = Duration::from_secs(60);
@@ -94,91 +103,6 @@ const RENEW_BEFORE: Duration = Duration::from_secs(120);
 const RENEW_RETRY: Duration = Duration::from_secs(30);
 
 // ---- one task's computation, as jobs ------------------------------------------
-
-/// A BOARD ROW (69-board-work.js `measureRow`): its runs as pieces of about
-/// `PIECE_MS`, a shard per run, folded strictly in run order, then scored.
-struct BoardRun {
-    req_s: String,
-    ruler: String,
-    runs: u32,
-    cursor: u32,
-    folded: u32,
-    est: Option<f64>,
-    ready: BTreeMap<u32, Value>,
-    inflight: HashMap<u64, (u32, u32)>,
-    acc: String,
-    spent: f64,
-}
-
-impl BoardRun {
-    fn new(req: &Value, ruler: &str) -> BoardRun {
-        BoardRun {
-            req_s: req.to_string(),
-            ruler: ruler.to_string(),
-            runs: req["runs"].as_u64().unwrap_or(0) as u32,
-            cursor: 0,
-            folded: 0,
-            est: None,
-            ready: BTreeMap::new(),
-            inflight: HashMap::new(),
-            acc: "null".into(),
-            spent: 0.0,
-        }
-    }
-    fn job(&mut self, tag: u64, lanes: usize) -> Option<Call> {
-        if self.cursor >= self.runs {
-            return None;
-        }
-        let left = self.runs - self.cursor;
-        let want = self.est.map(|e| (PIECE_MS / e).round().max(1.0) as u32).unwrap_or(1);
-        let count = want.min(1000).min(left.div_ceil(lanes.max(1) as u32)).min(left).max(1);
-        let (from, req) = (self.cursor, &self.req_s);
-        self.inflight.insert(tag, (from, count));
-        self.cursor += count;
-        Some(Call::Api("/api/board/runs", format!(r#"{{"request":{req},"from":{from},"count":{count}}}"#)))
-    }
-    fn done(&mut self, d: Done, exec: &mut Exec, backend: Backend) -> Result<Option<RowScore>> {
-        let Some((from, count)) = self.inflight.remove(&d.tag) else { return Ok(None) };
-        let v = jsnum::parse(&d.out?)?;
-        let shards = v["shards"]
-            .as_array()
-            .filter(|s| s.len() == count as usize)
-            .with_context(|| format!("/api/board/runs: {}", v["error"].as_str().unwrap_or("wrong shard count")))?;
-        self.spent += d.ms;
-        let per = d.ms / count as f64;
-        self.est = Some(self.est.map_or(per, |e| e * 0.7 + per * 0.3));
-        for (i, s) in shards.iter().enumerate() {
-            self.ready.insert(from + i as u32, s.clone());
-        }
-        let mut pieces = Vec::new();
-        while let Some(s) = self.ready.remove(&(self.folded + pieces.len() as u32)) {
-            pieces.push(s);
-        }
-        if !pieces.is_empty() {
-            let n = pieces.len() as u32;
-            let body = format!(r#"{{"request":{},"acc":{},"pieces":{}}}"#, self.req_s, self.acc, Value::Array(pieces));
-            // The folds count in `compute_ms` too, as the page counts them.
-            let t = Instant::now();
-            self.acc = call(exec, backend, "/api/board/fold", body)?["acc"].to_string();
-            self.spent += t.elapsed().as_secs_f64() * 1000.0;
-            self.folded += n;
-        }
-        if self.folded < self.runs {
-            return Ok(None);
-        }
-        let t = Instant::now();
-        let body = format!(r#"{{"ruler":{},"request":{},"acc":{}}}"#, json!(self.ruler), self.req_s, self.acc);
-        let s = call(exec, backend, "/api/board/score", body)?;
-        self.spent += t.elapsed().as_secs_f64() * 1000.0;
-        Ok(Some(RowScore {
-            score: s["score"].as_f64().context("score")?,
-            metric: s["metric"].as_str().unwrap_or("").to_string(),
-            work: s["work"].as_u64().unwrap_or(0),
-            compute_ms: self.spent.round() as u64,
-            counts: s["counts"].clone(),
-        }))
-    }
-}
 
 /// A RIVEN GAIN (08-checkpoint-api.js `quickFleet`): lead steps on the leader's
 /// instance, each round's builds scored in slices — two a lane — on any lane.
@@ -1294,7 +1218,7 @@ impl Fleet {
             close("服务器暂时没有更多任务可分".into())
         } else if h > HELD_HIGH {
             close(format!("手上的榜单够全部核心算 {h:.0} 秒"))
-        } else if util > 0.95 && h > HELD_FULL {
+        } else if util > FULL_ABOVE && h > HELD_FULL {
             close(format!("核心已满，手上还有 {h:.0} 秒的活"))
         } else {
             None

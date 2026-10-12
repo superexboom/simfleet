@@ -347,6 +347,12 @@ pub enum Backend {
 pub enum Call {
     Api(&'static str, String),
     Optimize(String),
+    /// A board row's runs (`/api/board/runs`, so many of them): the answer is
+    /// its shards, read on the lane as the page reads them (work.rs `shards_text`).
+    Runs(String, u32),
+    /// A board row's fold (`/api/board/fold`): the answer is its `acc`, read
+    /// on the lane as the page reads it (work.rs `acc_text`).
+    Fold(String),
 }
 
 /// One thread's engine: instantiated on first use and thrown away after a trap,
@@ -361,20 +367,29 @@ impl Exec {
         Exec { code, wasm: None }
     }
     pub fn run(&mut self, backend: Backend, call: &Call) -> Result<String> {
+        match call {
+            Call::Api(path, body) => self.door(backend, Some(path), body),
+            Call::Optimize(body) => self.door(backend, None, body),
+            Call::Runs(body, count) => crate::work::shards_text(&self.door(backend, Some("/api/board/runs"), body)?, *count),
+            Call::Fold(body) => crate::work::acc_text(&self.door(backend, Some("/api/board/fold"), body)?),
+        }
+    }
+    /// `api(path, body)`, or `optimize(body)` with no path.
+    fn door(&mut self, backend: Backend, path: Option<&str>, body: &str) -> Result<String> {
         if let (Backend::Native, Some(n)) = (backend, &self.code.native) {
-            match call {
-                Call::Api(path, body) => return n.api(path, body),
-                Call::Optimize(body) if n.can_optimize() => return n.optimize(body),
-                Call::Optimize(_) => {}
+            match path {
+                Some(path) => return n.api(path, body),
+                None if n.can_optimize() => return n.optimize(body),
+                None => {}
             }
         }
         if self.wasm.is_none() {
             self.wasm = Some(WasmInst::new(&self.code.wasm)?);
         }
         let w = self.wasm.as_mut().unwrap();
-        let r = match call {
-            Call::Api(path, body) => w.api(path, body),
-            Call::Optimize(body) => w.optimize(body),
+        let r = match path {
+            Some(path) => w.api(path, body),
+            None => w.optimize(body),
         };
         if r.is_err() {
             self.wasm = None;

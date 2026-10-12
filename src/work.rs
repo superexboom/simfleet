@@ -13,7 +13,7 @@
 //! this side cannot tell and does not need to.
 
 use crate::config::{Config, Paths};
-use crate::engine::{Backend, Call, Code, Exec, Job, NativeLib, Pool, WasmCode};
+use crate::engine::{Backend, Call, Code, Done, Exec, Job, NativeLib, Pool, WasmCode};
 use crate::net::Net;
 use crate::ui::{Ui, C_BAD, C_END, C_GO, C_INFO};
 use crate::jsnum;
@@ -176,7 +176,7 @@ pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release
                 }
             }
             Ok(n) => ui.log(format!("{C_GO}[引擎]{C_END} {} 的引擎号是 {}，不是 {}；不使用", lib.display(), n.engine_id, rel.engine)),
-            Err(e) => ui.log(format!("{C_BAD}[引擎]{C_END} 原生引擎加载失败：{e}")),
+            Err(e) => ui.log(format!("{C_BAD}[引擎]{C_END} 原生引擎{}加载失败：{}", variant_label(variant), load_failure(&e))),
         }
     }
     // NONE OF SIMFLEET'S YET: WFSim's own library, for board rows (a riven gain
@@ -186,7 +186,7 @@ pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release
         if lib.exists() || fetch_official(net, ui, rel, &lib) {
             match NativeLib::open_official(&lib, &rel.engine) {
                 Ok(n) => code = held_to_wasm(code, n, ui, format!("WFSim 官方原生引擎 {}", rel.engine))?,
-                Err(e) => ui.log(format!("{C_BAD}[引擎]{C_END} WFSim 官方原生引擎加载失败：{e}")),
+                Err(e) => ui.log(format!("{C_BAD}[引擎]{C_END} WFSim 官方原生引擎加载失败：{}", load_failure(&e))),
             }
         }
     }
@@ -206,6 +206,18 @@ pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release
         });
     }
     Ok(code)
+}
+
+/// Why a library would not load, with what Windows said; a library that needs
+/// a DLL this machine lacks (126) is nearly always one built against the
+/// Visual C++ runtime (WFSim's own library is: vcruntime140_1.dll).
+fn load_failure(e: &anyhow::Error) -> String {
+    let why = format!("{e:#}");
+    if why.contains("os error 126") {
+        format!("{why}——多半是缺少 Microsoft Visual C++ 2015-2022 运行库（x64），装上即可；simfleet 自己发布的版本不需要它")
+    } else {
+        why
+    }
 }
 
 /// `n` beside the wasm in `code`, kept only if it gives the wasm's bits on the
@@ -490,10 +502,132 @@ pub struct RowScore {
     pub counts: Value,
 }
 
-/// ONE ROW, MEASURED (69-board-work.js `measureRow`): its runs fought on the
-/// lanes as pieces sized to about `PIECE_MS`, a shard per run, folded in run
-/// order on `exec`, then scored. `lanes(true)` is the ceiling, `lanes(false)`
-/// what may work now; `None` when `live()` went false or the engine refused.
+/// A BOARD ROW (69-board-work.js `measureRow`): its runs fought as pieces of
+/// about `PIECE_MS`, a shard per run, folded strictly in run order, then scored.
+///
+/// THE LANES READ AND FOLD, the dispatcher only joins text: a piece comes back
+/// as its shards' JSON, already read as the page reads it (`Call::Runs`), and
+/// each fold is a job of its own (`Call::Fold`), one at a time for a row. Read
+/// on the dispatcher, a run's shard (some 4 KB of JSON) cost it about 0.15 ms
+/// to parse, write out and fold — a sixth of one core on six lanes, so with
+/// sixty the lanes would wait on it. The fold's body is the same text, byte for
+/// byte, as when it was read there.
+pub struct BoardRun {
+    req_s: String,
+    ruler: String,
+    pub runs: u32,
+    cursor: u32,
+    pub folded: u32,
+    est: Option<f64>,
+    /// Pieces back and not folded yet, by their first run: how many runs, and
+    /// their shards as JSON text without the array's brackets.
+    ready: BTreeMap<u32, (u32, String)>,
+    inflight: HashMap<u64, (u32, u32)>,
+    /// The fold on a lane now, and the run it brings the row to.
+    folding: Option<(u64, u32)>,
+    acc: String,
+    spent: f64,
+}
+
+impl BoardRun {
+    pub fn new(req: &Value, ruler: &str) -> BoardRun {
+        BoardRun {
+            req_s: req.to_string(),
+            ruler: ruler.to_string(),
+            runs: req["runs"].as_u64().unwrap_or(0) as u32,
+            cursor: 0,
+            folded: 0,
+            est: None,
+            ready: BTreeMap::new(),
+            inflight: HashMap::new(),
+            folding: None,
+            acc: "null".into(),
+            spent: 0.0,
+        }
+    }
+    /// The next job: a fold of what is contiguous first (it moves the row on),
+    /// else the next piece. `lanes`: how many share the row.
+    pub fn job(&mut self, tag: u64, lanes: usize) -> Option<Call> {
+        if self.folding.is_none() {
+            let mut upto = self.folded;
+            let mut parts: Vec<String> = Vec::new();
+            while let Some((n, text)) = self.ready.remove(&upto) {
+                parts.push(text);
+                upto += n;
+            }
+            if !parts.is_empty() {
+                self.folding = Some((tag, upto));
+                return Some(Call::Fold(format!(r#"{{"request":{},"acc":{},"pieces":[{}]}}"#, self.req_s, self.acc, parts.join(","))));
+            }
+        }
+        if self.cursor >= self.runs {
+            return None;
+        }
+        let left = self.runs - self.cursor;
+        let want = self.est.map(|e| (PIECE_MS / e).round().max(1.0) as u32).unwrap_or(1);
+        let count = want.min(1000).min(left.div_ceil(lanes.max(1) as u32)).min(left).max(1);
+        let (from, req) = (self.cursor, &self.req_s);
+        self.inflight.insert(tag, (from, count));
+        self.cursor += count;
+        Some(Call::Runs(format!(r#"{{"request":{req},"from":{from},"count":{count}}}"#), count))
+    }
+    /// A job back; the row's score once its last fold is in (scored on `exec`,
+    /// once a row).
+    pub fn done(&mut self, d: Done, exec: &mut Exec, backend: Backend) -> Result<Option<RowScore>> {
+        if let Some((_, upto)) = self.folding.filter(|(t, _)| *t == d.tag) {
+            self.folding = None;
+            self.acc = d.out?;
+            // The folds count in `compute_ms` too, as the page counts them.
+            self.spent += d.ms;
+            self.folded = upto;
+            if self.folded < self.runs {
+                return Ok(None);
+            }
+            let t = Instant::now();
+            let body = format!(r#"{{"ruler":{},"request":{},"acc":{}}}"#, json!(self.ruler), self.req_s, self.acc);
+            let s = call(exec, backend, "/api/board/score", body)?;
+            self.spent += t.elapsed().as_secs_f64() * 1000.0;
+            return Ok(Some(RowScore {
+                score: s["score"].as_f64().context("score")?,
+                metric: s["metric"].as_str().unwrap_or("").to_string(),
+                work: s["work"].as_u64().unwrap_or(0),
+                compute_ms: self.spent.round() as u64,
+                counts: s["counts"].clone(),
+            }));
+        }
+        let Some((from, count)) = self.inflight.remove(&d.tag) else { return Ok(None) };
+        let text = d.out?;
+        self.spent += d.ms;
+        let per = d.ms / count as f64;
+        self.est = Some(self.est.map_or(per, |e| e * 0.7 + per * 0.3));
+        let inner = text.strip_prefix('[').and_then(|t| t.strip_suffix(']')).context("/api/board/runs: shards")?;
+        self.ready.insert(from, (count, inner.to_string()));
+        Ok(None)
+    }
+}
+
+/// A `/api/board/runs` answer as the page reads it: its `count` shards, as the
+/// JSON text the page would write them back as.
+pub fn shards_text(out: &str, count: u32) -> Result<String> {
+    let v = jsnum::parse(out)?;
+    match v["shards"].as_array() {
+        Some(s) if s.len() == count as usize => Ok(v["shards"].to_string()),
+        _ => bail!("/api/board/runs: {}", v["error"].as_str().unwrap_or("wrong shard count")),
+    }
+}
+
+/// A `/api/board/fold` answer as the page reads it: its `acc`, as JSON text.
+pub fn acc_text(out: &str) -> Result<String> {
+    let v = jsnum::parse(out)?;
+    if v["ok"] == json!(false) {
+        bail!("/api/board/fold: {}", v["error"].as_str().unwrap_or("engine refused"));
+    }
+    Ok(v["acc"].to_string())
+}
+
+/// ONE ROW, MEASURED on the lanes (`BoardRun`, as the fleet measures one):
+/// `lanes(true)` is the ceiling, `lanes(false)` what may work now; `None` when
+/// `live()` went false or the engine refused.
 #[allow(clippy::too_many_arguments)]
 pub fn measure_row(
     pool: &mut Pool,
@@ -505,83 +639,37 @@ pub fn measure_row(
     live: &dyn Fn() -> bool,
     tick: &mut dyn FnMut(u32, u32),
 ) -> Result<Option<RowScore>> {
-    let runs = req["runs"].as_u64().unwrap_or(0) as u32;
-    let req_s = req.to_string();
+    let mut row = BoardRun::new(req, ruler);
+    if row.runs == 0 {
+        bail!("a row of no runs");
+    }
     let ceiling = lanes(true).max(1);
     pool.ensure(ceiling);
-    let (mut cursor, mut folded) = (0u32, 0u32);
-    let mut est: Option<f64> = None;
-    let mut spent = 0.0f64;
-    let mut ready: BTreeMap<u32, Value> = BTreeMap::new();
-    let mut inflight: HashMap<u64, (u32, u32)> = HashMap::new();
-    let mut acc = "null".to_string();
+    let mut out = 0usize;
     loop {
         if !live() {
             return Ok(None);
         }
         let now = lanes(false).min(ceiling);
         for k in 0..now {
-            while pool.pending(k) < LANE_DEPTH && cursor < runs {
-                let left = runs - cursor;
-                let want = est.map(|e| (PIECE_MS / e).round().max(1.0) as u32).unwrap_or(1);
-                let count = want.min(1000).min(left.div_ceil(ceiling as u32)).min(left).max(1);
+            while pool.pending(k) < LANE_DEPTH {
                 let tag = pool.next_tag();
-                inflight.insert(tag, (cursor, count));
-                pool.send(k, Job {
-                    tag,
-                    backend,
-                    call: Call::Api("/api/board/runs", format!(r#"{{"request":{req_s},"from":{cursor},"count":{count}}}"#)),
-                });
-                cursor += count;
+                let Some(call) = row.job(tag, ceiling) else { break };
+                pool.send(k, Job { tag, backend, call });
+                out += 1;
             }
         }
-        if inflight.is_empty() {
-            if cursor >= runs {
-                break;
-            }
+        if out == 0 {
             std::thread::sleep(Duration::from_millis(250));
             continue;
         }
         let Some(d) = pool.recv(Duration::from_millis(200)) else { continue };
-        let Some((from, count)) = inflight.remove(&d.tag) else { continue };
-        let v = jsnum::parse(&d.out?)?;
-        let shards = v["shards"].as_array().filter(|s| s.len() == count as usize).ok_or_else(|| {
-            anyhow!("/api/board/runs: {}", v["error"].as_str().unwrap_or("wrong shard count"))
-        })?;
-        spent += d.ms;
-        let per = d.ms / count as f64;
-        est = Some(est.map_or(per, |e| e * 0.7 + per * 0.3));
-        for (i, s) in shards.iter().enumerate() {
-            ready.insert(from + i as u32, s.clone());
+        out -= 1;
+        if let Some(s) = row.done(d, exec, backend)? {
+            return Ok(Some(s));
         }
-        // FOLD WHAT IS CONTIGUOUS, in run order.
-        let mut pieces = Vec::new();
-        while let Some(s) = ready.remove(&(folded + pieces.len() as u32)) {
-            pieces.push(s);
-        }
-        if !pieces.is_empty() {
-            let n = pieces.len() as u32;
-            let body = format!(r#"{{"request":{req_s},"acc":{acc},"pieces":{}}}"#, Value::Array(pieces));
-            let f = call(exec, backend, "/api/board/fold", body)?;
-            acc = f["acc"].to_string();
-            folded += n;
-            tick(folded, runs);
-        }
+        tick(row.folded, row.runs);
     }
-    if folded != runs {
-        return Ok(None);
-    }
-    let t = Instant::now();
-    let s = call(exec, backend, "/api/board/score", format!(r#"{{"ruler":{},"request":{req_s},"acc":{acc}}}"#, json!(ruler)))?;
-    spent += t.elapsed().as_secs_f64() * 1000.0;
-    let score = s["score"].as_f64().context("score")?;
-    Ok(Some(RowScore {
-        score,
-        metric: s["metric"].as_str().unwrap_or("").to_string(),
-        work: s["work"].as_u64().unwrap_or(0),
-        compute_ms: spent.round() as u64,
-        counts: s["counts"].clone(),
-    }))
 }
 
 // ---- JS truthiness, for porting `boardPayloadFromResult` exactly ----------------
