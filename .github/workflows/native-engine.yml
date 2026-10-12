@@ -188,7 +188,7 @@ jobs:
           for ((i = 0; i < ${#up[@]}; i += 2)); do
             sums+="- \`$(basename "${up[i]}")\`: \`$(cut -d' ' -f1 "${up[i+1]}")\`"$'\n'
           done
-          via="native-engine/ at simfleet [\`$GITHUB_SHA\`]($tree)"
+          via="native-engine/ at simfleet [\`$GITHUB_SHA\`]($tree) (mimalloc as the allocator, as WFSim's own library has it)"
           if [ -n "$patches" ]; then
             via+=", with $patches from [native-engine/patches]($tree/native-engine/patches)"
           fi
