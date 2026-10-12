@@ -288,7 +288,7 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<(
         };
         ui.log(format!("{C_INFO}[引擎]{C_END} 网站引擎 {} · wasm {}", rel.engine, rel.wasm));
         let code = work::load_code(&net, &paths, &cfg, &ui, &rel)?;
-        Ok(fleet::Fleet::new(net.clone(), cfg.clone(), paths_clone(&paths), ctl.clone(), ui.clone(), rel, code))
+        Ok(fleet::Fleet::new(net.clone(), cfg.clone(), paths.clone(), ctl.clone(), ui.clone(), rel, code))
     })();
     let mut summary = None;
     match result {
@@ -327,10 +327,6 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<(
         }
     }
     Ok(())
-}
-
-fn paths_clone(p: &Paths) -> Paths {
-    Paths { dir: p.dir.clone(), config: p.config.clone(), cache: p.cache.clone(), engines: p.engines.clone() }
 }
 
 fn status(cfg: &Config) -> Result<()> {
@@ -674,7 +670,7 @@ fn main() {
                     max_cores: lanes,
                     max_slots: AtomicUsize::new(0),
                 });
-                let mut f = fleet::Fleet::new(net, cfg, paths_clone(&paths), ctl, ui, rel, code);
+                let mut f = fleet::Fleet::new(net, cfg, paths.clone(), ctl, ui, rel, code);
                 f.replay(&w)?;
             }
             "cpu" => {

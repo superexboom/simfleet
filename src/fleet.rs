@@ -22,9 +22,11 @@
 //! - ONE LANE POOL, OLDEST TASK FIRST. A free lane takes the next job of the
 //!   oldest task that has one; what that task cannot use goes to the next
 //!   (backfill), and a lane never waits on a task.
-//! - A RIVEN GAIN'S LEADER LIVES ON ITS OWN LANE: the search state is in that
-//!   lane's wasm instance between steps, so the lane takes no other task's wasm
-//!   work while the search lives (a native board piece touches no wasm, and may).
+//! - A RIVEN GAIN'S LEADER LIVES ON ITS OWN LANE: the search state is that
+//!   lane's between steps (its wasm instance, or natively its thread), so the
+//!   lane takes no other task's work while the search lives — not even a native
+//!   board piece, which the next lead step would wait behind (measured: a
+//!   search 10-15% slower).
 //! - THE NETWORK IS NEVER WAITED ON: asks, renewals and answers run on their own
 //!   threads. A plain ask (not `ahead`) makes the server take back what that id
 //!   holds, so it is only sent by an id that holds nothing and is sending nothing.
@@ -404,6 +406,8 @@ pub struct Fleet {
     recent: Vec<(String, bool, Value)>,
     stats_at: Option<Instant>,
     native_checked: Instant,
+    /// A native build being fetched and checked, off the dispatcher: for the engine named.
+    native_load: Option<(String, JoinHandle<Option<Arc<Code>>>)>,
     control_at: Instant,
     control_busy: f64,
     control_cap: f64,
@@ -453,6 +457,7 @@ impl Fleet {
             recent: Vec::new(),
             stats_at: None,
             native_checked: Instant::now(),
+            native_load: None,
             control_at: Instant::now(),
             control_busy: 0.0,
             control_cap: 0.0,
@@ -907,7 +912,6 @@ impl Fleet {
     fn fill_lanes(&mut self) -> usize {
         let lanes = self.lanes();
         self.pool.ensure(lanes);
-        let native = self.pool.code().native.is_some();
         let backend = self.backend();
         // Leaders: a riven gain without one takes the lowest free lane in budget.
         for i in 0..self.tasks.len() {
@@ -937,8 +941,8 @@ impl Fleet {
                 let mine = owner == Some(t.id);
                 let tag = self.pool.next_tag();
                 let job = match &mut t.runner {
-                    // A board piece on a leader's lane only when it needs no wasm there.
-                    Runner::Board(b) if owner.is_none() || native => b.job(tag, lanes).map(|c| (backend, c)),
+                    // Never on a leader's lane: its next lead step must not wait.
+                    Runner::Board(b) if owner.is_none() => b.job(tag, lanes).map(|c| (backend, c)),
                     Runner::Riven(r) if owner.is_none() || mine => r.job(lane, tag).map(|c| (r.backend, c)),
                     _ => None,
                 };
@@ -954,7 +958,7 @@ impl Fleet {
                     break;
                 }
             }
-            if self.pool.pending(lane) == 0 && (owner.is_none() || native) {
+            if self.pool.pending(lane) == 0 && owner.is_none() {
                 free += 1;
             }
         }
@@ -1455,12 +1459,12 @@ impl Fleet {
                 self.measure();
                 self.control();
                 self.riven_verdict();
+                self.maybe_native();
             }
             if self.tasks.is_empty() && self.sending.is_empty() {
                 if self.stats_at.is_none_or(|t| t.elapsed() > STATS_EVERY) {
                     self.refresh_stats();
                 }
-                self.maybe_native();
             } else if self.stats_at.is_none_or(|t| t.elapsed() > STATS_EVERY * 2) {
                 self.refresh_stats();
             }
@@ -1529,22 +1533,34 @@ impl Fleet {
         self.ui.status(|s| s.backend = backend.into());
     }
 
-    /// ON THE WASM, look again every half hour for a published native build of
-    /// the served engine (it appears some minutes after the engine does). Only
-    /// between tasks, since the lanes are rebuilt.
+    /// ON THE WASM, look again every ten minutes for a published native build of
+    /// the served engine (it appears some minutes or hours after the engine
+    /// does). Fetched and checked on a thread of its own, and taken up while the
+    /// lanes work: the wasm is the same, so nothing running is disturbed — a
+    /// riven gain begun on the wasm ends there, and what starts next runs natively.
     fn maybe_native(&mut self) {
-        if self.pool.code().native.is_some() || !self.cfg.native_engine || self.cfg.native_engine_url.is_empty()
-            || self.native_checked.elapsed() < Duration::from_secs(1800)
+        if self.native_load.as_ref().is_some_and(|(_, h)| h.is_finished()) {
+            let (engine, h) = self.native_load.take().expect("checked above");
+            if let Ok(Some(code)) = h.join() {
+                if engine == self.rel.engine && code.native.is_some() && self.pool.code().native.is_none() {
+                    self.riven_seen = 0;
+                    self.pool.adopt(code.clone());
+                    self.exec.adopt(code.clone());
+                    let label = crate::work::backend_label(&code);
+                    self.ui.status(|s| s.backend = label.into());
+                }
+            }
+        }
+        if self.native_load.is_some() || self.pool.code().native.is_some() || !self.cfg.native_engine || self.cfg.native_engine_url.is_empty()
+            || self.native_checked.elapsed() < Duration::from_secs(600)
         {
             return;
         }
         self.native_checked = Instant::now();
         // `load_code` fetches whichever native build is published by now.
-        if let Ok(code) = load_code(&self.net, &self.paths, &self.cfg, &self.ui, &self.rel) {
-            if code.native.is_some() {
-                self.swap_code(code);
-            }
-        }
+        let (net, paths, cfg, ui, rel) = (self.net.clone(), self.paths.clone(), self.cfg.clone(), self.ui.clone(), self.rel.clone());
+        let engine = rel.engine.clone();
+        self.native_load = Some((engine, std::thread::spawn(move || load_code(&net, &paths, &cfg, &ui, &rel).ok())));
     }
 
     /// The bottom line's numbers, summed over this machine's ids.

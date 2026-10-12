@@ -354,6 +354,11 @@ impl Exec {
         }
         r
     }
+    /// THE SAME SERVED WASM, NOW WITH A NATIVE BUILD BESIDE IT (`Pool::adopt`):
+    /// the instance stays, and a search living in it carries on.
+    pub fn adopt(&mut self, code: Arc<Code>) {
+        self.code = code;
+    }
     /// Let the wasm instance go (its memory never shrinks while it lives).
     pub fn release_wasm(&mut self) {
         self.wasm = None;
@@ -380,6 +385,8 @@ pub struct Done {
 /// in order. Lane 0's instance is the one a riven gain's search lives in.
 pub struct Pool {
     code: Arc<Code>,
+    /// What each lane runs its next job with (`adopt`).
+    latest: Arc<std::sync::Mutex<Arc<Code>>>,
     lanes: Vec<mpsc::Sender<Job>>,
     pending: Vec<usize>,
     done_tx: mpsc::Sender<Done>,
@@ -392,10 +399,17 @@ pub struct Pool {
 impl Pool {
     pub fn new(code: Arc<Code>) -> Pool {
         let (done_tx, done_rx) = mpsc::channel();
-        Pool { code, lanes: Vec::new(), pending: Vec::new(), done_tx, done_rx, tag: 0, busy_ms: 0.0 }
+        let latest = Arc::new(std::sync::Mutex::new(code.clone()));
+        Pool { code, latest, lanes: Vec::new(), pending: Vec::new(), done_tx, done_rx, tag: 0, busy_ms: 0.0 }
     }
     pub fn code(&self) -> &Arc<Code> {
         &self.code
+    }
+    /// A native build of the same engine, found while the lanes work: each lane
+    /// takes it up at its next job, keeping its instance and what lives there.
+    pub fn adopt(&mut self, code: Arc<Code>) {
+        *self.latest.lock().unwrap_or_else(|e| e.into_inner()) = code.clone();
+        self.code = code;
     }
     pub fn ensure(&mut self, n: usize) {
         while self.lanes.len() < n {
@@ -403,6 +417,7 @@ impl Pool {
             let (tx, rx) = mpsc::channel::<Job>();
             let done = self.done_tx.clone();
             let code = self.code.clone();
+            let latest = self.latest.clone();
             std::thread::Builder::new()
                 .name(format!("lane-{lane}"))
                 .stack_size(8 << 20)
@@ -424,6 +439,11 @@ impl Pool {
                             }
                             Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         };
+                        if let Ok(c) = latest.lock() {
+                            if !Arc::ptr_eq(&c, &exec.code) {
+                                exec.adopt(c.clone());
+                            }
+                        }
                         let (t, cpu) = (Instant::now(), crate::sys::thread_cpu_us());
                         let out = exec.run(job.backend, &job.call);
                         let ms = t.elapsed().as_secs_f64() * 1000.0;

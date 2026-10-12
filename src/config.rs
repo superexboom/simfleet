@@ -127,6 +127,7 @@ impl Config {
     }
 }
 
+#[derive(Clone)]
 pub struct Paths {
     pub dir: PathBuf,
     pub config: PathBuf,
