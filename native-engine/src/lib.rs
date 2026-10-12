@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! WFSim's endpoint dispatch (`wfsim_webapi::route`, what the wasm build's
+//! WFSim's endpoint dispatch (`wfsim_webapi::route_text`, what the wasm build's
 //! `api()` calls) and its optimizer (`optimize()`) behind four C functions, so simfleet can run the engine
 //! natively. The engine id is stamped in at build time by the build script.
 
 use std::ffi::c_char;
+
+/// Each thread its own heap (Cargo.toml): no lane waits on another's allocation.
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 const ENGINE_ID: &str = concat!(env!("SFE_ENGINE_ID"), "\0");
 
@@ -21,12 +25,8 @@ pub extern "C" fn sfe_engine_id() -> *const c_char {
 pub unsafe extern "C" fn sfe_api(path: *const u8, path_len: usize, body: *const u8, body_len: usize, out_len: *mut usize) -> *mut u8 {
     let path = String::from_utf8_lossy(std::slice::from_raw_parts(path, path_len)).to_string();
     let body = String::from_utf8_lossy(std::slice::from_raw_parts(body, body_len)).to_string();
-    let r = std::panic::catch_unwind(move || {
-        let v: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
-        wfsim_webapi::route(&path, &v)
-            .unwrap_or_else(|| wfsim_webapi::err_json(format!("unknown endpoint: {path}")))
-            .to_string()
-    });
+    // The wasm module's `api` is this very call (wasm/src: `route_text`).
+    let r = std::panic::catch_unwind(move || wfsim_webapi::route_text(&path, &body));
     hand_out(r, out_len)
 }
 

@@ -39,7 +39,10 @@ What simfleet takes from WFSim:
   (`tools/strip_card_text.py`): WFSim makes no grant for that text
   (LICENSE-DATA.md §4), so no published build carries it. WFSim's code is
   otherwise built as committed; the corresponding source is that commit, the
-  card-text script and `native-engine/`. The engine only displays card text; every
+  card-text script and `native-engine/`. WFSim's own signed engine library
+  (docs/CLIENTS.md "The official engine library"), when simfleet loads it, is
+  downloaded from WFSim's own storage at run time and never redistributed by
+  simfleet. The engine only displays card text; every
   published build matched the wasm built from the
   same commit bit for bit on real board rows before release, and simfleet
   checks it against wfsim.app's own wasm before every use.

@@ -155,7 +155,17 @@ simfleet 因此有两个引擎：
 
 ## 原生引擎（自动）
 
-不用自己编译。本仓库的 [native-engine](.github/workflows/native-engine.yml) Action 每 30 分钟计算一次 WFSim `main` 分支的引擎号（wfsim.app 对 GitHub 的服务器会弹出人机验证，所以 Action 完全不访问网站；网站发布的引擎号就是它所用源码的哈希）。遇到还没发布过的引擎号，它会在那次提交上，用 WFSim 自己锁定的 Rust 和 wasm-bindgen 版本：
+不用自己编译，也不用自己选。对网站正在用的引擎号，simfleet 依次找：
+
+1. **simfleet 自己发布的版本**（下面说的 Release `engine-<引擎号>`）：有 AVX2 版，紫卡增益也能走原生；
+2. **WFSim 官方的原生库**：网站发布新引擎几分钟后就有（[客户端约定](https://github.com/magenie33/wfsim/blob/main/docs/CLIENTS.md)「The official engine library」）。simfleet 先用 WFSim 的公钥验证清单的 Ed25519 签名，再核对文件大小和 sha256，任何一项不符都不用。它只有网页接口（`api`），所以只算榜单，紫卡增益仍走 wasm；不想用就把 `official_engine` 设为 `false`；
+3. 都没有就用 wasm。
+
+不管用哪一个，都要先在金丝雀榜单上和**网站自己的 wasm** 逐位比对一致才用。用着官方库时，simfleet 每 10 分钟看一次自己的版本发布了没有，发布了就不停机换上。
+
+**内存分配器**：原生引擎和 simfleet 本身都用 [mimalloc](https://github.com/microsoft/mimalloc)，每个线程有自己的堆。原来用的是 Windows 的进程堆，所有线程共用一把锁。曾经有一台跑了几个小时的客户端，10 条计算线程每条只拿到四成算力；暂停线程看调用栈，约一半时间都在 `RtlAllocateHeap` 里排队等这把锁。核心越多、跑得越久，排队越严重。WFSim 官方的原生库也用 mimalloc。分配器不改变任何一位结果，发布前照样逐位比对。
+
+本仓库的 [native-engine](.github/workflows/native-engine.yml) Action 每 30 分钟计算一次 WFSim `main` 分支的引擎号（wfsim.app 对 GitHub 的服务器会弹出人机验证，所以 Action 完全不访问网站；网站发布的引擎号就是它所用源码的哈希）。遇到还没发布过的引擎号，它会在那次提交上，用 WFSim 自己锁定的 Rust 和 wasm-bindgen 版本：
 
 1. 照 WFSim 的做法编译出 wasm，作为比对的参照；
 2. **把 Digital Extremes 的卡牌文本清空**（`tools/strip_card_text.py`），然后用这次提交原样的代码编译原生引擎（WFSim 的 [客户端约定](https://github.com/magenie33/wfsim/blob/main/docs/CLIENTS.md)：原生版必须是网站那次提交、未经修改）。每个平台编两份：一份任何 x86-64 都能跑，一份是 x86-64-v3（即 AVX2、FMA、BMI2 这一代指令，2013 年以后的 CPU 基本都有）。Windows 是 `<引擎号>.dll` / `<引擎号>-v3.dll`，Linux 是 `lib<引擎号>.so` / `lib<引擎号>-v3.so`。WFSim 对卡牌文本没有授权（见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)），所以发布的版本里不含它；引擎只拿这些文本做显示，不影响任何分数；
@@ -168,7 +178,7 @@ simfleet 因此有两个引擎：
 
 每次启动，simfleet 在后台线程上用一个小的紫卡搜索把原生和网站的 wasm 各跑一遍（领头、两片打分，和真实任务的流程一样，十来秒），**结果完全相同才让之后开始的紫卡增益走原生**，在此之前开始的照常用 wasm（一个紫卡任务从开始到结束只在一边算，中途不换）。不一致就只用于榜单，`native_riven = false` 可以关掉。实测一个真实的紫卡任务（dual_toxocyst，180 秒战斗、4 个起点，2 核）：wasm 417 s，原生 **240 s**（快 1.74 倍），最佳构筑、分数 274.4998410739098、work 205,792,130,138、41,084 场战斗、6,761 个构筑全部相同，和浏览器 V8 的参照结果也一致。
 
-simfleet 只用网站**实际发布**的引擎号：启动时在 `engines\` 里找对应的 dll，没有就去 Release 下载，校验 sha256，再在金丝雀榜单上和**网站自己的 wasm** 比对一次，一致才用；运行中用 wasm 时每 10 分钟再看一次有没有发布出来，有就在后台下载、比对，通过后不停机换上：已经在 wasm 上开始的紫卡增益照常在 wasm 上算完，之后的任务走原生，不用重启。不想用原生引擎，把 `simfleet.toml` 里的 `native_engine` 设为 `false`；只想用自己编译的，把 `native_engine_url` 设为 `""`。
+simfleet 只用网站**实际发布**的引擎号：启动时在 `engines\` 里找对应的 dll，没有就去 Release 下载，校验 sha256，再在金丝雀榜单上和**网站自己的 wasm** 比对一次，一致才用；运行中没有原生引擎时每 10 分钟再看一次有没有发布出来，有就在后台下载、比对，通过后不停机换上：已经在 wasm 上开始的紫卡增益照常在 wasm 上算完，之后的任务走原生，不用重启。不想用原生引擎，把 `simfleet.toml` 里的 `native_engine` 设为 `false`；只想用自己编译的，把 `native_engine_url` 设为 `""`、`official_engine` 设为 `false`。
 
 **按 CPU 选版本**：CPU 支持 AVX2 那一代指令时用 `-v3` 版，否则用通用版；`-v3` 不可用或比对不一致时自动退回通用版。两份算出的结果逐位相同（Rust 不会擅自合并乘加、也不会调换求和顺序）。在 Ryzen 7 9700X 上实测 Braton 榜单（1000 次模拟）：
 
@@ -190,7 +200,7 @@ simfleet check-native [--rows tests/gas/rows.json] [--lanes N]   # 和网站的 
 powershell -ExecutionPolicy Bypass -File tools\publish-native-engine.ps1 [-Lanes N] [-Jobs N] [-NoUpload]   # 维护者：编译、检查、发布
 ```
 
-网站引擎更新后，旧的 dll 自动不再使用，回到 wasm，直到新的原生引擎发布出来。
+**网站引擎更新时**：WFSim 的引擎随武器实测几乎天天变，旧引擎在被替换后 7 天内仍被接受，只要那把武器的数据没变（客户端约定里的 `accepted`）。服务器给旧引擎派活时会附上网站现在的引擎号，simfleet 一看到就在后台准备新引擎（wasm，加上能找到的原生版）。准备好后不再接新活，手上的做完、答案交完就换上新引擎接着算，不用重启，也不会交还任何任务。宽限期过了服务器才会回 `stale`，那时手上的任务交还，直接换上已经准备好的新引擎。
 
 ## 怎么做到「和浏览器一模一样」
 

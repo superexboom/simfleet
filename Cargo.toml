@@ -1,6 +1,6 @@
 [package]
 name = "simfleet"
-version = "0.6.2"
+version = "0.6.3"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 authors = ["superexboom"]
@@ -11,8 +11,14 @@ description = "A small volunteer compute client for WFSim's board orders and riv
 [dependencies]
 anyhow = "1"
 crossterm = "0.29"
+# WFSim's official engine library comes with a manifest signed by WFSim's key
+# (docs/CLIENTS.md "The official engine library").
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 getrandom = "0.3"
 libloading = "0.8"
+# Each thread its own heap: lanes allocating at once never queue on the
+# process heap's lock (they did, natively, on Windows).
+mimalloc = { version = "0.1", default-features = false }
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 # `float_roundtrip`: a number read back is the number that was written (the

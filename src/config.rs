@@ -61,6 +61,10 @@ pub struct Config {
     /// and it gave the wasm's answer on the riven canary.
     #[serde(default = "yes")]
     pub native_riven: bool,
+    /// WFSim's own native library (signed, board rows only) while simfleet's
+    /// build of the served engine is not published yet.
+    #[serde(default = "yes")]
+    pub official_engine: bool,
     /// The ids beyond `verifier`, made as groups open. Keep them to yourself too.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_verifiers: Vec<String>,
@@ -117,6 +121,7 @@ impl Config {
             slots: 0,
             max_slots: 0,
             native_riven: true,
+            official_engine: true,
             extra_verifiers: Vec::new(),
             account: Account::default(),
         }

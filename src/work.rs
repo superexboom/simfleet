@@ -80,6 +80,7 @@ pub fn native_variants() -> Vec<&'static str> {
 /// How the console names the backend a `Code` computes board rows on.
 pub fn backend_label(code: &Code) -> &'static str {
     match &code.native {
+        Some(n) if n.official => "原生（官方）",
         Some(n) if n.variant == "-v3" && n.can_optimize() => "原生 AVX2（含紫卡）",
         Some(n) if n.variant == "-v3" => "原生 AVX2",
         Some(n) if n.can_optimize() => "原生（含紫卡）",
@@ -169,27 +170,24 @@ pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release
         match NativeLib::open(&lib) {
             Ok(mut n) if n.engine_id == rel.engine => {
                 n.variant = variant;
-                code.native = Some(n);
-                let shared = Arc::new(code);
-                let checked = canary(&shared);
-                code = Arc::try_unwrap(shared).map_err(|_| anyhow!("engine still shared"))?;
-                match checked {
-                    Ok(()) => {
-                        ui.log(format!(
-                            "{C_INFO}[引擎]{C_END} 原生引擎 {}{} 与 wasm 逐位一致，榜单任务改用原生",
-                            rel.engine,
-                            variant_label(variant)
-                        ));
-                        break;
-                    }
-                    Err(e) => {
-                        code.native = None;
-                        ui.log(format!("{C_BAD}[引擎]{C_END} 原生引擎{}与 wasm 结果不一致，已停用：{e}", variant_label(variant)));
-                    }
+                code = held_to_wasm(code, n, ui, format!("原生引擎 {}{}", rel.engine, variant_label(variant)))?;
+                if code.native.is_some() {
+                    break;
                 }
             }
             Ok(n) => ui.log(format!("{C_GO}[引擎]{C_END} {} 的引擎号是 {}，不是 {}；不使用", lib.display(), n.engine_id, rel.engine)),
             Err(e) => ui.log(format!("{C_BAD}[引擎]{C_END} 原生引擎加载失败：{e}")),
+        }
+    }
+    // NONE OF SIMFLEET'S YET: WFSim's own library, for board rows (a riven gain
+    // stays on the wasm — the library's one door is `api`).
+    if code.native.is_none() && cfg.native_engine && cfg.official_engine {
+        let lib = paths.engines.join(official_lib_name(&rel.engine));
+        if lib.exists() || fetch_official(net, ui, rel, &lib) {
+            match NativeLib::open_official(&lib, &rel.engine) {
+                Ok(n) => code = held_to_wasm(code, n, ui, format!("WFSim 官方原生引擎 {}", rel.engine))?,
+                Err(e) => ui.log(format!("{C_BAD}[引擎]{C_END} WFSim 官方原生引擎加载失败：{e}")),
+            }
         }
     }
     ui.status(|s| s.note.clear());
@@ -208,6 +206,115 @@ pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release
         });
     }
     Ok(code)
+}
+
+/// `n` beside the wasm in `code`, kept only if it gives the wasm's bits on the
+/// canary rows; `what` names it in the log.
+fn held_to_wasm(mut code: Code, n: NativeLib, ui: &Ui, what: String) -> Result<Code> {
+    code.native = Some(n);
+    let shared = Arc::new(code);
+    let checked = canary(&shared);
+    let mut code = Arc::try_unwrap(shared).map_err(|_| anyhow!("engine still shared"))?;
+    match checked {
+        Ok(()) => ui.log(format!("{C_INFO}[引擎]{C_END} {what} 与 wasm 逐位一致，榜单任务改用原生")),
+        Err(e) => {
+            code.native = None;
+            ui.log(format!("{C_BAD}[引擎]{C_END} {what} 与 wasm 结果不一致，已停用：{e}"));
+        }
+    }
+    Ok(code)
+}
+
+/// WFSIM'S OWN ENGINE LIBRARY (docs/CLIENTS.md "The official engine library"):
+/// `engine/<id>.json` in its bucket is `{ sig, signed }`, `signed` the JSON
+/// text `{ engine, commit, abi, files }` signed with WFSim's Ed25519 key, each
+/// target's file `{ path, sha256, size }`.
+const OFFICIAL_BASE: &str = "https://wfsim-1388973035.cos.ap-shanghai.myqcloud.com";
+/// The key WFSim's desktop client verifies the manifest with.
+const OFFICIAL_KEY: &str = "b488481177cb0a459a685c5d66f646768e7f66c405b92ecde81025581419a95e";
+
+fn official_target() -> Option<&'static str> {
+    if cfg!(all(windows, target_arch = "x86_64")) {
+        Some("x86_64-windows")
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        Some("x86_64-linux")
+    } else {
+        None
+    }
+}
+
+pub fn official_lib_name(engine: &str) -> String {
+    native_lib_name(&format!("wfsim-{engine}"), "")
+}
+
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    (s.len() % 2 == 0).then_some(())?;
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok()).collect()
+}
+
+/// `signed` under WFSim's key, or why not.
+fn verify_official(signed: &str, sig: &str) -> Result<()> {
+    let key: [u8; 32] = unhex(OFFICIAL_KEY).and_then(|k| k.try_into().ok()).context("key")?;
+    let sig: [u8; 64] = unhex(sig).and_then(|s| s.try_into().ok()).context("签名格式不对")?;
+    let key = ed25519_dalek::VerifyingKey::from_bytes(&key)?;
+    key.verify_strict(signed.as_bytes(), &ed25519_dalek::Signature::from_bytes(&sig)).map_err(|_| anyhow!("签名不符"))
+}
+
+/// WFSim's library of `rel.engine` into `lib`, the manifest's signature
+/// checked first and then the file's size and SHA-256 — either wrong, nothing
+/// is kept. False when there is none (yet: it appears minutes after a release).
+pub fn fetch_official(net: &Net, ui: &Ui, rel: &Release, lib: &std::path::Path) -> bool {
+    let Some(target) = official_target() else { return false };
+    let got = (|| -> Result<Vec<u8>> {
+        let m: Value = serde_json::from_slice(&net.download(&format!("{OFFICIAL_BASE}/engine/{}.json", rel.engine), |_, _| {})?)?;
+        let (sig, signed) = (m["sig"].as_str().context("清单没有签名")?, m["signed"].as_str().context("清单没有内容")?);
+        verify_official(signed, sig)?;
+        let s: Value = serde_json::from_str(signed)?;
+        if s["engine"].as_str() != Some(rel.engine.as_str()) {
+            bail!("清单的引擎号是 {}", s["engine"]);
+        }
+        if s["abi"].as_u64() != Some(1) {
+            bail!("不认识的接口版本 {}", s["abi"]);
+        }
+        let f = &s["files"][target];
+        let (path, want) = (f["path"].as_str().context("清单里没有本平台")?, f["sha256"].as_str().context("sha256")?.to_lowercase());
+        ui.log(format!("{C_INFO}[引擎]{C_END} 下载 WFSim 官方原生引擎 {}", rel.engine));
+        let b = net.download(&format!("{OFFICIAL_BASE}/{path}"), |got, total| {
+            ui.status(|s| s.note = format!("下载官方原生引擎 {:.1}/{:.1} MB", got as f64 / 1e6, total as f64 / 1e6))
+        })?;
+        let have: String = Sha256::digest(&b).iter().map(|x| format!("{x:02x}")).collect();
+        if have != want || f["size"].as_u64().is_some_and(|n| n != b.len() as u64) {
+            bail!("sha256 不符");
+        }
+        Ok(b)
+    })();
+    ui.status(|s| s.note.clear());
+    match got {
+        Ok(b) => {
+            let _ = std::fs::create_dir_all(lib.parent().unwrap_or(std::path::Path::new(".")));
+            let tmp = lib.with_extension("part");
+            if std::fs::write(&tmp, &b).and_then(|_| std::fs::rename(&tmp, lib)).is_err() {
+                ui.log(format!("{C_BAD}[引擎]{C_END} 无法写入 {}", lib.display()));
+                return false;
+            }
+            true
+        }
+        Err(e) if e.is::<crate::net::NotFound>() => false,
+        Err(e) => {
+            ui.log(format!("{C_GO}[引擎]{C_END} WFSim 官方原生引擎不可用：{e:#}"));
+            false
+        }
+    }
+}
+
+/// Whether simfleet's own build of `rel.engine` is published (its `.sha256`),
+/// without fetching it.
+pub fn ours_published(net: &Net, cfg: &Config, rel: &Release) -> bool {
+    !cfg.native_engine_url.is_empty()
+        && native_variants().iter().any(|v| {
+            let name = native_lib_name(&rel.engine, v);
+            net.download(&format!("{}/engine-{}/{name}.sha256", cfg.native_engine_url.trim_end_matches('/'), rel.engine), |_, _| {}).is_ok()
+        })
 }
 
 /// A PUBLISHED NATIVE ENGINE for this engine id, if one exists yet

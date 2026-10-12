@@ -27,6 +27,10 @@
 //!   lane takes no other task's work while the search lives — not even a native
 //!   board piece, which the next lead step would wait behind (measured: a
 //!   search 10-15% slower).
+//! - THE SERVED ENGINE IS FOLLOWED, NOT WAITED FOR: an older engine is still
+//!   handed board rows for a week (docs/CLIENTS.md `accepted`), so when the site
+//!   names a newer one the client fetches it on a thread of its own, finishes
+//!   what it holds on the old one, and computes the next work on the new.
 //! - THE NETWORK IS NEVER WAITED ON: asks, renewals and answers run on their own
 //!   threads. A plain ask (not `ahead`) makes the server take back what that id
 //!   holds, so it is only sent by an id that holds nothing and is sending nothing.
@@ -408,6 +412,12 @@ pub struct Fleet {
     native_checked: Instant,
     /// A native build being fetched and checked, off the dispatcher: for the engine named.
     native_load: Option<(String, JoinHandle<Option<Arc<Code>>>)>,
+    /// THE ENGINE THE SITE SERVES NOW, being made ready off the dispatcher…
+    engine_load: Option<(String, JoinHandle<Option<(Release, Arc<Code>)>>)>,
+    /// …ready: no more work is asked, and once what is held is done, it runs.
+    switch_to: Option<(Release, Arc<Code>)>,
+    /// When a failed preparation may be tried again.
+    engine_retry: Instant,
     control_at: Instant,
     control_busy: f64,
     control_cap: f64,
@@ -458,6 +468,9 @@ impl Fleet {
             stats_at: None,
             native_checked: Instant::now(),
             native_load: None,
+            engine_load: None,
+            switch_to: None,
+            engine_retry: Instant::now(),
             control_at: Instant::now(),
             control_busy: 0.0,
             control_cap: 0.0,
@@ -697,7 +710,7 @@ impl Fleet {
                     self.take_reply(gi, ahead, at, reply);
                 }
             }
-            if self.groups[gi].asking.is_some() || self.offline || self.stale || self.banned_until.is_some() || self.refused.is_some() {
+            if self.groups[gi].asking.is_some() || self.offline || self.stale || self.switch_to.is_some() || self.banned_until.is_some() || self.refused.is_some() {
                 continue;
             }
             // WHAT THE GROUP HOLDS: its packs and the riven gains it computes.
@@ -757,6 +770,11 @@ impl Fleet {
         if r["stale"] == json!(true) {
             self.stale = true;
             return;
+        }
+        // AN OLDER ENGINE STILL ACCEPTED: the site serves `engine` now, and takes
+        // this one's answers on the rows it hands it until `accepted_until`.
+        if let Some(e) = r["engine"].as_str().filter(|e| *e != self.rel.engine) {
+            self.served_moved(e.to_string(), r["accepted_until"].as_str().unwrap_or("?").to_string());
         }
         if r["banned"] == json!(true) {
             let until = r["until"].as_str().unwrap_or("?").to_string();
@@ -1459,6 +1477,7 @@ impl Fleet {
                 self.measure();
                 self.control();
                 self.riven_verdict();
+                self.follow_engine();
                 self.maybe_native();
             }
             if self.tasks.is_empty() && self.sending.is_empty() {
@@ -1507,6 +1526,11 @@ impl Fleet {
 
     /// The served engine moved on: fetch it, and run it from the next task.
     fn refresh_engine(&mut self) -> Result<()> {
+        if let Some((rel, code)) = self.switch_to.take() {
+            self.stale = false;
+            self.take_engine(rel, code);
+            return Ok(());
+        }
         let rel = fetch_release(&self.net)?;
         self.stale = false;
         if rel.engine == self.rel.engine {
@@ -1521,6 +1545,64 @@ impl Fleet {
         self.ui.status(|s| s.engine = rel.engine.clone());
         self.rel = rel;
         Ok(())
+    }
+
+    /// The site names `engine`, not ours: make it ready on a thread of its
+    /// own — the wasm, and a native build if one is published (simfleet's, or
+    /// WFSim's own) — while the lanes go on with the old one.
+    fn served_moved(&mut self, engine: String, until: String) {
+        let busy = self.engine_load.as_ref().is_some_and(|(e, _)| *e == engine) || self.switch_to.as_ref().is_some_and(|(r, _)| r.engine == engine);
+        if busy || Instant::now() < self.engine_retry {
+            return;
+        }
+        self.ui.log(format!(
+            "{C_INFO}[引擎]{C_END} 网站引擎已更新 {} → {engine}；本机的引擎在 {until} 前仍被接受，新引擎在后台准备，准备好后接着用",
+            self.rel.engine
+        ));
+        let (net, paths, cfg, ui) = (self.net.clone(), self.paths.clone(), self.cfg.clone(), self.ui.clone());
+        let h = std::thread::spawn(move || {
+            let rel = fetch_release(&net).ok()?;
+            let code = load_code(&net, &paths, &cfg, &ui, &rel).ok()?;
+            Some((rel, code))
+        });
+        self.engine_load = Some((engine, h));
+    }
+
+    /// A prepared engine is taken up once nothing is held on the old one: no
+    /// more is asked meanwhile, and what is held is finished (and answered) first.
+    fn follow_engine(&mut self) {
+        if self.engine_load.as_ref().is_some_and(|(_, h)| h.is_finished()) {
+            let (engine, h) = self.engine_load.take().expect("checked above");
+            match h.join().ok().flatten() {
+                Some((rel, code)) if rel.engine != self.rel.engine => {
+                    self.ui.log(format!(
+                        "{C_INFO}[引擎]{C_END} 新引擎 {}（{}）已准备好：手上的活做完就换上",
+                        rel.engine,
+                        crate::work::backend_label(&code)
+                    ));
+                    self.switch_to = Some((rel, code));
+                }
+                // The site's page still names ours (a cache): asked again in a minute.
+                Some(_) => self.engine_retry = Instant::now() + Duration::from_secs(60),
+                None => {
+                    self.engine_retry = Instant::now() + Duration::from_secs(600);
+                    self.ui.log(format!("{C_GO}[引擎]{C_END} 新引擎 {engine} 没能准备好，10 分钟后再试；旧引擎照常计算"));
+                }
+            }
+        }
+        let idle = self.tasks.is_empty() && self.packs.is_empty() && self.sending.is_empty() && self.groups.iter().all(|g| g.asking.is_none());
+        if idle {
+            if let Some((rel, code)) = self.switch_to.take() {
+                self.take_engine(rel, code);
+            }
+        }
+    }
+
+    fn take_engine(&mut self, rel: Release, code: Arc<Code>) {
+        self.ui.log(format!("{C_INFO}[引擎]{C_END} 已换上网站引擎 {} → {}", self.rel.engine, rel.engine));
+        self.swap_code(code);
+        self.ui.status(|s| s.engine = rel.engine.clone());
+        self.rel = rel;
     }
 
     fn swap_code(&mut self, code: Arc<Code>) {
@@ -1539,10 +1621,17 @@ impl Fleet {
     /// lanes work: the wasm is the same, so nothing running is disturbed — a
     /// riven gain begun on the wasm ends there, and what starts next runs natively.
     fn maybe_native(&mut self) {
+        // What the lanes have now: nothing native, or WFSim's own library (which
+        // simfleet's build, with riven gains and AVX2, replaces once published).
+        let have = self.pool.code().native.as_ref().map(|n| n.official);
         if self.native_load.as_ref().is_some_and(|(_, h)| h.is_finished()) {
             let (engine, h) = self.native_load.take().expect("checked above");
             if let Ok(Some(code)) = h.join() {
-                if engine == self.rel.engine && code.native.is_some() && self.pool.code().native.is_none() {
+                let better = match (have, code.native.as_ref().map(|n| n.official)) {
+                    (None, Some(_)) | (Some(true), Some(false)) => true,
+                    _ => false,
+                };
+                if engine == self.rel.engine && better && self.switch_to.is_none() {
                     self.riven_seen = 0;
                     self.pool.adopt(code.clone());
                     self.exec.adopt(code.clone());
@@ -1551,16 +1640,25 @@ impl Fleet {
                 }
             }
         }
-        if self.native_load.is_some() || self.pool.code().native.is_some() || !self.cfg.native_engine || self.cfg.native_engine_url.is_empty()
+        if self.native_load.is_some() || self.engine_load.is_some() || self.switch_to.is_some() || have == Some(false) || !self.cfg.native_engine
             || self.native_checked.elapsed() < Duration::from_secs(600)
         {
             return;
         }
         self.native_checked = Instant::now();
-        // `load_code` fetches whichever native build is published by now.
+        // `load_code` fetches whichever native build is published by now — with
+        // WFSim's library in use, only once simfleet's own is.
         let (net, paths, cfg, ui, rel) = (self.net.clone(), self.paths.clone(), self.cfg.clone(), self.ui.clone(), self.rel.clone());
         let engine = rel.engine.clone();
-        self.native_load = Some((engine, std::thread::spawn(move || load_code(&net, &paths, &cfg, &ui, &rel).ok())));
+        self.native_load = Some((
+            engine,
+            std::thread::spawn(move || {
+                if have == Some(true) && !crate::work::ours_published(&net, &cfg, &rel) {
+                    return None;
+                }
+                load_code(&net, &paths, &cfg, &ui, &rel).ok()
+            }),
+        ));
     }
 
     /// The bottom line's numbers, summed over this machine's ids.

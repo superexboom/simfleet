@@ -14,6 +14,11 @@ crate-type = ["cdylib"]
 wfsim-webapi = { path = "../.wfsim-src/webapi" }
 wfsim-optimizer = { path = "../.wfsim-src/optimizer" }
 serde_json = { version = "1", features = ["raw_value", "float_roundtrip"] }
+# THE LIBRARY'S OWN ALLOCATOR, as WFSim's own native library has it
+# (native/Cargo.toml): lanes allocating at once queued on Windows' process heap
+# (a live client's lanes were found waiting there half their time). An
+# allocator moves no bit of an answer.
+mimalloc = { version = "0.1", default-features = false }
 
 [profile.release]
 codegen-units = 1

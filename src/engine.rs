@@ -198,8 +198,9 @@ type OptimizeFn = unsafe extern "C" fn(*const u8, usize, *mut usize) -> *mut u8;
 type FreeFn = unsafe extern "C" fn(*mut u8, usize);
 type IdFn = unsafe extern "C" fn() -> *const std::ffi::c_char;
 
-/// A native engine library (native-engine/): `sfe_api`, `sfe_free`,
-/// `sfe_engine_id`, and in a build with the optimizer patch `sfe_optimize`.
+/// A native engine library: simfleet's build (native-engine/: `sfe_api`,
+/// `sfe_free`, `sfe_engine_id`, `sfe_optimize`) or WFSim's own (abi 1:
+/// `wfsim_api` and `wfsim_free`, the same two doors, and no optimizer).
 pub struct NativeLib {
     _lib: libloading::Library,
     api: ApiFn,
@@ -208,6 +209,8 @@ pub struct NativeLib {
     pub engine_id: String,
     /// The CPU level it was built for: "" or "-v3" (`work::native_variants`).
     pub variant: &'static str,
+    /// WFSim's official library (work.rs `fetch_official`), not simfleet's build.
+    pub official: bool,
     /// ITS OPTIMIZER held to the wasm (work.rs `riven_canary`, on its own
     /// thread): 0 not asked, 1 checking, 2 the same answer, 3 not — and why.
     riven: std::sync::atomic::AtomicU8,
@@ -232,6 +235,30 @@ impl NativeLib {
                 free,
                 engine_id,
                 variant: "",
+                official: false,
+                riven: Default::default(),
+                riven_why: Default::default(),
+            })
+        }
+    }
+
+    /// WFSim's official library of `engine` (docs/CLIENTS.md, abi 1), its
+    /// manifest's signature and the file's digest checked before (work.rs).
+    pub fn open_official(path: &Path, engine: &str) -> Result<NativeLib> {
+        // SAFETY: a library whose signed manifest names this engine and abi 1:
+        // two plain C functions over byte buffers, as `sfe_api` and `sfe_free`.
+        unsafe {
+            let lib = libloading::Library::new(path)?;
+            let api: ApiFn = *lib.get::<ApiFn>(b"wfsim_api\0")?;
+            let free: FreeFn = *lib.get::<FreeFn>(b"wfsim_free\0")?;
+            Ok(NativeLib {
+                _lib: lib,
+                api,
+                optimize: None,
+                free,
+                engine_id: engine.to_string(),
+                variant: "",
+                official: true,
                 riven: Default::default(),
                 riven_why: Default::default(),
             })

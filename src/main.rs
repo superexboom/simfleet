@@ -10,6 +10,10 @@
 //! Copyright (C) magenie33 and WFSim contributors. AGPL-3.0-or-later; see
 //! NOTICE.md and LICENSE.
 
+/// Each thread its own heap (Cargo.toml).
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod account;
 mod affinity;
 mod config;
@@ -404,6 +408,8 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boa
     let mut cfg = Config::fresh(sys::cores());
     cfg.native_engine = true;
     cfg.native_engine_url = String::new();
+    // The build under test, never WFSim's own library in its place.
+    cfg.official_engine = false;
     let net = net::Net::new(&cfg.server, None);
     let ui = Ui::new();
     let code = match (engine, wasm) {
