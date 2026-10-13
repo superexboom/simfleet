@@ -344,6 +344,8 @@ pub struct Fleet {
     native_load: Option<(String, JoinHandle<Option<Arc<Code>>>)>,
     /// The bottom line's numbers being asked for (`refresh_stats`).
     stats_job: Option<JoinHandle<()>>,
+    /// The ranking as it was seen, a refresh at a time (`paces`).
+    rank_seen: Arc<std::sync::Mutex<VecDeque<(Instant, HashMap<String, u64>)>>>,
     /// `/release.json` being read, and when it last was (`follow_engine`).
     release_read: Option<JoinHandle<Option<Value>>>,
     release_at: Instant,
@@ -406,6 +408,7 @@ impl Fleet {
             native_checked: Instant::now(),
             native_load: None,
             stats_job: None,
+            rank_seen: Arc::default(),
             release_read: None,
             release_at: Instant::now(),
             busy_said: None,
@@ -1655,7 +1658,7 @@ impl Fleet {
                 (g.verifier.clone(), mine(false), mine(true))
             })
             .collect();
-        let (net, ui, name) = (self.net.clone(), self.ui.clone(), self.cfg.account.name.clone());
+        let (net, ui, name, seen) = (self.net.clone(), self.ui.clone(), self.cfg.account.name.clone(), self.rank_seen.clone());
         self.stats_job = Some(std::thread::spawn(move || {
             let (mut device, mut today, mut any) = (0u64, 0u64, false);
             for (v, _, _) in &groups {
@@ -1670,6 +1673,8 @@ impl Fleet {
             // the ranking is the page's own (`/api/contributors`).
             let demand = net.get("/api/board/demand").ok().map(|r| r.body).filter(|b| b["ok"] == json!(true));
             let top = net.get("/api/contributors?period=week&limit=40").ok().map(|r| r.body).filter(|b| b["ok"] == json!(true));
+            let rows: Vec<Value> = top.as_ref().and_then(|t| t["contributors"].as_array().cloned()).unwrap_or_default();
+            let rates = paces(&seen, &rows, Instant::now());
             let (mut confirmed, mut waiting, mut told) = (0u64, 0u64, false);
             for (v, orders, tasks) in &groups {
                 if !orders.is_empty() {
@@ -1728,15 +1733,15 @@ impl Fleet {
                 }
                 if let Some(t) = &top {
                     s.ranking_total = t["total"].as_u64();
-                    s.ranking = t["contributors"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
+                    s.ranking = rows
+                        .iter()
+                        .zip(&rates)
                         .enumerate()
-                        .map(|(i, r)| Ranked {
+                        .map(|(i, (r, rate))| Ranked {
                             rank: i as u64 + 1,
                             name: r["name"].as_str().unwrap_or("匿名").chars().filter(|c| !c.is_control()).take(24).collect(),
                             points: r["week"].as_u64().unwrap_or(0),
+                            rate: *rate,
                             you: r["you"] == json!(true),
                         })
                         .collect();
@@ -1748,6 +1753,34 @@ impl Fleet {
             });
         }));
     }
+}
+
+/// THE RANKING'S PACE: no time is given beside a contributor's points, so it
+/// is read off the ranking itself — each one's all-time `points` (the week's
+/// sum drops as days pass out of it) against the oldest sighting of the last
+/// `PACE_WINDOW`, as points a minute. Under `PACE_LEAST` apart says nothing
+/// (the site's ranking is worked out a minute at a time and may answer the last
+/// one for five): the first rates come with the second refresh or so.
+const PACE_WINDOW: Duration = Duration::from_secs(1800);
+const PACE_LEAST: Duration = Duration::from_secs(240);
+
+fn paces(seen: &std::sync::Mutex<VecDeque<(Instant, HashMap<String, u64>)>>, rows: &[Value], now: Instant) -> Vec<Option<f64>> {
+    let here: HashMap<String, u64> = rows.iter().filter_map(|r| Some((r["key"].as_str()?.to_string(), r["points"].as_u64()?))).collect();
+    let Ok(mut seen) = seen.lock() else { return vec![None; rows.len()] };
+    while seen.len() > 1 && seen.front().is_some_and(|(t, _)| now.duration_since(*t) > PACE_WINDOW) {
+        seen.pop_front();
+    }
+    let base = seen.front().filter(|(t, _)| now.duration_since(*t) >= PACE_LEAST).cloned();
+    if !here.is_empty() {
+        seen.push_back((now, here));
+    }
+    rows.iter()
+        .map(|r| {
+            let (t, then) = base.as_ref()?;
+            let (was, is) = (*then.get(r["key"].as_str()?)?, r["points"].as_u64()?);
+            (is >= was).then(|| (is - was) as f64 * 60.0 / now.duration_since(*t).as_secs_f64())
+        })
+        .collect()
 }
 
 /// A SEND THAT GOT NO REPLY IS SENT AGAIN (69-board-work.js `sendAgain`), a
@@ -1812,5 +1845,29 @@ impl Meter {
         let (wb, wc) = self.window.iter().fold((0.0, 0.0), |a, w| (a.0 + w.1, a.1 + w.2));
         let pct = |b: f64, c: f64| (c > 1000.0).then(|| (b / c).min(1.0));
         (pct(wb, wc), pct(self.busy_total, self.cap_total))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ranking_pace() {
+        let seen = std::sync::Mutex::new(VecDeque::new());
+        let t0 = Instant::now();
+        let at = |a: u64, b: u64| vec![json!({"key": "a", "points": a}), json!({"key": "b", "points": b})];
+        // First sight, then too soon: nothing yet.
+        assert_eq!(paces(&seen, &at(1000, 50), t0), vec![None, None]);
+        assert_eq!(paces(&seen, &at(1100, 50), t0 + Duration::from_secs(60)), vec![None, None]);
+        // Five minutes on: against the first sighting, points a minute.
+        let r = paces(&seen, &at(1500, 50), t0 + Duration::from_secs(300));
+        assert_eq!(r, vec![Some(100.0), Some(0.0)]);
+        // Someone new to the ranking has no rate; one whose points fell, none either.
+        let r = paces(&seen, &[json!({"key": "a", "points": 900}), json!({"key": "c", "points": 7})], t0 + Duration::from_secs(600));
+        assert_eq!(r, vec![None, None]);
+        // Past the window the oldest sightings go, but one is always kept.
+        let r = paces(&seen, &at(4000, 50), t0 + Duration::from_secs(4000));
+        assert!(r[0].is_some());
     }
 }

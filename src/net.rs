@@ -12,15 +12,20 @@ use std::time::{Duration, Instant};
 pub const USER_AGENT: &str = concat!("simfleet/", env!("CARGO_PKG_VERSION"), " (volunteer compute client for wfsim.app)");
 
 /// THE RELAY (WFSim docs/DISTRIBUTION.md §"The relay", 69-board-work.js
-/// `chooseRoute`): a server in Hong Kong that carries `/api/board/` alone to
-/// wfsim.app, for readers whose road to the edge is poor. Both roads are timed
-/// every `ROUTE_EVERY` (`/api/board/ping`, `ROUTE_TRIES` each, the median) and
-/// the quicker is taken; a call the relay drops goes direct at once, and the
-/// relay is left alone until the next timing. No cookie crosses it.
+/// `chooseRoute`): a server in Hong Kong that carries the board's work
+/// (`RELAY_PATHS`) to wfsim.app, for readers whose road to the edge is poor.
+/// Both roads are timed every `ROUTE_EVERY` (`/api/board/ping`, `ROUTE_TRIES`
+/// each, the median) and the quicker is taken; a call either road drops goes
+/// by the other at once, which is then kept until the next timing, and a call
+/// both drop has the roads timed again. No cookie crosses it.
 const SITE: &str = "https://wfsim.app";
 const RELAY: &str = "https://cn.wfsim.app";
 const ROUTE_EVERY: Duration = Duration::from_secs(600);
 const ROUTE_TRIES: usize = 3;
+/// WHAT THE RELAY CARRIES (69-board-work.js `RELAY_PATHS`, the same list as its
+/// nginx site): anything else it answers 404.
+const RELAY_PATHS: [&str; 7] =
+    ["/api/board/work", "/api/board/answers", "/api/board/renew", "/api/board/release", "/api/board/mine", "/api/board/points", "/api/board/ping"];
 
 #[derive(Default)]
 struct Route {
@@ -96,11 +101,11 @@ impl Net {
         self.route.lock().map(|r| r.relay).unwrap_or(false)
     }
 
-    /// The road for `path`: the relay's base, or `None` to go direct. A timing
-    /// that is due starts on a thread of its own; this call goes by the road
-    /// chosen last.
-    fn road(&self, path: &str) -> Option<&'static str> {
-        if self.base != SITE || !path.starts_with("/api/board/") {
+    /// The road for `path`: `Some(true)` by the relay, `Some(false)` direct,
+    /// `None` when the relay does not carry it. A timing that is due starts on
+    /// a thread of its own; this call goes by the road chosen last.
+    fn road(&self, path: &str) -> Option<bool> {
+        if self.base != SITE || !RELAY_PATHS.contains(&path) {
             return None;
         }
         let mut r = self.route.lock().ok()?;
@@ -116,7 +121,7 @@ impl Net {
                 }
             });
         }
-        r.relay.then_some(RELAY)
+        Some(r.relay)
     }
 
     /// The median of `ROUTE_TRIES` pings by one road, in seconds; infinite when one fails.
@@ -161,32 +166,38 @@ impl Net {
     }
 
     /// POST JSON; `Err` only when the network failed or the answer was not JSON.
-    /// The board's work may go by the relay (`road`), and goes direct at once
-    /// when the relay drops it.
+    /// The board's work goes by the road chosen (`road`), and by the other at
+    /// once when that one drops it (no answer, or not 2xx, as the page's
+    /// `postBoardTo` reads it).
     pub fn post(&self, path: &str, body: &Value) -> Result<Reply> {
         let text = body.to_string();
-        if let Some(relay) = self.road(path) {
-            let url = format!("{relay}{path}");
-            let got = self
-                .call(|a| a.post(&url).header("Content-Type", "application/json").send(text.as_str()))
-                .and_then(|mut r| Self::reply(&mut r))
-                .ok()
-                .filter(|r| (200..300).contains(&r.status));
-            if let Some(r) = got {
-                return Ok(r);
-            }
-            if let Ok(mut r) = self.route.lock() {
-                r.relay = false;
-                r.at = Some(Instant::now());
-            }
+        let Some(relay) = self.road(path) else { return self.post_by(false, path, &text) };
+        let first = self.post_by(relay, path, &text);
+        if matches!(&first, Ok(r) if (200..300).contains(&r.status)) {
+            return first;
         }
+        let again = self.post_by(!relay, path, &text);
+        let ok = matches!(&again, Ok(r) if (200..300).contains(&r.status));
+        if let Ok(mut r) = self.route.lock() {
+            r.relay = !relay;
+            // Both dropped it: the roads are timed again on the next call.
+            r.at = ok.then(Instant::now);
+        }
+        again
+    }
+
+    /// One POST by the relay or direct; the session goes only direct.
+    fn post_by(&self, relay: bool, path: &str, text: &str) -> Result<Reply> {
         let mut resp = self.call(|a| {
+            if relay {
+                return a.post(&format!("{RELAY}{path}")).header("Content-Type", "application/json").send(text);
+            }
             let mut req = a.post(&self.url(path)).header("Content-Type", "application/json");
             // The session is the site's: never sent to another host.
             if let (Some(s), false) = (&self.session, path.starts_with("http")) {
                 req = req.header("Cookie", &format!("wfsim_session={s}"));
             }
-            req.send(text.as_str())
+            req.send(text)
         })?;
         Self::reply(&mut resp)
     }

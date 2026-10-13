@@ -65,6 +65,8 @@ pub struct Ranked {
     pub rank: u64,
     pub name: String,
     pub points: u64,
+    /// Points a minute lately (fleet.rs `paces`), once measured.
+    pub rate: Option<f64>,
     pub you: bool,
 }
 
@@ -170,6 +172,17 @@ pub fn group(n: u64) -> String {
         out.push(c);
     }
     out
+}
+
+/// A rate of points a minute: "1,234", "56", "7.8".
+fn per_min(r: f64) -> String {
+    if r >= 100.0 {
+        group(r.round() as u64)
+    } else if r >= 10.0 {
+        format!("{r:.0}")
+    } else {
+        format!("{r:.1}")
+    }
 }
 
 /// 23468.6 → "23,468.6"
@@ -1115,7 +1128,13 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
     }
 
     if yy + 2 < end && !s.ranking.is_empty() {
-        let total = s.ranking_total.map(|t| format!("共 {t} 人")).unwrap_or_default();
+        // THE PACE beside the points: what each one's points grew by a minute
+        // over the last half hour, as the ranking showed them (fleet.rs `paces`).
+        let pace = if s.ranking.iter().any(|r| r.rate.is_some()) { "每分钟按近半小时" } else { "每分钟测量中" };
+        let total = match s.ranking_total {
+            Some(t) => format!("共 {t} 人 · {pace}"),
+            None => pace.to_string(),
+        };
         header(c, x, yy, w, " 本周贡献榜 ", &total, HDR);
         yy += 1;
         for r in &s.ranking {
@@ -1136,8 +1155,16 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
             let p = group(r.points);
             let pw = c.tw(&p);
             c.text(x + w - pw - 1, yy, pw, &p, Sty { fg: Some(255), ..base });
+            // The pace, where the name keeps room enough.
+            let rate = r.rate.map(|v| format!("{}/分", per_min(v))).unwrap_or_default();
+            let rw = c.tw(&rate);
+            let rate_at = (x + w).saturating_sub(pw + 1 + rw + 2);
+            let (name_w, rw) = if rw > 0 && rate_at >= x + 6 + 8 { (rate_at - (x + 6) - 1, rw) } else { (w.saturating_sub(pw + 8), 0) };
+            if rw > 0 {
+                c.text(rate_at, yy, rw, &rate, Sty { fg: Some(if r.rate.is_some_and(|v| v > 0.0) { 114 } else { 244 }), ..base });
+            }
             let name = if r.you { format!("{}（你）", r.name) } else { r.name.clone() };
-            c.text(x + 6, yy, w.saturating_sub(pw + 8), &name, base);
+            c.text(x + 6, yy, name_w, &name, base);
             yy += 1;
         }
     }
@@ -1264,7 +1291,15 @@ mod tests {
             computing_now: Some(37),
             owed: Some(23_320),
             per_hour: Some((1212, 77)),
-            ranking: (1..=12).map(|i| Ranked { rank: i, name: if i == 3 { "季·术宅".into() } else { format!("player{i}") }, points: 700_000 / i, you: i == 5 }).collect(),
+            ranking: (1..=12)
+                .map(|i| Ranked {
+                    rank: i,
+                    name: if i == 3 { "季·术宅".into() } else { format!("player{i}") },
+                    points: 700_000 / i,
+                    rate: (i != 4).then(|| 700.0 / (i * i) as f64),
+                    you: i == 5,
+                })
+                .collect(),
             ranking_total: Some(79),
             utilisation: Some(0.88),
             tasks: vec![

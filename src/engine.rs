@@ -14,7 +14,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use std::path::Path;
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use wasmtime::{Caller, Config, Engine, ExternType, Func, Linker, Memory, Module, Ref, Store, Table, TypedFunc, Val, ValType};
 
@@ -198,11 +198,79 @@ type OptimizeFn = unsafe extern "C" fn(*const u8, usize, *mut usize) -> *mut u8;
 type FreeFn = unsafe extern "C" fn(*mut u8, usize);
 type IdFn = unsafe extern "C" fn() -> *const std::ffi::c_char;
 
+type LibJob = Box<dyn FnOnce() + Send>;
+
+/// THE LIBRARY THREAD: every native library is loaded, and let go, on this
+/// one thread, which lives as long as simfleet does.
+///
+/// mimalloc — in simfleet's builds and in WFSim's own library — takes the
+/// thread that loads a library for that library's main thread. On its v3 core
+/// (WFSim's library has it; simfleet's builds before 0.6.6 had it), when that
+/// thread ends the main heap goes with it (`_mi_theap_free` sets its `tld` to
+/// NULL), and the next thread the system builds on the same TEB (on Linux, the
+/// same thread pointer) is taken for the main thread and reads through that
+/// NULL: 0xC0000005, no message. Loaded on the short-lived thread that fetched
+/// a new engine, a library crashed a running client a few hundred threads
+/// later (the optimizer starts one a batch, and each engine change a new set
+/// of lanes).
+fn lib_thread() -> &'static mpsc::Sender<LibJob> {
+    static TX: OnceLock<mpsc::Sender<LibJob>> = OnceLock::new();
+    TX.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<LibJob>();
+        std::thread::Builder::new()
+            .name("libraries".into())
+            .spawn(move || {
+                // Never ends: the sender is held for good above.
+                for job in rx {
+                    job();
+                }
+            })
+            .expect("spawn the library thread");
+        tx
+    })
+}
+
+/// `f` on the library thread, waited for.
+fn on_lib_thread<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> R {
+    let (back, got) = mpsc::sync_channel(1);
+    let job: LibJob = Box::new(move || {
+        let _ = back.send(std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)));
+    });
+    lib_thread().send(job).expect("the library thread lives as long as simfleet");
+    match got.recv().expect("the library thread lives as long as simfleet") {
+        Ok(r) => r,
+        Err(p) => std::panic::resume_unwind(p),
+    }
+}
+
+/// A library let go of on the library thread (`lib_thread`), not waited for.
+struct LibHandle(Option<libloading::Library>);
+impl LibHandle {
+    /// SAFETY: as `libloading::Library::new` — a library whose initialisers
+    /// are its own allocator's and the Rust runtime's.
+    unsafe fn open(path: &Path) -> Result<LibHandle> {
+        let path = path.to_path_buf();
+        // SAFETY: as the caller's.
+        on_lib_thread(move || unsafe { libloading::Library::new(&path) }.map(|l| LibHandle(Some(l))).map_err(Into::into))
+    }
+    fn lib(&self) -> &libloading::Library {
+        self.0.as_ref().expect("held until drop")
+    }
+}
+impl Drop for LibHandle {
+    fn drop(&mut self) {
+        if let Some(l) = self.0.take() {
+            let _ = lib_thread().send(Box::new(move || drop(l)));
+        }
+    }
+}
+
 /// A native engine library: simfleet's build (native-engine/: `sfe_api`,
 /// `sfe_free`, `sfe_engine_id`, `sfe_optimize`) or WFSim's own (abi 1:
 /// `wfsim_api` and `wfsim_free`, the same two doors, and no optimizer).
+/// Loaded and let go on the library thread (`lib_thread`), called from any.
 pub struct NativeLib {
-    _lib: libloading::Library,
+    _lib: LibHandle,
     api: ApiFn,
     optimize: Option<OptimizeFn>,
     free: FreeFn,
@@ -222,11 +290,11 @@ impl NativeLib {
         // SAFETY: a library built from native-engine/ for this platform; its
         // three entry points are plain C functions over byte buffers.
         unsafe {
-            let lib = libloading::Library::new(path)?;
-            let api: ApiFn = *lib.get::<ApiFn>(b"sfe_api\0")?;
-            let free: FreeFn = *lib.get::<FreeFn>(b"sfe_free\0")?;
-            let id: IdFn = *lib.get::<IdFn>(b"sfe_engine_id\0")?;
-            let optimize = lib.get::<OptimizeFn>(b"sfe_optimize\0").ok().map(|f| *f);
+            let lib = LibHandle::open(path)?;
+            let api: ApiFn = *lib.lib().get::<ApiFn>(b"sfe_api\0")?;
+            let free: FreeFn = *lib.lib().get::<FreeFn>(b"sfe_free\0")?;
+            let id: IdFn = *lib.lib().get::<IdFn>(b"sfe_engine_id\0")?;
+            let optimize = lib.lib().get::<OptimizeFn>(b"sfe_optimize\0").ok().map(|f| *f);
             let engine_id = std::ffi::CStr::from_ptr(id()).to_string_lossy().to_string();
             Ok(NativeLib {
                 _lib: lib,
@@ -248,9 +316,9 @@ impl NativeLib {
         // SAFETY: a library whose signed manifest names this engine and abi 1:
         // two plain C functions over byte buffers, as `sfe_api` and `sfe_free`.
         unsafe {
-            let lib = libloading::Library::new(path)?;
-            let api: ApiFn = *lib.get::<ApiFn>(b"wfsim_api\0")?;
-            let free: FreeFn = *lib.get::<FreeFn>(b"wfsim_free\0")?;
+            let lib = LibHandle::open(path)?;
+            let api: ApiFn = *lib.lib().get::<ApiFn>(b"wfsim_api\0")?;
+            let free: FreeFn = *lib.lib().get::<FreeFn>(b"wfsim_free\0")?;
             Ok(NativeLib {
                 _lib: lib,
                 api,
@@ -524,5 +592,61 @@ impl Pool {
             *p = p.saturating_sub(1);
         }
         Some(d)
+    }
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
+mod tests {
+    use super::*;
+
+    /// Where the system built this thread: its TEB (Windows) or thread pointer
+    /// (Linux), which mimalloc takes for its id (`_mi_prim_thread_id`).
+    fn thread_block() -> usize {
+        let t: usize;
+        // SAFETY: reads the thread's own control block pointer.
+        #[cfg(windows)]
+        unsafe {
+            std::arch::asm!("mov {}, gs:[0x30]", out(reg) t)
+        };
+        #[cfg(unix)]
+        unsafe {
+            std::arch::asm!("mov {}, fs:[0]", out(reg) t)
+        };
+        t
+    }
+
+    /// A LIBRARY OPENED FROM A THREAD THAT ENDS (a background engine fetch),
+    /// then called from a thread built where that one was: WFSim's own library
+    /// crashed here before the library thread (`lib_thread`).
+    /// `SIMFLEET_TEST_LIB=<engines/…dll> cargo test --release lib_outlives_its_opener -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn lib_outlives_its_opener() {
+        let path = std::path::PathBuf::from(std::env::var("SIMFLEET_TEST_LIB").expect("SIMFLEET_TEST_LIB"));
+        let (opener, lib) = std::thread::spawn(move || {
+            let lib = NativeLib::open(&path).or_else(|_| NativeLib::open_official(&path, "test")).expect("open the library");
+            lib.api("/api/board/nothing", "{}").expect("an answer");
+            (thread_block(), lib)
+        })
+        .join()
+        .expect("the opener");
+        let lib = Arc::new(lib);
+        for i in 0..100_000 {
+            let l = lib.clone();
+            let reused = std::thread::spawn(move || {
+                let reused = thread_block() == opener;
+                if reused {
+                    l.api("/api/board/nothing", "{}").expect("an answer");
+                }
+                reused
+            })
+            .join()
+            .expect("a thread built where the opener was");
+            if reused {
+                eprintln!("thread {i} was built where the opener was, and the library answered it");
+                return;
+            }
+        }
+        eprintln!("no thread was built where the opener was");
     }
 }

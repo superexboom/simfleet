@@ -364,7 +364,7 @@ pub fn fetch_native(net: &Net, cfg: &Config, ui: &Ui, rel: &Release, variant: &s
         }
         Err(e) if e.is::<crate::net::NotFound>() => false,
         Err(e) => {
-            ui.log(format!("{C_GO}[引擎]{C_END} 原生引擎下载失败，继续用 wasm：{e:#}"));
+            ui.log(format!("{C_GO}[引擎]{C_END} simfleet 的原生引擎 {name} 下载失败（{e:#}），先不用它，稍后再试"));
             false
         }
     }

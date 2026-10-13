@@ -1,7 +1,7 @@
 # THE NATIVE ENGINE, published for every engine WFSim's main branch carries.
 #
 # wfsim.app answers GitHub's runners with a bot challenge, so nothing here asks
-# it anything. Every 30 minutes a small Linux job computes the engine id of
+# it anything. Every 10 minutes a small Linux job computes the engine id of
 # WFSim's main (tools/engine_id.py — the id the site serves is that of the
 # source it was built from) and looks at what release `engine-<id>` holds. For
 # each platform with a file missing, a job at that commit, with WFSim's own
@@ -22,13 +22,22 @@
 #
 # simfleet only uses the id the site actually serves, and checks the build
 # against the site's own wasm on a canary row before every use.
+#
+# WHEN IT RUNS: GitHub drops scheduled runs under load, the hour's first
+# minutes most of all — a "*/30" schedule (:00 and :30) once went five hours
+# without one while WFSim moved its engine three times. So it runs off those
+# minutes, every ten, and a run that built something looks at WFSim's main
+# again at its end and starts the next at once if the engine moved meanwhile.
+# An engine tried and not published (a build or a check that failed) is tried
+# again by the schedule once every three hours at most, at once by hand.
 name: native-engine
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "7-59/10 * * * *"
   workflow_dispatch:
 permissions:
   contents: write
+  actions: write
 concurrency:
   group: native-engine
   cancel-in-progress: false
@@ -36,10 +45,11 @@ jobs:
   check:
     runs-on: ubuntu-latest
     outputs:
-      engine: ${{ steps.c.outputs.engine }}
+      engine: ${{ steps.o.outputs.engine }}
       commit: ${{ steps.c.outputs.commit }}
       windows: ${{ steps.c.outputs.windows }}
       linux: ${{ steps.c.outputs.linux }}
+      tried: ${{ steps.c.outputs.tried }}
     steps:
       - uses: actions/checkout@v5
       - id: c
@@ -59,10 +69,32 @@ jobs:
           echo "windows needed: $win, linux needed: $lin"
           echo "windows=$win" >> "$GITHUB_OUTPUT"
           echo "linux=$lin" >> "$GITHUB_OUTPUT"
+          echo "found=$engine" >> "$GITHUB_OUTPUT"
+          echo "tried=tried-$engine-$GITHUB_SHA-$(( $(date -u +%s) / 10800 ))" >> "$GITHUB_OUTPUT"
           if [ "$win" = true ] || [ "$lin" = true ]; then
-            echo "engine=$engine" >> "$GITHUB_OUTPUT"
             echo "commit=$commit" >> "$GITHUB_OUTPUT"
+            echo "go=true" >> "$GITHUB_OUTPUT"
           fi
+      # TRIED IN THESE THREE HOURS, by this simfleet: the schedule leaves it.
+      - id: t
+        if: steps.c.outputs.go == 'true' && github.event_name == 'schedule'
+        uses: actions/cache/restore@v4
+        with:
+          path: tried
+          key: ${{ steps.c.outputs.tried }}
+          lookup-only: true
+      - id: o
+        if: steps.c.outputs.go == 'true'
+        shell: bash
+        env:
+          ENGINE: ${{ steps.c.outputs.found }}
+          HIT: ${{ steps.t.outputs.cache-hit }}
+        run: |
+          if [ "$HIT" = true ]; then
+            echo "engine $ENGINE was tried in these three hours and is not published; run this workflow by hand to try now"
+            exit 0
+          fi
+          echo "engine=$ENGINE" >> "$GITHUB_OUTPUT"
 
   build:
     needs: check
@@ -156,6 +188,16 @@ jobs:
         with:
           name: engine-${{ matrix.os }}
           path: out/
+      - name: Marked as tried, passed or not
+        if: always() && env.GO == 'true'
+        shell: bash
+        run: mkdir -p tried && echo "$ENGINE" > tried/engine
+      - uses: actions/cache/save@v4
+        if: always() && env.GO == 'true'
+        continue-on-error: true
+        with:
+          path: tried
+          key: ${{ needs.check.outputs.tried }}
 
   publish:
     needs: [check, build]
@@ -214,3 +256,19 @@ jobs:
           } > notes.md
           gh release create "engine-$ENGINE" "${up[@]}" -R "$GITHUB_REPOSITORY" \
             --title "native engine $ENGINE" --notes-file notes.md --latest=false --target "$GITHUB_SHA"
+      - uses: actions/checkout@v5
+        if: always()
+        with:
+          path: simfleet
+      - name: WFSim's main moved meanwhile? Then the next run now
+        if: always()
+        shell: bash
+        run: |
+          git clone -q --depth 1 https://github.com/magenie33/wfsim.git wfsim
+          now=$(python3 simfleet/tools/engine_id.py wfsim | head -1)
+          if [ "$now" != "$ENGINE" ]; then
+            echo "WFSim's main carries engine $now now; running again"
+            gh workflow run native-engine.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
+          else
+            echo "WFSim's main still carries $ENGINE"
+          fi

@@ -65,6 +65,10 @@ pub struct Config {
     /// build of the served engine is not published yet.
     #[serde(default = "yes")]
     pub official_engine: bool,
+    /// Start the client again when it dies (watch.rs); `false`, or `--no-watch`,
+    /// runs it alone.
+    #[serde(default = "yes")]
+    pub watch: bool,
     /// The ids beyond `verifier`, made as groups open. Keep them to yourself too.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_verifiers: Vec<String>,
@@ -123,6 +127,7 @@ impl Config {
             max_slots: 0,
             native_riven: true,
             official_engine: true,
+            watch: true,
             extra_verifiers: Vec::new(),
             account: Account::default(),
         }

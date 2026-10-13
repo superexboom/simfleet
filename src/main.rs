@@ -23,6 +23,7 @@ mod jsnum;
 mod net;
 mod sys;
 mod ui;
+mod watch;
 mod work;
 
 use anyhow::{bail, Context, Result};
@@ -40,6 +41,7 @@ simfleet — WFSim 志愿计算客户端（非官方，基于 WFSim 引擎）
 用法:
   simfleet                 开始计算（第一次运行会先问几个问题）
   simfleet --cores N       本次空闲时使用 N 个核心
+  simfleet --no-watch      不带守护运行（默认意外退出后会自动重启）
   simfleet setup           重新设置预算
   simfleet login           用邮箱和密码登录 wfsim.app，贡献记到账号名下
   simfleet login --cookie <wfsim_session>
@@ -272,6 +274,12 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<(
     ));
     if let Some(l) = affinity::init(affinity::Prefer::parse(&cfg.core_type)) {
         ui.log(format!("{C_INFO}[CPU]{C_END} {l}"));
+    }
+    if watch::is_client() {
+        watch::note_crashes();
+    }
+    if let Some((n, why)) = watch::restarted() {
+        ui.log(format!("{}[守护]{C_END} 上次意外退出（{why}），已自动重启（第 {n} 次）；详情见 simfleet-crash.log", ui::C_BAD));
     }
     let painter = ui.clone().run(ctl.clone());
     let started = Instant::now();
@@ -698,6 +706,13 @@ fn main() {
                         None => return Ok(()),
                     },
                 };
+                // THE WATCH (watch.rs): this process waits, and a client of its
+                // own computes — started again if it dies.
+                if cfg.watch && !watch::is_client() && !args.iter().any(|a| a == "--no-watch") {
+                    if let Some(code) = watch::watch(&paths) {
+                        std::process::exit(code);
+                    }
+                }
                 run(paths, cfg, flag("--cores").and_then(|x| x.parse().ok()))?;
             }
             other => {
