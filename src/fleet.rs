@@ -1722,6 +1722,7 @@ impl Fleet {
                 }
                 if let Some(d) = &demand {
                     s.computing_now = d["computing"].as_u64();
+                    s.relayed = net.relayed();
                     s.owed = Some(["new_builds", "rescores", "sweeps", "refreshes"].iter().map(|k| d["owed"][k].as_u64().unwrap_or(0)).sum());
                     s.per_hour = Some((d["per_hour"]["volunteers"].as_u64().unwrap_or(0), d["per_hour"]["official"].as_u64().unwrap_or(0)));
                 }

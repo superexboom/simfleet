@@ -86,6 +86,8 @@ pub struct Status {
     pub account_points: Option<u64>,
     pub contributor_rank: Option<u64>,
     pub computing_now: Option<u64>,
+    /// The board's work by the Hong Kong relay (net.rs `road`), not direct.
+    pub relayed: bool,
     /// Board rows the site owes (`/api/board/demand`), and the rows done an
     /// hour by volunteers and by the official machines.
     pub owed: Option<u64>,
@@ -1104,6 +1106,10 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
         }
         if let (Some(o), true) = (s.owed, yy < end) {
             kv(c, x, yy, w, "待算", &format!("{} 行", group(o)), "  榜单");
+            yy += 1;
+        }
+        if yy < end {
+            kv(c, x, yy, w, "线路", if s.relayed { "香港中转" } else { "直连" }, "  领活与交答案，每 10 分钟测一次");
             yy += 1;
         }
     }

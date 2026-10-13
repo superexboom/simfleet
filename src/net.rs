@@ -6,9 +6,28 @@
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 use std::io::Read;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 pub const USER_AGENT: &str = concat!("simfleet/", env!("CARGO_PKG_VERSION"), " (volunteer compute client for wfsim.app)");
+
+/// THE RELAY (WFSim docs/DISTRIBUTION.md §"The relay", 69-board-work.js
+/// `chooseRoute`): a server in Hong Kong that carries `/api/board/` alone to
+/// wfsim.app, for readers whose road to the edge is poor. Both roads are timed
+/// every `ROUTE_EVERY` (`/api/board/ping`, `ROUTE_TRIES` each, the median) and
+/// the quicker is taken; a call the relay drops goes direct at once, and the
+/// relay is left alone until the next timing. No cookie crosses it.
+const SITE: &str = "https://wfsim.app";
+const RELAY: &str = "https://cn.wfsim.app";
+const ROUTE_EVERY: Duration = Duration::from_secs(600);
+const ROUTE_TRIES: usize = 3;
+
+#[derive(Default)]
+struct Route {
+    relay: bool,
+    at: Option<Instant>,
+    timing: bool,
+}
 
 #[derive(Clone)]
 pub struct Net {
@@ -18,6 +37,7 @@ pub struct Net {
     fallback: ureq::Agent,
     pub base: String,
     pub session: Option<String>,
+    route: Arc<Mutex<Route>>,
 }
 
 fn tls_failure(e: &ureq::Error) -> bool {
@@ -67,7 +87,56 @@ impl Net {
             fallback: make(ureq::tls::RootCerts::WebPki),
             base: base.trim_end_matches('/').to_string(),
             session: session.filter(|s| !s.is_empty()),
+            route: Arc::default(),
         }
+    }
+
+    /// Whether the board's work goes by the relay now.
+    pub fn relayed(&self) -> bool {
+        self.route.lock().map(|r| r.relay).unwrap_or(false)
+    }
+
+    /// The road for `path`: the relay's base, or `None` to go direct. A timing
+    /// that is due starts on a thread of its own; this call goes by the road
+    /// chosen last.
+    fn road(&self, path: &str) -> Option<&'static str> {
+        if self.base != SITE || !path.starts_with("/api/board/") {
+            return None;
+        }
+        let mut r = self.route.lock().ok()?;
+        if !r.timing && r.at.is_none_or(|t| t.elapsed() >= ROUTE_EVERY) {
+            r.timing = true;
+            let (net, route) = (self.clone(), self.route.clone());
+            std::thread::spawn(move || {
+                let (direct, relay) = (net.time_road(SITE), net.time_road(RELAY));
+                if let Ok(mut r) = route.lock() {
+                    r.relay = relay < direct;
+                    r.at = Some(Instant::now());
+                    r.timing = false;
+                }
+            });
+        }
+        r.relay.then_some(RELAY)
+    }
+
+    /// The median of `ROUTE_TRIES` pings by one road, in seconds; infinite when one fails.
+    fn time_road(&self, base: &str) -> f64 {
+        let mut ms = Vec::new();
+        for _ in 0..ROUTE_TRIES {
+            let t = Instant::now();
+            let url = format!("{base}/api/board/ping");
+            let ok = self.agent.get(&url).config().timeout_global(Some(Duration::from_secs(5))).build().call().ok().and_then(|mut r| {
+                (r.status().as_u16() == 200).then_some(())?;
+                let text = r.body_mut().read_to_string().ok()?;
+                serde_json::from_str::<Value>(&text).ok()
+            });
+            if ok.is_none() {
+                return f64::INFINITY;
+            }
+            ms.push(t.elapsed().as_secs_f64());
+        }
+        ms.sort_by(|a, b| a.total_cmp(b));
+        ms[ms.len() / 2]
     }
 
     /// One request, on the system verifier and then — only if the connection
@@ -92,8 +161,25 @@ impl Net {
     }
 
     /// POST JSON; `Err` only when the network failed or the answer was not JSON.
+    /// The board's work may go by the relay (`road`), and goes direct at once
+    /// when the relay drops it.
     pub fn post(&self, path: &str, body: &Value) -> Result<Reply> {
         let text = body.to_string();
+        if let Some(relay) = self.road(path) {
+            let url = format!("{relay}{path}");
+            let got = self
+                .call(|a| a.post(&url).header("Content-Type", "application/json").send(text.as_str()))
+                .and_then(|mut r| Self::reply(&mut r))
+                .ok()
+                .filter(|r| (200..300).contains(&r.status));
+            if let Some(r) = got {
+                return Ok(r);
+            }
+            if let Ok(mut r) = self.route.lock() {
+                r.relay = false;
+                r.at = Some(Instant::now());
+            }
+        }
         let mut resp = self.call(|a| {
             let mut req = a.post(&self.url(path)).header("Content-Type", "application/json");
             // The session is the site's: never sent to another host.
