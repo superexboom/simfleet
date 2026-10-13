@@ -18,7 +18,10 @@ getrandom = "0.3"
 libloading = "0.8"
 # Each thread its own heap: lanes allocating at once never queue on the
 # process heap's lock (they did, natively, on Windows).
-mimalloc = { version = "0.1", default-features = false }
+# Its v2 core: with the v3 core (the crate's default) a client crashed - an
+# access violation in mi_heap_main - seconds after taking up simfleet's build
+# while it ran on WFSim's library.
+mimalloc = { version = "0.1", default-features = false, features = ["v2"] }
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 # `float_roundtrip`: a number read back is the number that was written (the
