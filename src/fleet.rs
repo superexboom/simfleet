@@ -591,7 +591,7 @@ impl Fleet {
             }
         }
         let net = self.net.clone();
-        let handle = std::thread::spawn(move || net.post_ok("/api/board/answers", &body).is_some_and(|r| r["ok"] == json!(true)));
+        let handle = std::thread::spawn(move || send_answers(&net, &body));
         self.sending.push(Sending { group: gi, handle, log_ok, work, rows });
     }
 
@@ -625,7 +625,11 @@ impl Fleet {
 
     pub fn shutdown(&mut self) {
         self.drop_all("，任务已交还");
-        // The last answers count in the closing line too.
+        // The last answers count in the closing line too — sent again for up to
+        // three quarters of a minute when the site does not answer.
+        if !self.sending.is_empty() {
+            self.ui.status(|st| st.state = "正在交最后的答案（连不上服务器时会重试，最多约 45 秒）".into());
+        }
         for s in self.sending.drain(..) {
             if s.handle.join().unwrap_or(false) {
                 self.ui.status(|st| {
@@ -1743,6 +1747,23 @@ impl Fleet {
             });
         }));
     }
+}
+
+/// A SEND THAT GOT NO REPLY IS SENT AGAIN (69-board-work.js `sendAgain`), a
+/// computed pack being the one thing a dropped connection must not cost: the
+/// server takes a device's answer to a question once, so a reply lost after the
+/// answers landed does no harm.
+const SEND_AGAIN: [Duration; 3] = [Duration::from_secs(3), Duration::from_secs(10), Duration::from_secs(30)];
+
+fn send_answers(net: &Net, body: &Value) -> bool {
+    for i in 0.. {
+        if net.post_ok("/api/board/answers", body).is_some_and(|r| r["ok"] == json!(true)) {
+            return true;
+        }
+        let Some(wait) = SEND_AGAIN.get(i) else { return false };
+        std::thread::sleep(*wait);
+    }
+    false
 }
 
 enum Finished {
