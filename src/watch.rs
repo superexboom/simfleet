@@ -390,9 +390,11 @@ pub fn note_crashes() {
         let mut out = Buf { b: [0; 4096], n: 0 };
         // SAFETY: the system's own record of the exception being dispatched.
         let rec = unsafe { (*info).ExceptionRecord.as_ref() };
+        // The code is the exit code the watch reads; the place is what only
+        // the client can tell.
         if let Some(r) = rec {
             let code = r.ExceptionCode as u32;
-            let _ = write!(out, "{code:#010X} 于 ");
+            let _ = write!(out, "位置 ");
             place(&mut out, r.ExceptionAddress as usize);
             if code == 0xC000_0005 && r.NumberParameters >= 2 {
                 let how = match r.ExceptionInformation[0] {

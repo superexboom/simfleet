@@ -1131,11 +1131,16 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
         // THE PACE beside the points: what each one's points grew by a minute
         // over the last half hour, as the ranking showed them (fleet.rs `paces`).
         let pace = if s.ranking.iter().any(|r| r.rate.is_some()) { "每分钟按近半小时" } else { "每分钟测量中" };
-        let total = match s.ranking_total {
+        let left = " 本周贡献榜 ";
+        let mut total = match s.ranking_total {
             Some(t) => format!("共 {t} 人 · {pace}"),
             None => pace.to_string(),
         };
-        header(c, x, yy, w, " 本周贡献榜 ", &total, HDR);
+        // Too narrow for the note: the count alone.
+        if c.tw(left) + c.tw(&total) + 2 > w {
+            total = s.ranking_total.map(|t| format!("共 {t} 人")).unwrap_or_default();
+        }
+        header(c, x, yy, w, left, &total, HDR);
         yy += 1;
         for r in &s.ranking {
             if yy >= end {
