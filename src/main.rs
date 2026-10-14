@@ -664,9 +664,17 @@ fn main() {
                 None => println!("还没有设置，先运行 simfleet"),
             },
             "replay" => {
-                // Developer check: compute a saved task offline and print the answer.
-                let file = args.get(1).context("用法: simfleet replay <task.json> [--lanes N]")?;
-                let w: serde_json::Value = jsnum::parse(&std::fs::read_to_string(file)?)?;
+                // Developer check: compute saved tasks offline and print the answers —
+                // all at once, as several groups' would start.
+                let mut tasks = Vec::new();
+                let mut i = 1;
+                while let Some(a) = args.get(i).filter(|a| !a.starts_with("--")) {
+                    tasks.push(jsnum::parse(&std::fs::read_to_string(a)?)?);
+                    i += 1;
+                }
+                if tasks.is_empty() {
+                    bail!("用法: simfleet replay <task.json>... [--lanes N] [--wasm]");
+                }
                 let lanes = flag("--lanes").and_then(|x| x.parse().ok()).unwrap_or_else(sys::cores);
                 let mut cfg = Config::fresh(lanes);
                 cfg.native_engine = flag("--wasm").is_none() && !args.iter().any(|a| a == "--wasm");
@@ -687,7 +695,7 @@ fn main() {
                     max_slots: AtomicUsize::new(0),
                 });
                 let mut f = fleet::Fleet::new(net, cfg, paths.clone(), ctl, ui, rel, code);
-                f.replay(&w)?;
+                f.replay(&tasks)?;
             }
             "cpu" => {
                 let c = paths.load()?.unwrap_or_else(|| Config::fresh(sys::cores()));

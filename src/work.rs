@@ -193,17 +193,21 @@ pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release
     ui.status(|s| s.note.clear());
     let code = Arc::new(code);
     // A RIVEN GAIN natively too, once a search gives the wasm's answer: held to
-    // it on a thread of its own (a dozen seconds), riven gains starting on the
-    // wasm meanwhile (fleet.rs takes the verdict as it lands).
+    // it on a thread of its own (a dozen seconds), riven gains waiting for the
+    // verdict meanwhile (fleet.rs `riven_backend`) — so there always is one.
     if let Some(n) = code.native.as_ref().filter(|n| cfg.native_riven && n.has_optimize()) {
         n.riven_checking();
         let c = code.clone();
-        let _ = std::thread::Builder::new().name("riven-canary".into()).stack_size(8 << 20).spawn(move || {
-            let r = riven_canary(&c);
+        let spawned = std::thread::Builder::new().name("riven-canary".into()).stack_size(8 << 20).spawn(move || {
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| riven_canary(&c)))
+                .unwrap_or_else(|_| Err(anyhow!("the riven canary panicked")));
             if let Some(n) = &c.native {
                 n.riven_checked(r);
             }
         });
+        if let Err(e) = spawned {
+            n.riven_checked(Err(anyhow!("the riven canary did not start: {e}")));
+        }
     }
     Ok(code)
 }

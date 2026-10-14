@@ -423,16 +423,22 @@ pub enum Call {
     Fold(String),
 }
 
+/// A wasm instance its thread has not computed on for this long, while the
+/// thread computes natively, is let go.
+const WASM_IDLE: Duration = Duration::from_secs(30);
+
 /// One thread's engine: instantiated on first use and thrown away after a trap,
 /// since a module that trapped mid-call holds no state worth trusting.
 pub struct Exec {
     code: Arc<Code>,
     wasm: Option<WasmInst>,
+    /// When `wasm` last computed.
+    wasm_at: Instant,
 }
 
 impl Exec {
     pub fn new(code: Arc<Code>) -> Exec {
-        Exec { code, wasm: None }
+        Exec { code, wasm: None, wasm_at: Instant::now() }
     }
     pub fn run(&mut self, backend: Backend, call: &Call) -> Result<String> {
         match call {
@@ -445,10 +451,19 @@ impl Exec {
     /// `api(path, body)`, or `optimize(body)` with no path.
     fn door(&mut self, backend: Backend, path: Option<&str>, body: &str) -> Result<String> {
         if let (Backend::Native, Some(n)) = (backend, &self.code.native) {
-            match path {
-                Some(path) => return n.api(path, body),
-                None if n.can_optimize() => return n.optimize(body),
-                None => {}
+            if path.is_some() || n.can_optimize() {
+                // AN INSTANCE THIS THREAD NO LONGER COMPUTES ON goes: its memory
+                // never shrinks while it lives (some 50 MB once it has worked),
+                // and a lane that took up a native build would keep it for good.
+                // Never a riven gain's search: its leader computes nothing but
+                // that search, on the backend it began on.
+                if self.wasm.is_some() && self.wasm_at.elapsed() >= WASM_IDLE {
+                    self.wasm = None;
+                }
+                return match path {
+                    Some(path) => n.api(path, body),
+                    None => n.optimize(body),
+                };
             }
         }
         if self.wasm.is_none() {
@@ -459,6 +474,7 @@ impl Exec {
             Some(path) => w.api(path, body),
             None => w.optimize(body),
         };
+        self.wasm_at = Instant::now();
         if r.is_err() {
             self.wasm = None;
         }
@@ -468,10 +484,6 @@ impl Exec {
     /// the instance stays, and a search living in it carries on.
     pub fn adopt(&mut self, code: Arc<Code>) {
         self.code = code;
-    }
-    /// Let the wasm instance go (its memory never shrinks while it lives).
-    pub fn release_wasm(&mut self) {
-        self.wasm = None;
     }
     pub fn api(&mut self, backend: Backend, path: &'static str, body: String) -> Result<String> {
         self.run(backend, &Call::Api(path, body))
@@ -492,13 +504,23 @@ pub struct Done {
 }
 
 /// THE LANES: one thread a core, each with its own engine instance, fed jobs
-/// in order. Lane 0's instance is the one a riven gain's search lives in.
+/// in order. A riven gain's search lives on its leader's lane (engine.rs
+/// `Exec`, fleet.rs `Riven`).
+///
+/// A LANE'S THREAD IS STARTED WHEN IT IS GIVEN WORK AND LET GO BY THE
+/// DISPATCHER (`retire`): what lives on a thread goes with it — its wasm
+/// instance, a riven gain's search (natively the thread's own state, some
+/// hundreds of MB), what its allocator keeps for it — and nothing else lets
+/// that memory go.
 pub struct Pool {
     code: Arc<Code>,
     /// What each lane runs its next job with (`adopt`).
     latest: Arc<std::sync::Mutex<Arc<Code>>>,
-    lanes: Vec<mpsc::Sender<Job>>,
+    /// Each lane's thread; `None` while it has none.
+    lanes: Vec<Option<mpsc::Sender<Job>>>,
     pending: Vec<usize>,
+    /// When each lane was last given work or gave an answer.
+    active: Vec<Instant>,
     done_tx: mpsc::Sender<Done>,
     done_rx: mpsc::Receiver<Done>,
     tag: u64,
@@ -510,7 +532,7 @@ impl Pool {
     pub fn new(code: Arc<Code>) -> Pool {
         let (done_tx, done_rx) = mpsc::channel();
         let latest = Arc::new(std::sync::Mutex::new(code.clone()));
-        Pool { code, latest, lanes: Vec::new(), pending: Vec::new(), done_tx, done_rx, tag: 0, busy_ms: 0.0 }
+        Pool { code, latest, lanes: Vec::new(), pending: Vec::new(), active: Vec::new(), done_tx, done_rx, tag: 0, busy_ms: 0.0 }
     }
     pub fn code(&self) -> &Arc<Code> {
         &self.code
@@ -523,55 +545,62 @@ impl Pool {
     }
     pub fn ensure(&mut self, n: usize) {
         while self.lanes.len() < n {
-            let lane = self.lanes.len();
-            let (tx, rx) = mpsc::channel::<Job>();
-            let done = self.done_tx.clone();
-            let code = self.code.clone();
-            let latest = self.latest.clone();
-            std::thread::Builder::new()
-                .name(format!("lane-{lane}"))
-                .stack_size(8 << 20)
-                .spawn(move || {
-                    crate::affinity::apply_lane(lane);
-                    let mut exec = Exec::new(code);
-                    loop {
-                        // A lane idle for a minute gives its instance back, as the
-                        // page lets a kept worker go (08-checkpoint-api.js `fleetKeep`).
-                        // NOT LANE 0: a riven gain's search lives in its instance
-                        // between steps, and a step can wait longer than that.
-                        let job = match rx.recv_timeout(Duration::from_secs(60)) {
-                            Ok(j) => j,
-                            Err(mpsc::RecvTimeoutError::Timeout) => {
-                                if lane != 0 {
-                                    exec.release_wasm();
-                                }
-                                continue;
-                            }
-                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                        };
-                        if let Ok(c) = latest.lock() {
-                            if !Arc::ptr_eq(&c, &exec.code) {
-                                exec.adopt(c.clone());
-                            }
-                        }
-                        let (t, cpu) = (Instant::now(), crate::sys::thread_cpu_us());
-                        let out = exec.run(job.backend, &job.call);
-                        let ms = t.elapsed().as_secs_f64() * 1000.0;
-                        // WHAT THE LANE WAS GIVEN: CPU time against wall time — but
-                        // not for a native search, which computes on a worker
-                        // thread of the optimizer's own while this one waits.
-                        let away = matches!((job.backend, &job.call), (Backend::Native, Call::Optimize(_)));
-                        let (c, w) = if away { (0, 0) } else { (crate::sys::thread_cpu_us().saturating_sub(cpu), (ms * 1000.0) as u64) };
-                        crate::affinity::note_job(lane, c, w);
-                        if done.send(Done { tag: job.tag, lane, ms, out }).is_err() {
-                            break;
+            self.lanes.push(None);
+            self.pending.push(0);
+            self.active.push(Instant::now());
+        }
+    }
+    /// `lane`'s thread let go: it ends once the jobs it was given are done,
+    /// and the lane's next job starts a new one.
+    pub fn retire(&mut self, lane: usize) {
+        if let Some(l) = self.lanes.get_mut(lane) {
+            *l = None;
+        }
+    }
+    /// EVERY LANE IDLE FOR `after` let go (`retire`), but those `keep` names —
+    /// a riven gain's leader waits on the rest of its round with its search
+    /// on its thread.
+    pub fn retire_idle(&mut self, after: Duration, keep: &dyn Fn(usize) -> bool) {
+        for lane in 0..self.lanes.len() {
+            if self.lanes[lane].is_some() && self.pending[lane] == 0 && self.active[lane].elapsed() >= after && !keep(lane) {
+                self.lanes[lane] = None;
+            }
+        }
+    }
+    fn spawn(&self, lane: usize) -> mpsc::Sender<Job> {
+        let (tx, rx) = mpsc::channel::<Job>();
+        let done = self.done_tx.clone();
+        let code = self.code.clone();
+        let latest = self.latest.clone();
+        std::thread::Builder::new()
+            .name(format!("lane-{lane}"))
+            .stack_size(8 << 20)
+            .spawn(move || {
+                crate::affinity::apply_lane(lane);
+                let mut exec = Exec::new(code);
+                // Until the pool lets the lane go (`retire`).
+                for job in rx {
+                    if let Ok(c) = latest.lock() {
+                        if !Arc::ptr_eq(&c, &exec.code) {
+                            exec.adopt(c.clone());
                         }
                     }
-                })
-                .expect("spawn lane");
-            self.lanes.push(tx);
-            self.pending.push(0);
-        }
+                    let (t, cpu) = (Instant::now(), crate::sys::thread_cpu_us());
+                    let out = exec.run(job.backend, &job.call);
+                    let ms = t.elapsed().as_secs_f64() * 1000.0;
+                    // WHAT THE LANE WAS GIVEN: CPU time against wall time — but
+                    // not for a native search, which computes on a worker
+                    // thread of the optimizer's own while this one waits.
+                    let away = matches!((job.backend, &job.call), (Backend::Native, Call::Optimize(_)));
+                    let (c, w) = if away { (0, 0) } else { (crate::sys::thread_cpu_us().saturating_sub(cpu), (ms * 1000.0) as u64) };
+                    crate::affinity::note_job(lane, c, w);
+                    if done.send(Done { tag: job.tag, lane, ms, out }).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn lane");
+        tx
     }
     pub fn next_tag(&mut self) -> u64 {
         self.tag += 1;
@@ -582,14 +611,23 @@ impl Pool {
     }
     pub fn send(&mut self, lane: usize, job: Job) {
         self.ensure(lane + 1);
+        if self.lanes[lane].is_none() {
+            self.lanes[lane] = Some(self.spawn(lane));
+        }
         self.pending[lane] += 1;
-        let _ = self.lanes[lane].send(job);
+        self.active[lane] = Instant::now();
+        if let Some(tx) = &self.lanes[lane] {
+            let _ = tx.send(job);
+        }
     }
     pub fn recv(&mut self, wait: Duration) -> Option<Done> {
         let d = self.done_rx.recv_timeout(wait).ok()?;
         self.busy_ms += d.ms;
         if let Some(p) = self.pending.get_mut(d.lane) {
             *p = p.saturating_sub(1);
+        }
+        if let Some(a) = self.active.get_mut(d.lane) {
+            *a = Instant::now();
         }
         Some(d)
     }

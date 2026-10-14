@@ -107,14 +107,20 @@ const REFILL_MS: f64 = 15_000.0;
 /// tried again this much later when a renewal got no answer.
 const RENEW_BEFORE: Duration = Duration::from_secs(120);
 const RENEW_RETRY: Duration = Duration::from_secs(30);
+/// A lane given nothing for this long ends its thread (`rest_lanes`).
+const LANE_IDLE: Duration = Duration::from_secs(60);
+/// SHORT OF MEMORY: the system's free physical memory under this share of it,
+/// and never under `MEM_LOW_MIN` (`watch_memory`).
+const MEM_LOW_SHARE: u64 = 10;
+const MEM_LOW_MIN: u64 = 1 << 30;
 
 // ---- one task's computation, as jobs ------------------------------------------
 
 /// A RIVEN GAIN (08-checkpoint-api.js `quickFleet`): lead steps on the leader's
 /// instance, each round's builds scored in slices — two a lane — on any lane.
 struct Riven {
-    /// Where its search runs, fixed when it starts: its lead's state lives
-    /// there (a wasm instance, or a native lane's thread).
+    /// Where its search runs, fixed when it is given its leader: its lead's
+    /// state lives there (a wasm instance, or a native lane's thread).
     backend: Backend,
     request: Value,
     leader: Option<usize>,
@@ -134,9 +140,9 @@ struct Riven {
 }
 
 impl Riven {
-    fn new(request: Value, backend: Backend) -> Riven {
+    fn new(request: Value) -> Riven {
         Riven {
-            backend,
+            backend: Backend::Wasm,
             request,
             leader: None,
             step: 0,
@@ -362,6 +368,11 @@ pub struct Fleet {
     control_cap: f64,
     /// When the group count last went down.
     closed_at: Option<Instant>,
+    /// THE CAP while the system is short of memory, when it last came down,
+    /// and when free memory was last under twice the line (`watch_memory`).
+    mem_cap: Option<usize>,
+    mem_at: Option<Instant>,
+    mem_tight_at: Option<Instant>,
     /// The riven canary's verdict as last seen (engine.rs `riven_state`).
     riven_seen: u8,
     /// A board row's cost in lane milliseconds, smoothed: what the work held is measured in.
@@ -419,6 +430,9 @@ impl Fleet {
             control_busy: 0.0,
             control_cap: 0.0,
             closed_at: None,
+            mem_cap: None,
+            mem_at: None,
+            mem_tight_at: None,
             row_cost_ms: 0.0,
             riven_seen: 0,
             meter: Meter::new(),
@@ -493,24 +507,29 @@ impl Fleet {
     }
     /// THE CAP on groups: `max_slots` (0: by the machine's size), and no more
     /// than half the lanes the budget allows now — one group's pack starts
-    /// rows on every lane.
+    /// rows on every lane — nor than memory allows (`watch_memory`).
     fn max_groups(&self) -> usize {
         let cap = match self.ctl.max_slots.load(Ordering::Relaxed) {
             0 => crate::config::auto_max_slots(self.ctl.max_cores),
             n => n,
         };
-        (self.lanes() / 2).max(1).min(cap)
+        (self.lanes() / 2).max(1).min(cap).min(self.mem_cap.unwrap_or(usize::MAX))
     }
     fn backend(&self) -> Backend {
         if self.pool.code().native.is_some() { Backend::Native } else { Backend::Wasm }
     }
     /// A RIVEN GAIN natively when the build has the optimizer and gave the
     /// wasm's answer on the riven canary (work.rs), unless `native_riven` is off.
-    fn riven_backend(&self) -> Backend {
-        if self.cfg.native_riven && self.pool.code().native.as_ref().is_some_and(|n| n.can_optimize()) {
-            Backend::Native
-        } else {
-            Backend::Wasm
+    /// None while that canary runs (a dozen seconds): a search begun on the
+    /// wasm ends there, with an instance on every lane it scores on.
+    fn riven_backend(&self) -> Option<Backend> {
+        match self.pool.code().native.as_ref() {
+            Some(n) if self.cfg.native_riven && n.has_optimize() => match n.riven_state() {
+                1 => None,
+                2 => Some(Backend::Native),
+                _ => Some(Backend::Wasm),
+            },
+            _ => Some(Backend::Wasm),
         }
     }
 
@@ -546,6 +565,7 @@ impl Fleet {
         let Some(i) = self.tasks.iter().position(|t| t.id == id) else { return };
         let t = self.tasks.remove(i);
         self.tag_task.retain(|_, v| *v != id);
+        self.let_go(&t);
         let kind = if t.riven() { "紫卡增益" } else { "榜单" };
         self.ui.glog(t.group, format!("{C_GO}[中断]{C_END} {kind} {}{why}", t.label));
         // A PACK'S ROW is given back with the pack, by leaving it unanswered.
@@ -816,7 +836,7 @@ impl Fleet {
             let code = w["code"].as_str().unwrap_or("").to_string();
             let label = format!("{} · {} [{}]", w["weapon"].as_str().unwrap_or("?"), w["ruler"].as_str().unwrap_or(""), code);
             self.ui.glog(gi, format!("{C_GO}[开始]{C_END} 紫卡增益  {label}"));
-            (Runner::Riven(Riven::new(w["request"].clone(), self.riven_backend())), label, Some(code))
+            (Runner::Riven(Riven::new(w["request"].clone())), label, Some(code))
         } else {
             let (ruler, mode) = (w["ruler"].as_str().unwrap_or("").to_string(), w["mode"].as_str().unwrap_or("").to_string());
             let label = format!("{} · {ruler} · {mode}", w["record"]["weapon"].as_str().unwrap_or("?"));
@@ -889,12 +909,15 @@ impl Fleet {
         let lanes = self.lanes();
         self.pool.ensure(lanes);
         let backend = self.backend();
-        // Leaders: a riven gain without one takes the lowest free lane in budget.
+        // Leaders: a riven gain without one takes the lowest free lane in
+        // budget, and its backend — once the riven canary has its verdict.
+        let riven_backend = self.riven_backend();
         for i in 0..self.tasks.len() {
             let taken: Vec<usize> = self.tasks.iter().filter_map(|t| match &t.runner { Runner::Riven(r) => r.leader, _ => None }).collect();
-            if let Runner::Riven(r) = &mut self.tasks[i].runner {
+            if let (Runner::Riven(r), Some(b)) = (&mut self.tasks[i].runner, riven_backend) {
                 if r.leader.is_none() {
                     r.leader = (0..lanes).find(|l| !taken.contains(l));
+                    r.backend = b;
                 }
             }
         }
@@ -961,6 +984,7 @@ impl Fleet {
             Ok(Some(f)) => {
                 let t = self.tasks.remove(ti);
                 self.tag_task.retain(|_, v| *v != id);
+                self.let_go(&t);
                 self.answer(t, f);
             }
             Err(e) => {
@@ -969,6 +993,49 @@ impl Fleet {
                 self.drop_task(id, "，任务已交还", true);
             }
         }
+    }
+
+    /// SHORT OF MEMORY — the system's free physical memory under a tenth of it,
+    /// 1 GiB at least — the cap on groups comes down by one, every
+    /// `CONTROL_EVERY` while that lasts: what a group holds costs memory, a
+    /// riven gain's search some hundreds of MB. With twice that free for
+    /// `REOPEN_AFTER`, the cap goes.
+    fn watch_memory(&mut self) {
+        let Some((used, total, _)) = sys::memory() else { return };
+        let (free, low) = (total.saturating_sub(used), (total / MEM_LOW_SHARE).max(MEM_LOW_MIN));
+        let gb = free as f64 / (1u64 << 30) as f64;
+        let now = Instant::now();
+        if free < 2 * low {
+            self.mem_tight_at = Some(now);
+        }
+        if free < low && self.open > 1 && self.mem_at.is_none_or(|t| now.duration_since(t) >= CONTROL_EVERY) {
+            self.ui.log(format!("{C_GO}[内存]{C_END} 系统可用内存只剩 {gb:.1} GB，第 {} 路做完手头的活后不再接", self.open));
+            self.open -= 1;
+            self.mem_cap = Some(self.open);
+            self.mem_at = Some(now);
+            self.closed_at = Some(now);
+        } else if self.mem_cap.is_some() && self.mem_tight_at.is_some_and(|t| now.duration_since(t) >= REOPEN_AFTER) {
+            self.mem_cap = None;
+            self.ui.log(format!("{C_INFO}[内存]{C_END} 系统可用内存回到 {gb:.1} GB，并发不再因内存受限"));
+        }
+    }
+
+    /// A RIVEN GAIN ENDED, answered or not: its leader's thread is let go
+    /// (engine.rs `Pool`), and its search with it — some hundreds of MB, which
+    /// the thread kept until it next led a search (the wasm's instance too).
+    fn let_go(&mut self, t: &Active) {
+        if let Runner::Riven(Riven { leader: Some(l), .. }) = &t.runner {
+            self.pool.retire(*l);
+        }
+    }
+
+    /// A LANE GIVEN NOTHING FOR A MINUTE ends its thread (engine.rs `Pool`), as
+    /// the page lets a kept worker go (08-checkpoint-api.js `fleetKeep`): the
+    /// budget shrank, the client is paused, or there is little work. Not a
+    /// riven gain's leader, whose search waits there for the rest of its round.
+    fn rest_lanes(&mut self) {
+        let leaders: Vec<usize> = self.tasks.iter().filter_map(|t| match &t.runner { Runner::Riven(r) => r.leader, _ => None }).collect();
+        self.pool.retire_idle(LANE_IDLE, &|l| leaders.contains(&l));
     }
 
     /// The answer, sent on its own thread (printed instead, offline).
@@ -1214,6 +1281,7 @@ impl Fleet {
     /// THE GROUP COUNT, both ways (see the module's note). A fixed `slots` is
     /// kept, under the cap.
     fn control(&mut self) {
+        self.watch_memory();
         let cap = self.max_groups();
         let now = Instant::now();
         if self.cfg.slots > 0 {
@@ -1224,7 +1292,7 @@ impl Fleet {
             }
             return;
         }
-        // THE CAP comes first, and at once: a key press, a smaller budget.
+        // THE CAP comes first, and at once: a key press, a smaller budget, memory.
         if self.open > cap {
             self.ui.log(format!("{C_INFO}[调度]{C_END} 并发上限 {cap}，第 {}～{} 路做完手头的活后不再接", cap + 1, self.open));
             self.open = cap;
@@ -1408,6 +1476,7 @@ impl Fleet {
                     s.lanes_now = 0;
                 });
                 self.measure();
+                self.rest_lanes();
                 std::thread::sleep(Duration::from_millis(250));
                 continue;
             }
@@ -1437,6 +1506,7 @@ impl Fleet {
                 self.riven_verdict();
                 self.follow_engine();
                 self.maybe_native();
+                self.rest_lanes();
             }
             if self.tasks.is_empty() && self.sending.is_empty() {
                 if self.stats_at.is_none_or(|t| t.elapsed() > STATS_EVERY) {
@@ -1449,12 +1519,15 @@ impl Fleet {
         self.shutdown();
     }
 
-    /// Compute one saved task (`work` as `/api/board/work` handed it out), offline.
-    pub fn replay(&mut self, w: &Value) -> Result<()> {
+    /// Compute saved tasks (`work` as `/api/board/work` handed them out), all
+    /// at once, offline.
+    pub fn replay(&mut self, tasks: &[Value]) -> Result<()> {
         self.offline = true;
         let v = self.groups[0].verifier.clone();
-        if !self.start(0, v, w.clone(), None) {
-            bail!("task did not start");
+        for w in tasks {
+            if !self.start(0, v.clone(), w.clone(), None) {
+                bail!("task did not start");
+            }
         }
         while !self.tasks.is_empty() {
             self.dispatch();
