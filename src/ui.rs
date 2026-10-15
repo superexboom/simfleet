@@ -80,8 +80,17 @@ pub struct Status {
     pub backend: String,
     pub session_tasks: u64,
     pub session_work: u64,
+    /// Work computed this run, taken or not (the speed is read off it).
+    pub computed_work: u64,
+    /// Results computed and kept, not taken by the server yet (protocol 8).
+    pub kept_rows: u64,
+    pub kept_work: u64,
+    /// Results confirmed and waiting: the shown sums, and the board's and
+    /// the riven gains' apart.
     pub confirmed: u64,
     pub waiting: u64,
+    pub board_states: (u64, u64),
+    pub riven_states: (u64, u64),
     pub device_points: Option<u64>,
     pub today_points: Option<u64>,
     pub account: Option<String>,
@@ -221,11 +230,11 @@ fn hms(secs: u64) -> String {
     format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60)
 }
 
-/// Points a minute: over the last ten minutes, and over the whole run.
+/// Points a minute computed: over the last ten minutes, and over the whole run.
 fn rates(s: &Status, up: Duration) -> (f64, f64) {
     let mins = (up.as_secs_f64() / 60.0).max(1.0 / 60.0);
     let recent: u64 = s.answered.iter().filter(|(t, _)| t.elapsed() < Duration::from_secs(600)).map(|(_, w)| w).sum();
-    (points(recent) / mins.min(10.0), points(s.session_work) / mins)
+    (points(recent) / mins.min(10.0), points(s.computed_work) / mins)
 }
 
 impl Ui {
@@ -298,6 +307,12 @@ impl Ui {
         }
         if let Some(u) = s.utilisation {
             a += &format!(" | 利用率 {:.0}%", u * 100.0);
+        }
+        if let Some(eff) = s.effective_cores {
+            a += &format!(" | 实得 {eff:.1} 核");
+        }
+        if s.kept_rows > 0 {
+            a += &format!(" | 待交 {} 行 {} 分", s.kept_rows, pts(points(s.kept_work)));
         }
         for t in &s.tasks {
             if t.total > 0 {
@@ -1011,6 +1026,9 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
         ("本次", format!("{} 分", pts(points(s.session_work))), format!("  {} 个任务", group(s.session_tasks))),
         ("速度", format!("{rate:.1} 分/分钟"), format!("  平均 {avg:.1}")),
     ];
+    if s.kept_rows > 0 {
+        rows.push(("待交", format!("{} 分", pts(points(s.kept_work))), format!("  {} 行，随下次同步提交", group(s.kept_rows))));
+    }
     if let Some(t) = s.today_points {
         rows.push(("今日", format!("{} 分", group(t)), String::new()));
     }
@@ -1185,6 +1203,9 @@ fn compact(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame, v:
         pts(points(s.session_work)),
         group(s.session_tasks)
     );
+    if s.kept_rows > 0 {
+        a += &format!(" · 待交 {} 分", pts(points(s.kept_work)));
+    }
     if let Some(t) = s.today_points {
         a += &format!(" · 今日 {} 分", group(t));
     }

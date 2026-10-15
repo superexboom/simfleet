@@ -21,6 +21,7 @@ mod engine;
 mod fleet;
 mod jsnum;
 mod net;
+mod sync;
 mod sys;
 mod ui;
 mod watch;
@@ -326,6 +327,8 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<(
     cfg.idle_cores = ctl.idle_cores.load(Ordering::Relaxed);
     cfg.active_cores = ctl.active_cores.load(Ordering::Relaxed);
     cfg.max_slots = ctl.max_slots.load(Ordering::Relaxed);
+    // Ids another simfleet on this config made meanwhile are kept too.
+    paths.merge_extras(&mut cfg);
     paths.save(&cfg)?;
     if let Some(s) = summary {
         println!(
@@ -334,6 +337,9 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<(
             s.session_tasks,
             ui::points(s.session_work)
         );
+        if s.kept_rows > 0 {
+            println!("还有 {} 行算完的结果没能交上（连不上服务器），已存在 kept 文件夹里，下次启动时补交。", s.kept_rows);
+        }
         if let Some(u) = s.utilisation_total {
             println!("本次核心利用率 {:.0}%（引擎实际计算时间 ÷ 预算允许的核心时间）。", u * 100.0);
         }
@@ -426,7 +432,7 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boa
             use sha2::{Digest, Sha256};
             let bytes = std::fs::read(&file).with_context(|| file.clone())?;
             let digest: String = Sha256::digest(&bytes).iter().take(6).map(|x| format!("{x:02x}")).collect();
-            let rel = work::Release { engine, wasm: digest };
+            let rel = work::Release { engine, wasm: digest, protocols: Vec::new() };
             println!("引擎 {} · 参照 wasm {} ({})", rel.engine, rel.wasm, file);
             work::build_code(&net, paths, &cfg, &ui, &rel, &bytes)?
         }

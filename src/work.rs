@@ -24,9 +24,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// What a page that can fill an order sends (worker/verify.js `PROTOCOL`):
-/// 7 is board rows in packs (`/api/board/answers`).
-pub const PROTOCOL: u32 = 7;
 /// A piece of a row is sized to about this long on one lane.
 pub const PIECE_MS: f64 = 250.0;
 pub const RIVEN_RENEW: Duration = Duration::from_secs(120);
@@ -38,14 +35,22 @@ const LANE_DEPTH: usize = 2;
 pub struct Release {
     pub engine: String,
     pub wasm: String,
+    /// The protocols the server takes (`protocols_served`); empty from a
+    /// release.json that does not say.
+    pub protocols: Vec<u32>,
 }
 
 const ID_OK: fn(&str) -> bool = |s| !s.is_empty() && s.len() <= 40 && s.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
 
+/// `protocols_served` of a reply or release.json.
+pub fn protocols_of(v: &Value) -> Vec<u32> {
+    v["protocols_served"].as_array().into_iter().flatten().filter_map(|p| p.as_u64().map(|p| p as u32)).collect()
+}
+
 pub fn fetch_release(net: &Net) -> Result<Release> {
     let r = net.get("/release.json")?;
     let s = |k: &str| r.body[k].as_str().unwrap_or("").to_string();
-    let rel = Release { engine: s("engine"), wasm: s("wasm") };
+    let rel = Release { engine: s("engine"), wasm: s("wasm"), protocols: protocols_of(&r.body) };
     if !ID_OK(&rel.engine) || !ID_OK(&rel.wasm) {
         bail!("release.json 无法识别：{}", r.body);
     }

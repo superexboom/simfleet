@@ -28,10 +28,14 @@
 //! that reports two classes or more; on anything else, AMD included, nothing
 //! is changed.
 //!
+//! The threads that are no lane (a native riven gain's search starts its own
+//! each round) are kept to the tiers the lanes are in (`process_default`).
+//!
 //! ON EVERY MACHINE each lane records the processor its last job ran on and
-//! the CPU time it was actually given against its jobs' wall time, so the
-//! console shows what the lanes really get — lanes crowded onto a few
-//! processors, or starved by other programs, show as less than one core each.
+//! its jobs' wall time, and the console sets the CPU time the whole process
+//! was given against it (fleet.rs `lane_yield`) — so lanes crowded onto a few
+//! processors, or starved by other programs, show as less than one core each,
+//! and a lane waiting on a thread its engine started does not.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -224,6 +228,27 @@ pub fn apply_lane(lane: usize) {
     }
 }
 
+/// THE THREADS NO LANE IS: a native riven gain's search scores each round on
+/// a thread WFSim's optimizer starts (optimizer/src/evaluate.rs), the lane
+/// waiting for it, and on Windows a new thread takes the process's CPU set,
+/// not its creator's — so those ran anywhere, on the P-cores' second threads
+/// and E-cores the budget had not reached. They, and the rest of the
+/// process, are kept to the processors the first `lanes` lanes are given. (On
+/// Linux a new thread takes its creator's affinity: nothing to do.)
+pub fn process_default(lanes: usize) {
+    static SET_FOR: AtomicU64 = AtomicU64::new(0);
+    let Some(p) = PLAN.get() else { return };
+    if lanes == 0 || SET_FOR.swap(lanes as u64, Ordering::Relaxed) == lanes as u64 {
+        return;
+    }
+    let mut ids: Vec<u32> = (0..lanes).filter_map(|l| Topology::lane_tier(&p.tiers, l)).flat_map(|t| t.1.iter().copied()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    if !ids.is_empty() {
+        set_process_cpus(&ids);
+    }
+}
+
 /// A lane's job measured: where it ran, the CPU time it was given, its wall time.
 pub fn note_job(lane: usize, cpu_us: u64, wall_us: u64) {
     if lane < LANES {
@@ -372,6 +397,18 @@ fn set_thread_cpus(ids: &[u32]) {
 
 #[cfg(not(any(windows, target_os = "linux")))]
 fn set_thread_cpus(_ids: &[u32]) {}
+
+#[cfg(windows)]
+fn set_process_cpus(ids: &[u32]) {
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, SetProcessDefaultCpuSets};
+    // SAFETY: ids from GetSystemCpuSetInformation; the pseudo-handle is this process.
+    unsafe {
+        SetProcessDefaultCpuSets(GetCurrentProcess(), ids.as_ptr(), ids.len() as u32);
+    }
+}
+
+#[cfg(not(windows))]
+fn set_process_cpus(_ids: &[u32]) {}
 
 /// EcoQoS for the whole process: on (`slow`) or off.
 #[cfg(windows)]
@@ -526,6 +563,45 @@ mod tests {
         .join()
         .unwrap();
         println!("allowed {allowed:?}, ran on {seen:?}");
+        assert!(seen.iter().all(|c| allowed.contains(c)));
+    }
+
+    /// A thread a lane starts takes the PROCESS's CPU set, not the lane's —
+    /// so the process default is what holds a native riven gain's helpers:
+    /// `cargo test process_cpus_hold -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    #[cfg(windows)]
+    fn process_cpus_hold() {
+        let t = Topology::read();
+        let mine: Vec<&Cpu> = t.cpus.iter().filter(|c| c.group == 0).collect();
+        assert!(mine.len() >= 4, "needs four logical processors");
+        let (lane, rest) = (&mine[mine.len() - 2..], &mine[..2]);
+        let ids = |c: &[&Cpu]| -> Vec<u32> { c.iter().map(|c| c.id).collect() };
+        let (lane_ids, rest_ids) = (ids(lane), ids(rest));
+        let allowed: Vec<u32> = rest.iter().map(|c| c.index as u32).collect();
+        set_process_cpus(&rest_ids);
+        let seen = std::thread::spawn(move || {
+            set_thread_cpus(&lane_ids);
+            // …and the thread it starts.
+            std::thread::spawn(|| {
+                let mut seen = std::collections::BTreeSet::new();
+                let t0 = std::time::Instant::now();
+                while t0.elapsed() < std::time::Duration::from_millis(1500) {
+                    seen.insert(crate::sys::current_cpu());
+                }
+                seen
+            })
+            .join()
+            .unwrap()
+        })
+        .join()
+        .unwrap();
+        // SAFETY: no CPU sets clears the process default.
+        unsafe {
+            windows_sys::Win32::System::Threading::SetProcessDefaultCpuSets(windows_sys::Win32::System::Threading::GetCurrentProcess(), std::ptr::null(), 0);
+        }
+        println!("process default {allowed:?}, the lane's helper ran on {seen:?}");
         assert!(seen.iter().all(|c| allowed.contains(c)));
     }
 }

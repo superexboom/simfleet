@@ -6,6 +6,7 @@
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 use std::io::Read;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -24,8 +25,16 @@ const ROUTE_EVERY: Duration = Duration::from_secs(600);
 const ROUTE_TRIES: usize = 3;
 /// WHAT THE RELAY CARRIES (69-board-work.js `RELAY_PATHS`, the same list as its
 /// nginx site): anything else it answers 404.
-const RELAY_PATHS: [&str; 7] =
-    ["/api/board/work", "/api/board/answers", "/api/board/renew", "/api/board/release", "/api/board/mine", "/api/board/points", "/api/board/ping"];
+const RELAY_PATHS: [&str; 8] = [
+    "/api/board/sync",
+    "/api/board/work",
+    "/api/board/answers",
+    "/api/board/renew",
+    "/api/board/release",
+    "/api/board/mine",
+    "/api/board/points",
+    "/api/board/ping",
+];
 
 #[derive(Default)]
 struct Route {
@@ -43,6 +52,10 @@ pub struct Net {
     pub base: String,
     pub session: Option<String>,
     route: Arc<Mutex<Route>>,
+    /// THE SERVER'S CLOCK, as the offset of its replies' `Date` from this
+    /// machine's (ms; `i64::MIN` until one is read): a clock minutes off would
+    /// read a fresh work signal as stale (69-board-work.js `learnServerClock`).
+    skew: Arc<AtomicI64>,
 }
 
 fn tls_failure(e: &ureq::Error) -> bool {
@@ -93,6 +106,17 @@ impl Net {
             base: base.trim_end_matches('/').to_string(),
             session: session.filter(|s| !s.is_empty()),
             route: Arc::default(),
+            skew: Arc::new(AtomicI64::new(i64::MIN)),
+        }
+    }
+
+    /// Now by the server's clock (ms since the epoch), or by this machine's
+    /// before a reply from the site said its time.
+    pub fn server_now_ms(&self) -> u64 {
+        let now = crate::sys::now_ms();
+        match self.skew.load(Ordering::Relaxed) {
+            i64::MIN => now,
+            s => (now as i64).saturating_add(s).max(0) as u64,
         }
     }
 
@@ -199,7 +223,7 @@ impl Net {
             }
             req.send(text)
         })?;
-        Self::reply(&mut resp)
+        self.reply(&mut resp, !path.starts_with("http"))
     }
 
     pub fn get(&self, path: &str) -> Result<Reply> {
@@ -211,11 +235,17 @@ impl Net {
             }
             req.call()
         })?;
-        Self::reply(&mut resp)
+        self.reply(&mut resp, !path.starts_with("http"))
     }
 
-    fn reply(resp: &mut ureq::http::Response<ureq::Body>) -> Result<Reply> {
+    /// A reply read whole; `site`: from wfsim.app or its relay, whose `Date`
+    /// is the server's clock.
+    fn reply(&self, resp: &mut ureq::http::Response<ureq::Body>, site: bool) -> Result<Reply> {
         let status = resp.status().as_u16();
+        let date = resp.headers().get("date").and_then(|v| crate::sys::parse_http_date(v.to_str().ok()?));
+        if let (true, Some(d)) = (site, date) {
+            self.skew.store(d as i64 - crate::sys::now_ms() as i64, Ordering::Relaxed);
+        }
         let set_cookies = resp
             .headers()
             .get_all("set-cookie")

@@ -7,12 +7,15 @@
 //! board row parallelises across its runs but ends in a tail, and between tasks
 //! there is a round trip to the server. So:
 //!
-//! - BOARD ROWS COME IN PACKS (protocol 7, worker/verify.js `PACK_MS`): about a
-//!   minute of a computer's work under one lease, sized by the pace the client
-//!   reports. A pack's rows start as lanes come free — one row's tail is the
-//!   next row's start — and their answers go back together every half minute
-//!   and as the pack ends (`/api/board/answers`), the last send giving back the
-//!   rows it did not reach. A riven gain still comes alone.
+//! - BOARD ROWS COME IN PACKS, sized by the pace the client reports, and a
+//!   pack's rows start as lanes come free — one row's tail is the next row's
+//!   start. PROTOCOL 8 (sync.rs): a pack is about ten minutes of the id's work;
+//!   its results are kept on disk and handed in by the id's next sync, which
+//!   also renews every row the id still holds and asks for more as the work
+//!   runs low; an id holding nothing reads the work signal and syncs when it
+//!   shows work. PROTOCOL 7, where the server asks for it: a pack is about a
+//!   minute, its answers go back every half minute and as it ends
+//!   (`/api/board/answers`), each row renewed apart. A riven gain comes alone.
 //! - SEVERAL AT ONCE. The server lets one computer id hold what it computes and
 //!   one more asked ahead (`PACKS_HELD`), so a GROUP — one id — holds up to two
 //!   packs, or a riven gain and one more. One browser is one id and players open several to compute more;
@@ -31,9 +34,14 @@
 //!   handed board rows for a week (docs/CLIENTS.md `accepted`), so when the site
 //!   names a newer one the client fetches it on a thread of its own, finishes
 //!   what it holds on the old one, and computes the next work on the new.
-//! - THE NETWORK IS NEVER WAITED ON: asks, renewals and answers run on their own
-//!   threads. A plain ask (not `ahead`) makes the server take back what that id
-//!   holds, so it is only sent by an id that holds nothing and is sending nothing.
+//! - THE NETWORK IS NEVER WAITED ON: syncs, asks, renewals and answers run on
+//!   their own threads. A protocol 8 sync gives back every row of its id it
+//!   does not name, so it names them all, and an id computing a riven gain
+//!   (which no sync can name) does not sync until its answer is in; a protocol
+//!   7 plain ask (not `ahead`) does the same, so only an id holding nothing
+//!   and sending nothing sends one.
+//! - ONE ID, ONE PROCESS (sys.rs `lock_id`): a simfleet started twice on one
+//!   config takes ids the other is not using.
 //! - A RIVEN GAIN'S JOBS GO FIRST. Its search is a chain — a lead step, then the
 //!   round's scoring — so a step kept waiting holds the whole search back, while
 //!   a board piece is a quarter second and anything else can wait for one.
@@ -52,14 +60,13 @@
 use crate::config::{Config, Paths};
 use crate::engine::{Backend, Call, Code, Done, Exec, Job, Pool};
 use crate::net::Net;
+use crate::sync::{Dials, Journal, Kept, Out, Signal};
 use crate::ui::{group, points, Ctl, GroupView, Ranked, TaskLine, Ui, C_BAD, C_END, C_GO, C_INFO, C_OK};
-use crate::work::{
-    board_payload, call, fetch_release, load_code, truthy, BoardRun, Release, RowScore, PROTOCOL, RIVEN_RENEW, STATS_EVERY,
-};
-use crate::{account, jsnum, sys};
+use crate::work::{board_payload, fetch_release, load_code, truthy, BoardRun, Release, RowScore, RIVEN_RENEW, STATS_EVERY};
+use crate::{account, jsnum, sync, sys};
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -309,6 +316,42 @@ struct Group {
     last_row: Option<Instant>,
     /// When the server last had nothing for it.
     nothing_at: Option<Instant>,
+    // PROTOCOL 8 (sync.rs):
+    /// The results it keeps and those taken but unsettled, on disk.
+    journal: Journal,
+    journal_dirty: bool,
+    /// When it may next be handed work (`next_ms`), and when a failed sync may go again.
+    not_before: Instant,
+    retry_at: Instant,
+    failures: u32,
+    last_sync: Option<Instant>,
+    /// Holding nothing: when it syncs on the signal (its jitter), and when without one.
+    go_at: Option<Instant>,
+    fallback_at: Instant,
+    syncing: Option<Syncing>,
+    /// Rows its engine refused, said in the next sync (`refused`).
+    refused_rows: Vec<Value>,
+    /// What the server last said it earned (`points`), and when.
+    points: Option<(Instant, Value)>,
+    /// To sync soon, giving back what it no longer computes.
+    give_back: bool,
+}
+
+/// A protocol 8 sync on its way…
+struct Syncing {
+    handle: JoinHandle<Out>,
+    sent: Sent,
+}
+
+/// …and what it carried: the results (by question), the refused rows, the
+/// packs it named, and the work it asked for.
+struct Sent {
+    at: Instant,
+    engine: String,
+    want: u64,
+    results: Vec<String>,
+    refused: Vec<String>,
+    leases: Vec<String>,
 }
 
 /// An answer on its way to the server.
@@ -340,7 +383,26 @@ pub struct Fleet {
     lane_job: Vec<Option<u64>>,
     next_id: u64,
     stale: bool,
+    /// THE BOARD'S PROTOCOL this run: 8, or 7 once the server or the config says so.
+    proto: u32,
+    dials: Dials,
+    /// The work signal as last read (`None` inside: not to be believed) and
+    /// when; a read on its way, and when the next may go.
+    signal: Option<(Instant, Option<Signal>)>,
+    signal_job: Option<JoinHandle<Option<Value>>>,
+    signal_next: Instant,
+    /// Board results of this run another computer confirmed (`states`).
+    board_confirmed: u64,
+    journals_at: Instant,
+    journal_failed: bool,
+    /// The ids this process holds (sys.rs `lock_id`), and those another holds.
+    id_locks: Vec<sys::IdLock>,
+    ids_taken: HashSet<String>,
+    /// A newer protocol than this client's has been said.
+    newer_said: bool,
     banned_until: Option<String>,
+    /// …when the cool-down ends, in ms since the epoch.
+    banned_end: Option<u64>,
     /// The server's word when it hands this client no work at all (`unrecognised_client`).
     refused: Option<String>,
     recent: Vec<(String, bool, Value)>,
@@ -378,7 +440,7 @@ pub struct Fleet {
     /// A board row's cost in lane milliseconds, smoothed: what the work held is measured in.
     row_cost_ms: f64,
     meter: Meter,
-    /// The lanes' CPU and wall time when last read, and when it was read.
+    /// The process's CPU time and the lanes' working time when last read (µs), and when.
     yield_seen: (Instant, u64, u64),
     /// Since when the lanes have been given too little, and when that was last said.
     starved_since: Option<Instant>,
@@ -394,6 +456,8 @@ impl Fleet {
             s.engine = rel.engine.clone();
             s.backend = backend.into();
         });
+        let proto = if cfg.protocol == 7 { 7 } else { sync::PROTOCOL };
+        let ids: Vec<String> = std::iter::once(cfg.verifier.clone()).chain(cfg.extra_verifiers.iter().cloned()).collect();
         let mut f = Fleet {
             net,
             cfg,
@@ -412,7 +476,19 @@ impl Fleet {
             lane_job: Vec::new(),
             next_id: 0,
             stale: false,
+            proto,
+            dials: Dials::default(),
+            signal: None,
+            signal_job: None,
+            signal_next: Instant::now(),
+            board_confirmed: 0,
+            journals_at: Instant::now(),
+            journal_failed: false,
+            id_locks: Vec::new(),
+            ids_taken: HashSet::new(),
+            newer_said: false,
             banned_until: None,
+            banned_end: None,
             refused: None,
             recent: Vec::new(),
             stats_at: None,
@@ -436,7 +512,7 @@ impl Fleet {
             row_cost_ms: 0.0,
             riven_seen: 0,
             meter: Meter::new(),
-            yield_seen: (Instant::now(), 0, 0),
+            yield_seen: (Instant::now(), sys::process_cpu_us(), crate::affinity::lane_totals().1),
             starved_since: None,
             starved_said: None,
             session_dropped: false,
@@ -445,24 +521,30 @@ impl Fleet {
         if f.cfg.slots > 0 {
             f.open = f.cfg.slots;
         }
+        if f.proto == 7 {
+            f.ui.log(format!("{C_INFO}[协议]{C_END} 按配置使用协议 7"));
+        }
         f.ensure_groups(f.open);
+        // IDS WITH RESULTS LEFT by a run that ended before handing them in get
+        // their groups too, which hand them in (one past `open` takes no work).
+        if let Some(last) = ids.iter().rposition(|v| !Journal::load(&f.paths.dir, v).results.is_empty()) {
+            f.ensure_groups(last + 1);
+        }
         f
     }
 
-    /// Up to `n` groups, each with an id: the config's first, then its extras —
-    /// made here when a new group opens, and saved.
+    /// Up to `n` groups, each with an id of this config another simfleet does
+    /// not hold (`free_id`), and what that id kept (sync.rs `Journal`).
     fn ensure_groups(&mut self, n: usize) {
         while self.groups.len() < n {
-            let i = self.groups.len();
-            let verifier = if i == 0 {
-                self.cfg.verifier.clone()
-            } else {
-                while self.cfg.extra_verifiers.len() < i {
-                    self.cfg.extra_verifiers.push(sys::random_hex(12));
-                    let _ = self.paths.save(&self.cfg);
-                }
-                self.cfg.extra_verifiers[i - 1].clone()
-            };
+            let verifier = self.free_id();
+            let journal = Journal::load(&self.paths.dir, &verifier);
+            if !journal.results.is_empty() {
+                self.ui.glog(
+                    self.groups.len(),
+                    format!("{C_INFO}[结果]{C_END} 上次运行有 {} 行结果没交上，这次补交", journal.results.len()),
+                );
+            }
             let now = Instant::now();
             self.groups.push(Group {
                 verifier,
@@ -472,10 +554,58 @@ impl Fleet {
                 claimed: false,
                 done: 0,
                 work: 0,
-                pace_ms: 0.0,
+                pace_ms: journal.pace_ms.max(0.0),
                 last_row: None,
                 nothing_at: None,
+                journal,
+                journal_dirty: false,
+                not_before: now,
+                retry_at: now,
+                failures: 0,
+                last_sync: None,
+                go_at: None,
+                fallback_at: now,
+                syncing: None,
+                refused_rows: Vec::new(),
+                points: None,
+                give_back: false,
             });
+        }
+    }
+
+    /// THE NEXT ID of this config that no other simfleet holds now: the
+    /// config's own, then its extras, one more made (and saved) when they are
+    /// all in use. Another process holding one is the same config run twice;
+    /// two of them on one id would each give back what the other holds.
+    fn free_id(&mut self) -> String {
+        let mut i = 0;
+        loop {
+            if i > 0 && self.cfg.extra_verifiers.len() < i {
+                self.paths.merge_extras(&mut self.cfg);
+                if self.cfg.extra_verifiers.len() < i {
+                    self.cfg.extra_verifiers.push(sys::random_hex(12));
+                    let _ = self.paths.save(&self.cfg);
+                }
+            }
+            let id = if i == 0 { self.cfg.verifier.clone() } else { self.cfg.extra_verifiers[i - 1].clone() };
+            i += 1;
+            if self.groups.iter().any(|g| g.verifier == id) || self.ids_taken.contains(&id) {
+                continue;
+            }
+            match sys::lock_id(&id) {
+                sys::IdUse::Mine(l) => {
+                    self.id_locks.push(l);
+                    return id;
+                }
+                sys::IdUse::Unknown => return id,
+                sys::IdUse::Taken => {
+                    self.ui.log(format!(
+                        "{C_GO}[多开]{C_END} 计算者 id {}… 正被另一个 simfleet 使用（同一份配置开了两次），本进程改用别的 id",
+                        id.get(..6).unwrap_or(&id)
+                    ));
+                    self.ids_taken.insert(id);
+                }
+            }
         }
     }
 
@@ -533,14 +663,19 @@ impl Fleet {
         }
     }
 
+    /// WHAT THIS ID CAN GIVE: its share of the lanes, as one browser among several says its own.
+    fn id_lanes(&self) -> usize {
+        (self.lanes() / self.open.max(1)).max(1)
+    }
+
+    /// A protocol 7 ask (`/api/board/work`).
     fn ask_body(&self, gi: usize, ahead: bool) -> Value {
-        // WHAT THIS ID CAN GIVE: its share of the lanes, as one browser among several says its own.
-        let lanes = (self.lanes() / self.open.max(1)).max(1);
+        let lanes = self.id_lanes();
         let g = &self.groups[gi];
         let mut b = json!({
             "verifier": g.verifier,
             "engine": self.rel.engine,
-            "protocol": PROTOCOL,
+            "protocol": 7,
             "consent": { "v": self.cfg.consent_v, "at": self.cfg.consent_at },
             "lanes": lanes,
         });
@@ -582,10 +717,19 @@ impl Fleet {
         }
     }
 
-    /// A pack with nothing left to start or finish: its last answers, `done`.
+    /// A pack with nothing left to start or finish: protocol 7's last answers,
+    /// `done`. A protocol 8 pack's results are kept already, and a row it did
+    /// not reach goes back with the id's next sync, which no longer names it —
+    /// sent soon for it.
     fn maybe_end_pack(&mut self, pid: u64) {
-        if self.packs.iter().any(|p| p.id == pid && p.rows.is_empty() && p.running == 0) {
-            self.send_pack(pid, true);
+        let Some(pi) = self.packs.iter().position(|p| p.id == pid && p.rows.is_empty() && p.running == 0) else { return };
+        if self.proto == 7 {
+            return self.send_pack(pid, true);
+        }
+        let p = self.packs.remove(pi);
+        if p.answered < p.total {
+            self.groups[p.group].give_back = true;
+            self.ui.glog(p.group, format!("{C_GO}[交还]{C_END} 本包还有 {} 行没算，随下次同步交还", p.total - p.answered));
         }
     }
 
@@ -621,6 +765,8 @@ impl Fleet {
     fn drop_all(&mut self, why: &str) {
         for p in &mut self.packs {
             p.rows.clear();
+            // Protocol 8: what is no longer computed goes back with a sync soon.
+            self.groups[p.group].give_back = true;
         }
         let ids: Vec<u64> = self.tasks.iter().map(|t| t.id).collect();
         for id in ids {
@@ -628,7 +774,14 @@ impl Fleet {
         }
         let packs: Vec<u64> = self.packs.iter().map(|p| p.id).collect();
         for pid in packs {
-            self.send_pack(pid, true);
+            if self.proto == 7 {
+                self.send_pack(pid, true);
+            } else {
+                self.maybe_end_pack(pid);
+            }
+        }
+        for g in &mut self.groups {
+            g.give_back |= !g.journal.results.is_empty();
         }
         // An ask still on its way may come back holding a lease: give it back.
         for g in &mut self.groups {
@@ -650,9 +803,24 @@ impl Fleet {
         self.drop_all("，任务已交还");
         // The last answers count in the closing line too — sent again for up to
         // three quarters of a minute when the site does not answer.
-        if !self.sending.is_empty() {
+        if !self.sending.is_empty() || (self.proto == 8 && !self.offline) {
             self.ui.status(|st| st.state = "正在交最后的答案（连不上服务器时会重试，最多约 45 秒）".into());
         }
+        self.join_sending();
+        // …and then each id's last sync: a riven gain's answer is in by now,
+        // which a sync naming nothing would have given back.
+        if self.proto == 8 && !self.offline {
+            self.last_syncs();
+            // (A server that said protocol 7 meanwhile was sent the results as answers.)
+            self.join_sending();
+        }
+        self.save_journals();
+        let (rows, _) = self.kept();
+        self.ui.status(|st| st.kept_rows = rows);
+    }
+
+    /// Every answer on its way, waited for and counted.
+    fn join_sending(&mut self) {
         for s in self.sending.drain(..) {
             if s.handle.join().unwrap_or(false) {
                 self.ui.status(|st| {
@@ -742,15 +910,10 @@ impl Fleet {
         // AN OLDER ENGINE STILL ACCEPTED: the site serves `engine` now, and takes
         // this one's answers on the rows it hands it until `accepted_until`.
         if let Some(e) = r["engine"].as_str().filter(|e| *e != self.rel.engine) {
-            self.served_moved(e.to_string(), r["accepted_until"].as_str().unwrap_or("?").to_string());
+            self.served_moved(e.to_string(), r["accepted_until"].as_str().map(String::from));
         }
         if r["banned"] == json!(true) {
-            let until = r["until"].as_str().unwrap_or("?").to_string();
-            if self.banned_until.is_none() {
-                self.ui.log(format!("{C_BAD}[冷却]{C_END} 服务器复核时与本机结果不一致，暂停派活至 {until}"));
-            }
-            self.banned_until = Some(until);
-            return;
+            return self.cool_down(&r);
         }
         // A PACK of board rows.
         let pack = &r["pack"];
@@ -809,6 +972,27 @@ impl Fleet {
         self.start(gi, verifier, w, None);
     }
 
+    /// A COOL-DOWN (`banned: true, until`): no work is asked for until it ends —
+    /// the next ask after it lifts it (docs/CLIENTS.md, "a penalty is a
+    /// cool-down"). An end the reply does not say is taken as an hour.
+    fn cool_down(&mut self, r: &Value) {
+        let until = r["until"].as_str().unwrap_or("?").to_string();
+        if self.banned_until.is_none() {
+            self.ui.log(format!("{C_BAD}[冷却]{C_END} 服务器复核时与本机结果不一致，暂停派活至 {until}"));
+        }
+        self.banned_end = Some(sys::parse_iso(&until).unwrap_or(sys::now_ms() + 3_600_000));
+        self.banned_until = Some(until);
+    }
+
+    /// …and its end.
+    fn cool_down_over(&mut self) {
+        if self.banned_end.is_some_and(|t| sys::now_ms() >= t) {
+            self.banned_end = None;
+            self.banned_until = None;
+            self.ui.log(format!("{C_INFO}[冷却]{C_END} 冷却结束，重新领活"));
+        }
+    }
+
     /// THE NEXT ROW of the oldest pack with one, started — `false` when no pack has one.
     fn start_row(&mut self) -> bool {
         let Some(pi) = self.packs.iter().position(|p| !p.rows.is_empty()) else { return false };
@@ -841,11 +1025,26 @@ impl Fleet {
             let (ruler, mode) = (w["ruler"].as_str().unwrap_or("").to_string(), w["mode"].as_str().unwrap_or("").to_string());
             let label = format!("{} · {ruler} · {mode}", w["record"]["weapon"].as_str().unwrap_or("?"));
             let backend = self.backend();
-            match call(&mut self.exec, backend, "/api/board/order", json!({ "record": w["record"], "ruler": ruler, "mode": mode }).to_string()) {
-                Ok(o) => {
+            let body = json!({ "record": w["record"], "ruler": ruler, "mode": mode }).to_string();
+            match self.exec.api(backend, "/api/board/order", body).and_then(|t| jsnum::parse(&t)) {
+                Ok(o) if o["ok"] != json!(false) => {
                     let runs = o["request"]["runs"].as_u64().unwrap_or(0);
                     self.ui.glog(gi, format!("{C_GO}[开始]{C_END} 榜单  {label}  {runs} 次模拟"));
                     (Runner::Board(BoardRun::new(&o["request"], &ruler)), label, None)
+                }
+                // A ROW THIS ENGINE REFUSES (protocol 8): said so in the next
+                // sync, given back, and never handed here again on this engine.
+                Ok(o) if pack.is_some() && self.proto == 8 => {
+                    self.groups[gi].refused_rows.push(json!({ "lease": lease, "question": w["question"], "step": "order" }));
+                    self.ui.glog(gi, format!("{C_BAD}[跳过]{C_END} 榜单 {label}：引擎不接受这一行（{}），随下次同步报告", o["error"].as_str().unwrap_or("?")));
+                    return false;
+                }
+                Ok(o) => {
+                    if !self.offline && pack.is_none() {
+                        Self::release_lease(&self.net, &verifier, &lease, None);
+                    }
+                    self.ui.glog(gi, format!("{C_BAD}[跳过]{C_END} 榜单 {label}：/api/board/order: {}", o["error"].as_str().unwrap_or("engine refused")));
+                    return false;
                 }
                 Err(e) => {
                     // A pack's row is left unanswered, and goes back with the pack.
@@ -892,6 +1091,469 @@ impl Fleet {
         }
     }
 
+    // ---- protocol 8 ---------------------------------------------------------------
+
+    /// EVERY ROW AN ID HOLDS UNANSWERED, by lease — those not started and those
+    /// running — named in full in each of its syncs.
+    fn held_rows(&self, gi: usize) -> Vec<(String, Vec<String>)> {
+        self.packs
+            .iter()
+            .filter(|p| p.group == gi)
+            .filter_map(|p| {
+                let mut rows: Vec<String> = p.rows.iter().filter_map(|w| w["question"].as_str().map(String::from)).collect();
+                rows.extend(self.tasks.iter().filter(|t| t.pack == Some(p.id)).map(|t| t.question.clone()));
+                (!rows.is_empty()).then(|| (p.lease.clone(), rows))
+            })
+            .collect()
+    }
+
+    fn holds_nothing(&self, gi: usize) -> bool {
+        !self.packs.iter().any(|p| p.group == gi) && !self.tasks.iter().any(|t| t.group == gi)
+    }
+
+    /// The results every id keeps, not taken yet: rows and work.
+    fn kept(&self) -> (u64, u64) {
+        self.groups.iter().fold((0, 0), |(r, w), g| (r + g.journal.results.len() as u64, w + g.journal.kept_work()))
+    }
+
+    /// The journals changed since they were last written, written.
+    fn save_journals(&mut self) {
+        self.journals_at = Instant::now();
+        for g in &mut self.groups {
+            if std::mem::take(&mut g.journal_dirty) {
+                if let Err(e) = g.journal.save(&self.paths.dir) {
+                    if !self.journal_failed {
+                        self.ui.log(format!("{C_BAD}[结果]{C_END} 无法把结果写进 {}：{e}", self.paths.dir.join("kept").display()));
+                    }
+                    self.journal_failed = true;
+                }
+            }
+        }
+    }
+
+    /// A PROTOCOL NEWER than this client's: it keeps working, and says so once.
+    fn note_protocol(&mut self, r: &Value) {
+        let newest = r["protocol"].as_u64().unwrap_or(0);
+        if newest > sync::PROTOCOL as u64 && !self.newer_said {
+            self.newer_said = true;
+            self.ui.log(format!("{C_GO}[协议]{C_END} 服务器已有协议 {newest}（simfleet 用 {}），照常计算；新版 simfleet 会跟上", self.proto));
+        }
+    }
+
+    /// THE WORK SIGNAL, read every `poll_ms` (give or take a quarter) on a
+    /// thread of its own while an id holds nothing and may be handed work. An
+    /// engine it names other than ours is made ready as release.json's would be.
+    fn read_signal(&mut self) {
+        if self.signal_job.as_ref().is_some_and(|h| h.is_finished()) {
+            let v = self.signal_job.take().and_then(|h| h.join().ok()).flatten();
+            let s = v.and_then(|v| sync::signal(&v, self.net.server_now_ms(), &mut self.dials));
+            if let Some(e) = s.as_ref().map(|s| s.engine.clone()).filter(|e| e.len() == 12 && *e != self.rel.engine) {
+                self.served_moved(e, None);
+            }
+            self.signal = Some((Instant::now(), s));
+        }
+        let now = Instant::now();
+        let wanted = (0..self.groups.len().min(self.open)).any(|gi| {
+            let g = &self.groups[gi];
+            g.syncing.is_none() && now >= g.not_before && now >= g.retry_at && self.holds_nothing(gi)
+        });
+        if wanted && self.signal_job.is_none() && now >= self.signal_next {
+            self.signal_next = now + sync::jittered(self.dials.poll_ms);
+            let net = self.net.clone();
+            self.signal_job = Some(std::thread::spawn(move || net.get(sync::SIGNAL_URL).ok().filter(|r| r.status == 200).map(|r| r.body)));
+        }
+    }
+
+    /// WHETHER AN ID HOLDING NOTHING SYNCS FOR WORK now: `None` until a signal
+    /// has been read lately; with work showing, once its jitter has passed;
+    /// with no signal to believe, every `FALLBACK_MS` or so.
+    fn idle_go(&mut self, gi: usize, now: Instant) -> Option<bool> {
+        let read = self.signal.as_ref().filter(|(t, _)| now.duration_since(*t) < Duration::from_millis(3 * self.dials.poll_ms))?;
+        let g = &mut self.groups[gi];
+        Some(match &read.1 {
+            None => g.last_sync.is_none() || now >= g.fallback_at,
+            Some(s) if s.urgent > 0 || s.open > 0 => {
+                let wait = if s.urgent > 0 { self.dials.urgent_jitter_ms } else { self.dials.jitter_ms };
+                now >= *g.go_at.get_or_insert_with(|| now + Duration::from_millis((sys::random_unit() * wait as f64) as u64))
+            }
+            Some(_) => {
+                g.go_at = None;
+                false
+            }
+        })
+    }
+
+    /// PROTOCOL 8 (see the module's note): the syncs that came back, and each
+    /// id's next where one is due — for work as its work runs low (`sync_low_ms`
+    /// left) or, holding nothing, when the signal shows some, never before its
+    /// `next_ms`; to hand in results that have waited `flush_ms`; to renew rows
+    /// whose lease nears its end; to give back what it no longer computes; and
+    /// every `report_ms` to say it is on.
+    fn syncs(&mut self) {
+        for gi in 0..self.groups.len() {
+            if self.groups[gi].syncing.as_ref().is_some_and(|s| s.handle.is_finished()) {
+                let s = self.groups[gi].syncing.take().expect("checked above");
+                let out = s.handle.join().unwrap_or_else(|_| Out::Failed("panicked".into()));
+                self.take_sync(gi, s.sent, out);
+                if self.proto != 8 {
+                    return;
+                }
+            }
+        }
+        if self.offline || self.refused.is_some() || self.stale {
+            return;
+        }
+        let held_back = self.quit() || self.held_why().is_some() || self.banned_until.is_some();
+        if !held_back {
+            self.read_signal();
+        }
+        let now = Instant::now();
+        for gi in 0..self.groups.len() {
+            if self.groups[gi].syncing.is_some() || now < self.groups[gi].retry_at {
+                continue;
+            }
+            // A RIVEN GAIN IS NO ROW A SYNC CAN NAME, so a sync would give it
+            // back: its id syncs again once its answer is in.
+            if self.tasks.iter().any(|t| t.group == gi && t.riven()) || self.sending.iter().any(|s| s.group == gi) {
+                continue;
+            }
+            let held: usize = self.held_rows(gi).iter().map(|(_, r)| r.len()).sum();
+            let packs = self.packs.iter().filter(|p| p.group == gi).count() as u64;
+            let idle = packs == 0 && held == 0;
+            // AN OLDER ENGINE'S RESULTS go in first, under that engine, from an
+            // id holding nothing (such a sync names no row): after the engine
+            // changed, or from a run that ended before handing them in.
+            if let Some(e) = self.groups[gi].journal.other_engine(&self.rel.engine) {
+                if idle {
+                    self.start_sync(gi, Some(e), 0, false);
+                }
+                continue;
+            }
+            let open = gi < self.open && !held_back && self.switch_to.is_none();
+            let go = match (idle && open && now >= self.groups[gi].not_before).then(|| self.idle_go(gi, now)) {
+                Some(None) => continue,
+                // THE SIGNAL SHOWS WORK and its jitter runs: the sync for work
+                // carries whatever else is due, so nothing goes before it.
+                Some(Some(false)) if self.groups[gi].go_at.is_some() => continue,
+                Some(Some(go)) => go,
+                None => false,
+            };
+            let g = &self.groups[gi];
+            let left = held as f64 * if g.pace_ms > 0.0 { g.pace_ms } else { 60_000.0 };
+            let work = open && now >= g.not_before && packs < self.dials.packs_held && if idle { go } else { left < self.dials.sync_low_ms as f64 };
+            // WITH NO PACE YET the server hands `pack_first` rows whatever is
+            // asked, and says to come back once what was asked is nearly done:
+            // asked for ten minutes, that is eight minutes with three rows.
+            // So it is asked for about what it gives — back in a minute, pace known.
+            let want = if g.pace_ms > 0.0 {
+                (self.dials.pack8_ms as f64 - left).max(0.0) as u64
+            } else {
+                (self.dials.sync_low_ms + self.dials.sync_floor_ms).min(self.dials.pack8_ms)
+            };
+            let flush = g.journal.oldest(&self.rel.engine).is_some_and(|at| sys::now_ms().saturating_sub(at) >= self.dials.flush_ms)
+                || (g.last_sync.is_none() && !g.journal.results.is_empty());
+            let renew = held > 0 && self.packs.iter().any(|p| p.group == gi && now + sync::RENEW_BEFORE >= p.until);
+            let report = idle
+                && open
+                && self.dials.report_ms > 0
+                && g.last_sync.is_none_or(|t| now.duration_since(t) >= Duration::from_millis(self.dials.report_ms));
+            if work {
+                self.start_sync(gi, None, want, false);
+            } else if flush || renew || report || g.give_back {
+                self.start_sync(gi, None, 0, false);
+            }
+        }
+    }
+
+    /// ONE SYNC of id `gi`, on its own thread. `engine`: another engine whose
+    /// results it hands in (such a sync names no row); `want`: the work asked
+    /// for, 0 to renew and hand in only; `last`: the way out, sent again for up
+    /// to three quarters of a minute when it gets no reply.
+    fn start_sync(&mut self, gi: usize, engine: Option<String>, want: u64, last: bool) {
+        if !self.groups[gi].claimed && self.net.session.is_some() {
+            self.claim(gi);
+        }
+        let engine = engine.unwrap_or_else(|| self.rel.engine.clone());
+        let current = engine == self.rel.engine;
+        let held = if current { self.held_rows(gi) } else { Vec::new() };
+        let lanes = self.id_lanes();
+        let consent = json!({ "v": self.cfg.consent_v, "at": self.cfg.consent_at });
+        let (since, lease_max) = (sys::local_midnight_utc_hour(), self.dials.sync_lease_ms);
+        let g = &mut self.groups[gi];
+        let old = g.journal.prune(sys::now_ms());
+        if old > 0 {
+            g.journal_dirty = true;
+            self.ui.glog(gi, format!("{C_GO}[作废]{C_END} {old} 行结果存了超过一天仍没交上，已放弃"));
+        }
+        let refused: Vec<Value> = if current { g.refused_rows.iter().take(sync::REFUSED_MAX).cloned().collect() } else { Vec::new() };
+        let pace = (g.pace_ms > 0.0).then(|| (g.pace_ms.round() as u64).clamp(100, lease_max));
+        let (body, results) = {
+            let send = g.journal.to_send(&engine);
+            let body = sync::body(&g.verifier, &engine, consent, lanes, pace, want, &held, &send, &refused, g.journal.ask_states(), &since);
+            (body, send.iter().map(|k| k.question.clone()).collect::<Vec<_>>())
+        };
+        let sent = Sent {
+            at: Instant::now(),
+            engine,
+            want,
+            results,
+            refused: refused.iter().filter_map(|r| r["question"].as_str().map(String::from)).collect(),
+            leases: held.into_iter().map(|(lease, _)| lease).collect(),
+        };
+        g.go_at = None;
+        g.give_back = false;
+        g.fallback_at = Instant::now() + sync::jittered(sync::FALLBACK_MS);
+        let net = self.net.clone();
+        let handle = std::thread::spawn(move || {
+            let mut out = sync::send(&net, &body);
+            for wait in SEND_AGAIN.iter().filter(|_| last) {
+                if !matches!(out, Out::Failed(_)) {
+                    break;
+                }
+                std::thread::sleep(*wait);
+                out = sync::send(&net, &body);
+            }
+            out
+        });
+        g.syncing = Some(Syncing { handle, sent });
+    }
+
+    /// A SYNC'S REPLY (docs/CLIENTS.md, the reply's table): results taken
+    /// leave the journal for the pending list and those dropped go; rows no
+    /// longer the id's are passed by or stopped; each pack it named runs on; a
+    /// new pack waits for lanes; `next_ms` is when the id may next be handed work.
+    fn take_sync(&mut self, gi: usize, s: Sent, out: Out) {
+        let now = Instant::now();
+        let r = match out {
+            Out::Reply(r) => r,
+            Out::Refused(msg) => {
+                if self.refused.is_none() {
+                    self.ui.log(format!("{C_BAD}[服务器]{C_END} {msg}"));
+                }
+                self.refused = Some(msg);
+                return;
+            }
+            Out::Failed(why) => {
+                let g = &mut self.groups[gi];
+                g.failures += 1;
+                g.retry_at = now + sync::backoff(g.failures);
+                // A body the server cannot read is this client's to fix: said, not only tried again.
+                if why.starts_with("HTTP 400") || g.failures == 3 {
+                    self.ui.glog(gi, format!("{C_BAD}[同步]{C_END} 同步失败（{why}），稍后重试；算完的结果存在本地，不会丢"));
+                }
+                self.ui.status(|st| st.state = "连不上服务器，稍后重试".into());
+                return;
+            }
+        };
+        if r["fallback"] == json!(7) {
+            return self.fall_back("服务器暂时关闭了协议 8");
+        }
+        if r["dials"].is_object() {
+            self.dials.take(&r["dials"]);
+        }
+        self.note_protocol(&r);
+        let lease_ms = self.dials.sync_lease_ms;
+        let g = &mut self.groups[gi];
+        g.failures = 0;
+        g.last_sync = Some(now);
+        if let Some(ms) = r["next_ms"].as_u64() {
+            g.not_before = now + Duration::from_millis(ms);
+        }
+        if r["points"].is_object() {
+            g.points = Some((now, r["points"].clone()));
+        }
+        g.refused_rows.retain(|x| !s.refused.iter().any(|q| x["question"].as_str() == Some(q.as_str())));
+        let (rows, work, dropped) = g.journal.settle(&s.results, &r, sys::now_ms());
+        let confirmed = g.journal.states(&r);
+        g.journal_dirty = true;
+        g.done += rows;
+        g.work += work;
+        self.board_confirmed += confirmed;
+        if rows > 0 {
+            self.ui.glog(gi, format!("{C_OK}[提交]{C_END} {rows} 行答案 · {:.2} 分", points(work)));
+            self.ui.status(|st| {
+                st.session_tasks += rows;
+                st.session_work += work;
+            });
+        }
+        if dropped > 0 {
+            self.ui.glog(gi, format!("{C_GO}[作废]{C_END} {dropped} 行结果没被收下（那几行已转给别的电脑，或这个引擎已不再接受）"));
+        }
+        // RENEWED: each pack it named runs on from when the sync went.
+        for p in self.packs.iter_mut().filter(|p| p.group == gi && s.leases.contains(&p.lease)) {
+            p.until = s.at + Duration::from_millis(lease_ms);
+        }
+        // NO LONGER THIS ID'S: a row not started is passed by, one running stopped.
+        let lost = sync::lost(&r);
+        if !lost.is_empty() {
+            let gone = |w: &Value| w["question"].as_str().is_some_and(|q| lost.iter().any(|l| l == q));
+            for p in self.packs.iter_mut().filter(|p| p.group == gi) {
+                let before = p.rows.len();
+                p.rows.retain(|w| !gone(w));
+                p.total -= before - p.rows.len();
+            }
+            let stop: Vec<u64> = self.tasks.iter().filter(|t| t.group == gi && lost.contains(&t.question)).map(|t| t.id).collect();
+            for id in stop {
+                self.drop_task(id, "：这一行已由别的电脑接手，跳过", false);
+            }
+            let pids: Vec<u64> = self.packs.iter().filter(|p| p.group == gi).map(|p| p.id).collect();
+            for pid in pids {
+                self.maybe_end_pack(pid);
+            }
+        }
+        if r["stale"] == json!(true) {
+            if s.engine == self.rel.engine {
+                self.stale = true;
+            } else {
+                // An older engine's results the server no longer takes.
+                let g = &mut self.groups[gi];
+                let before = g.journal.results.len();
+                g.journal.results.retain(|k| k.engine != s.engine);
+                g.journal_dirty = true;
+                self.ui.glog(gi, format!("{C_GO}[作废]{C_END} 引擎 {} 已不再被接受，它算的 {} 行结果交不上了", s.engine, before - g.journal.results.len()));
+            }
+            return;
+        }
+        if r["banned"] == json!(true) {
+            return self.cool_down(&r);
+        }
+        if r["busy"] == json!(true) && self.busy_said.is_none_or(|t| t.elapsed() > Duration::from_secs(600)) {
+            self.busy_said = Some(Instant::now());
+            self.ui.log(format!("{C_GO}[服务器]{C_END} 服务器繁忙，暂不派新活；算完的结果先存在本地"));
+        }
+        // AN OLDER ENGINE STILL ACCEPTED: the site serves `engine` now.
+        if let Some(e) = r["engine"].as_str().filter(|e| *e != self.rel.engine) {
+            self.served_moved(e.to_string(), r["accepted_until"].as_str().map(String::from));
+        }
+        let pack = &r["pack"];
+        if let (Some(rows), Some(lease)) = (pack["tasks"].as_array().filter(|t| !t.is_empty()), pack["lease"].as_str()) {
+            if self.quit() || self.held_why().is_some() || s.engine != self.rel.engine {
+                // Not to be computed: the next sync names none of it, so it goes back.
+                self.groups[gi].give_back = true;
+                return;
+            }
+            let lease_ms = pack["lease_ms"].as_u64().unwrap_or(self.dials.pack_lease_ms);
+            let verifier = self.groups[gi].verifier.clone();
+            self.next_id += 1;
+            self.ui.glog(gi, format!("{C_INFO}[领取]{C_END} 一包 {} 行榜单，租约 {:.0} 分钟", rows.len(), lease_ms as f64 / 60_000.0));
+            self.packs.push(Pack {
+                id: self.next_id,
+                group: gi,
+                verifier,
+                lease: lease.to_string(),
+                rows: rows.iter().cloned().collect(),
+                total: rows.len(),
+                running: 0,
+                answered: 0,
+                unsent: Vec::new(),
+                unsent_work: 0,
+                sent_at: now,
+                until: s.at + Duration::from_millis(lease_ms),
+            });
+            return;
+        }
+        let w = r["work"].clone();
+        if w["kind"] == json!("riven_gain") {
+            let verifier = self.groups[gi].verifier.clone();
+            if self.quit() || self.held_why().is_some() {
+                Self::release_lease(&self.net, &verifier, w["lease"].as_str().unwrap_or(""), w["code"].as_str());
+            } else {
+                self.start(gi, verifier, w, None);
+            }
+            return;
+        }
+        if s.want > 0 && r["early"] != json!(true) {
+            self.groups[gi].nothing_at = Some(now);
+        }
+    }
+
+    /// PROTOCOL 7 FOR THE REST OF THE RUN (`fallback: 7`, or a server that no
+    /// longer takes 8): each id's kept results go in as protocol 7 answers, by
+    /// lease and twenty at a time (`/api/board/answers` takes `pack_max` and
+    /// 32 KB at most), and the rows held go on under protocol 7's renewals.
+    fn fall_back(&mut self, why: &str) {
+        if self.proto == 7 {
+            return;
+        }
+        self.proto = 7;
+        self.ui.log(format!("{C_GO}[协议]{C_END} {why}，本次运行改用协议 7"));
+        let now = Instant::now();
+        for gi in 0..self.groups.len() {
+            let g = &mut self.groups[gi];
+            // A sync on its way is not waited for: what it took is sent again below, and taken once.
+            g.syncing = None;
+            let mut by: BTreeMap<(String, String), Vec<Kept>> = BTreeMap::new();
+            for k in g.journal.results.drain(..) {
+                let lease = k.result["lease"].as_str().unwrap_or("").to_string();
+                by.entry((k.engine.clone(), lease)).or_default().push(k);
+            }
+            g.journal_dirty = true;
+            let verifier = g.verifier.clone();
+            for ((engine, lease), ks) in by {
+                for part in ks.chunks(20) {
+                    let (rows, work) = (part.len() as u64, part.iter().map(|k| k.work).sum::<u64>());
+                    let answers: Vec<Value> = part
+                        .iter()
+                        .map(|k| {
+                            let mut a = k.result.clone();
+                            if let Some(o) = a.as_object_mut() {
+                                o.remove("lease");
+                            }
+                            a
+                        })
+                        .collect();
+                    let body = json!({ "lease": lease, "verifier": verifier, "engine": engine, "done": false, "answers": answers });
+                    let net = self.net.clone();
+                    let handle = std::thread::spawn(move || send_answers(&net, &body));
+                    let log_ok = format!("{C_OK}[提交]{C_END} {rows} 行答案 · {:.2} 分", points(work));
+                    self.sending.push(Sending { group: gi, handle, log_ok, work, rows });
+                }
+            }
+        }
+        for t in &mut self.tasks {
+            if t.pack.is_some() {
+                t.row_until = now;
+                t.renew_retry = now;
+            }
+        }
+        for p in &mut self.packs {
+            p.sent_at = now;
+        }
+    }
+
+    /// THE WAY OUT, protocol 8 (docs/CLIENTS.md, "every way out gives back what
+    /// is held"): each id's sync on its way is heard; then each id that synced
+    /// or keeps results syncs once more, naming nothing — every lease goes
+    /// back — with what it keeps, sent again for up to three quarters of a
+    /// minute when the site does not answer. What is still not taken stays on
+    /// disk for the next run.
+    fn last_syncs(&mut self) {
+        for gi in 0..self.groups.len() {
+            if let Some(s) = self.groups[gi].syncing.take() {
+                let out = s.handle.join().unwrap_or_else(|_| Out::Failed("panicked".into()));
+                self.take_sync(gi, s.sent, out);
+                if self.proto != 8 {
+                    return;
+                }
+            }
+        }
+        let going: Vec<usize> = (0..self.groups.len())
+            .filter(|&gi| {
+                let g = &self.groups[gi];
+                g.last_sync.is_some() || g.failures > 0 || g.give_back || !g.journal.to_send(&self.rel.engine).is_empty()
+            })
+            .collect();
+        for &gi in &going {
+            self.start_sync(gi, None, 0, true);
+        }
+        for gi in going {
+            if let Some(s) = self.groups[gi].syncing.take() {
+                let out = s.handle.join().unwrap_or_else(|_| Out::Failed("panicked".into()));
+                self.take_sync(gi, s.sent, out);
+            }
+        }
+    }
+
     // ---- the lanes --------------------------------------------------------------
 
     /// Fill every free lane: the oldest task with a job for it, honouring
@@ -908,6 +1570,7 @@ impl Fleet {
     fn fill_lanes(&mut self) -> usize {
         let lanes = self.lanes();
         self.pool.ensure(lanes);
+        crate::affinity::process_default(lanes);
         let backend = self.backend();
         // Leaders: a riven gain without one takes the lowest free lane in
         // budget, and its backend — once the riven canary has its verdict.
@@ -1075,6 +1738,7 @@ impl Fleet {
                     return;
                 };
                 let work = r["work"].as_u64().unwrap_or(0);
+                self.computed(work);
                 let build = board_payload(&best, &t.w["context"]);
                 let score = best["kill_progress"].as_f64().unwrap_or(0.0);
                 let (builds, kp, cost) = match &t.runner {
@@ -1119,13 +1783,29 @@ impl Fleet {
         self.sending.push(Sending { group: t.group, handle, log_ok, work, rows: 1 });
     }
 
-    /// A PACK'S ROW, measured: its answer joins the pack's, sent every half minute and as the pack ends.
+    /// WHAT WAS COMPUTED, as it is: the speed shown counts work done here, not
+    /// the moment the server took it (a protocol 8 result waits for a sync).
+    fn computed(&self, work: u64) {
+        let now = Instant::now();
+        self.ui.status(|st| {
+            st.computed_work += work;
+            st.answered.push_back((now, work));
+            while st.answered.front().is_some_and(|a| now.duration_since(a.0) > Duration::from_secs(900)) {
+                st.answered.pop_front();
+            }
+        });
+    }
+
+    /// A PACK'S ROW, measured: protocol 8 keeps its result for the id's next
+    /// sync; protocol 7 joins it to the pack's answers, sent every half minute
+    /// and as the pack ends.
     fn answer_row(&mut self, t: &Active, pid: u64, s: &RowScore, lanes: usize, secs: f64) {
         let now = Instant::now();
         let g = &mut self.groups[t.group];
         let wall = secs * 1000.0;
         let ms = g.last_row.map_or(wall, |l| now.duration_since(l).as_secs_f64() * 1000.0).min(wall);
         g.pace_ms = if g.pace_ms > 0.0 { g.pace_ms * 0.7 + ms * 0.3 } else { ms };
+        g.journal.pace_ms = g.pace_ms;
         g.last_row = Some(now);
         // `counts` and `lanes`: what the row cost, kept beside the answer to
         // fit what a point is worth (never credited; 69-board-work.js).
@@ -1137,13 +1817,25 @@ impl Fleet {
             a["counts"] = s.counts.clone();
         }
         self.ui.glog(t.group, format!("{C_OK}[完成]{C_END} 榜单  {}  = {:.4} {} · {:.2} 分 · {secs:.1}s", t.label, s.score, s.metric, points(s.work)));
+        self.computed(s.work);
+        let Some(p) = self.packs.iter_mut().find(|p| p.id == pid) else { return };
+        p.running = p.running.saturating_sub(1);
+        p.answered += 1;
+        if self.proto == 8 {
+            // KEPT BEFORE ANYTHING ELSE, on disk (`save_journals`): the id's next
+            // sync hands it in, and a reply that never comes costs nothing.
+            a["lease"] = json!(p.lease);
+            let k = Kept { question: t.question.clone(), engine: self.rel.engine.clone(), at: sys::now_ms(), work: s.work, result: a };
+            let g = &mut self.groups[t.group];
+            g.journal.keep(k);
+            g.journal_dirty = true;
+            return self.maybe_end_pack(pid);
+        }
         self.recent.push((t.verifier.clone(), false, json!({ "identity": t.w["identity"], "ruler": t.w["ruler"], "mode": t.w["mode"] })));
         if self.recent.len() > 100 {
             self.recent.remove(0);
         }
         let Some(p) = self.packs.iter_mut().find(|p| p.id == pid) else { return };
-        p.running = p.running.saturating_sub(1);
-        p.answered += 1;
         p.unsent.push(a);
         p.unsent_work += s.work;
         if p.rows.is_empty() && p.running == 0 {
@@ -1168,14 +1860,9 @@ impl Fleet {
                         g.done += s.rows;
                         g.work += s.work;
                     }
-                    let now = Instant::now();
                     self.ui.status(|st| {
                         st.session_tasks += s.rows;
                         st.session_work += s.work;
-                        st.answered.push_back((now, s.work));
-                        while st.answered.front().is_some_and(|a| now.duration_since(a.0) > Duration::from_secs(900)) {
-                            st.answered.pop_front();
-                        }
                     });
                 } else {
                     self.ui.glog(s.group, format!("{C_BAD}[失败]{C_END} 结果没能发出"));
@@ -1205,7 +1892,8 @@ impl Fleet {
                     }
                 }
             }
-            if t.pack.is_some() && !self.offline && t.renewing.is_none() && now + RENEW_BEFORE >= t.row_until && now >= t.renew_retry {
+            // Protocol 7's heartbeat, row by row; protocol 8's syncs renew every row an id holds.
+            if t.pack.is_some() && self.proto == 7 && !self.offline && t.renewing.is_none() && now + RENEW_BEFORE >= t.row_until && now >= t.renew_retry {
                 t.renewed = now;
                 let (net, body) = (self.net.clone(), json!({ "lease": t.lease, "verifier": t.verifier, "question": t.question }));
                 t.renewing = Some(std::thread::spawn(move || net.post_ok("/api/board/renew", &body)));
@@ -1312,15 +2000,25 @@ impl Fleet {
         let util = busy / lane_ms;
         let held = self.held_secs();
         let h = held.unwrap_or(0.0);
+        // WHAT IS HELD is weighed against what a pack is: protocol 7's a minute;
+        // protocol 8's ten (`pack8_ms`), the next asked once two are left
+        // (`sync_low_ms`) — so the board work held over every id runs from about
+        // `low` to `full`, however many ids share the lanes.
+        let (held_low, held_full, held_high) = if self.proto == 8 {
+            let (pack, low) = (self.dials.pack8_ms as f64 / 1000.0, self.dials.sync_low_ms as f64 / 1000.0);
+            (low, pack + low, 1.5 * (pack + low))
+        } else {
+            (HELD_LOW, HELD_FULL, HELD_HIGH)
+        };
         let busy_groups = (0..self.open).all(|g| self.tasks.iter().any(|t| t.group == g) || self.packs.iter().any(|p| p.group == g));
         let told_nothing = (0..self.open).any(|g| self.groups[g].nothing_at.is_some_and(|t| now.duration_since(t) < NOTHING_RECENT));
         let reopen_ok = self.closed_at.is_none_or(|t| now.duration_since(t) >= REOPEN_AFTER);
         let close = |why: String| (self.open > 1).then_some(why);
         let closing = if told_nothing && util < OPEN_BELOW {
             close("服务器暂时没有更多任务可分".into())
-        } else if h > HELD_HIGH {
+        } else if h > held_high {
             close(format!("手上的榜单够全部核心算 {h:.0} 秒"))
-        } else if util > FULL_ABOVE && h > HELD_FULL {
+        } else if util > FULL_ABOVE && h > held_full {
             close(format!("核心已满，手上还有 {h:.0} 秒的活"))
         } else {
             None
@@ -1329,7 +2027,7 @@ impl Fleet {
             self.open -= 1;
             self.closed_at = Some(now);
             self.ui.log(format!("{C_INFO}[调度]{C_END} {why}，第 {} 路做完手头的活后不再接（现 {} 路）", self.open + 1, self.open));
-        } else if util < OPEN_BELOW && h < HELD_LOW && busy_groups && !told_nothing && reopen_ok && self.open < cap {
+        } else if util < OPEN_BELOW && h < held_low && busy_groups && !told_nothing && reopen_ok && self.open < cap {
             self.open += 1;
             self.ensure_groups(self.open);
             let held = held.map_or(String::new(), |h| format!("，手上只剩 {h:.0} 秒的活"));
@@ -1360,11 +2058,13 @@ impl Fleet {
                     format!("紫卡搜索{more}")
                 } else if self.sending.iter().any(|s| s.group == gi) {
                     "提交结果".into()
-                } else if g.asking.is_some() {
+                } else if g.asking.is_some() || g.syncing.as_ref().is_some_and(|s| s.sent.want > 0) {
                     "取任务".into()
+                } else if g.syncing.is_some() {
+                    "同步".into()
                 } else if gi >= open {
                     "暂不接活".into()
-                } else if g.next_ask > now {
+                } else if g.next_ask > now || (self.proto == 8 && (g.not_before > now || g.retry_at > now)) {
                     "暂无任务".into()
                 } else {
                     "等待".into()
@@ -1381,8 +2081,19 @@ impl Fleet {
         } else {
             "计算中".to_string()
         };
+        let (kept_rows, kept_work) = self.kept();
+        // BOARD RESULTS' STANDING, protocol 8: those taken and not settled yet
+        // wait; protocol 7's is asked of `/api/board/mine` (`refresh_stats`).
+        let board = (self.proto == 8).then(|| (self.board_confirmed, self.groups.iter().map(|g| g.journal.pending.len() as u64).sum::<u64>()));
         self.ui.status(|s| {
             s.state = state;
+            s.kept_rows = kept_rows;
+            s.kept_work = kept_work;
+            if let Some(b) = board {
+                s.board_states = b;
+            }
+            s.confirmed = s.board_states.0 + s.riven_states.0;
+            s.waiting = s.board_states.1 + s.riven_states.1;
             s.lanes_now = lanes;
             s.idle = idle;
             s.tasks = lines;
@@ -1398,16 +2109,22 @@ impl Fleet {
         });
     }
 
-    /// WHAT THE LANES ARE GIVEN, every few seconds: the CPU time their jobs got
-    /// against their wall time. Lanes that get far less than a core each for a
-    /// minute are said so, once in ten minutes.
+    /// WHAT THE LANES ARE GIVEN, every few seconds: the CPU time the whole
+    /// process got against the lanes' working time. The process's, not each
+    /// lane thread's own: a native riven gain's search scores on threads
+    /// WFSim's optimizer starts, its lane waiting meanwhile, and counted by the
+    /// lanes' threads alone those lanes read as getting next to nothing. Lanes
+    /// that get far less than a core each for a minute are said so, once in ten
+    /// minutes.
     fn lane_yield(&mut self) {
         let (at, cpu0, wall0) = self.yield_seen;
         if at.elapsed() < Duration::from_secs(5) {
             return;
         }
-        let (cpu, wall) = crate::affinity::lane_totals();
-        self.yield_seen = (Instant::now(), cpu, wall);
+        let (cpu, (_, wall)) = (sys::process_cpu_us(), crate::affinity::lane_totals());
+        let now = Instant::now();
+        let span = now.duration_since(at).as_micros() as f64;
+        self.yield_seen = (now, cpu, wall);
         let (dc, dw) = (cpu.saturating_sub(cpu0) as f64, wall.saturating_sub(wall0) as f64);
         let lanes = self.lanes();
         if dw < 1e6 {
@@ -1417,15 +2134,15 @@ impl Fleet {
             });
             return;
         }
+        // A job's wall time is counted when it ends, so a long riven step
+        // landing in a window reads as more working time than the window held.
         let share = (dc / dw).min(1.0);
         let processors = crate::affinity::processors_used(lanes);
-        // AS CORES: the share each lane gets, over the lanes working now. A job
-        // is counted when it ends, so a window's own CPU over its wall time
-        // would read a long riven step as more cores than there are.
-        let working = self.lane_job.iter().take(lanes).filter(|j| j.is_some()).count();
+        // AS CORES: the process's CPU time over the window's.
+        let cores = dc / span.max(1.0);
         self.ui.status(|s| {
             s.lane_yield = Some(share);
-            s.effective_cores = Some(share * working as f64);
+            s.effective_cores = Some(cores);
             s.processors = processors;
         });
         let now = Instant::now();
@@ -1466,10 +2183,17 @@ impl Fleet {
         self.refresh_stats();
         let mut shown = Instant::now();
         while !self.quit() {
+            self.cool_down_over();
             if let Some(why) = self.held_why() {
-                if !self.tasks.is_empty() {
+                if !self.tasks.is_empty() || !self.packs.is_empty() {
                     self.drop_all("，任务已交还");
                 }
+                // Held, the ids still give back what they held and hand in what they keep.
+                if self.proto == 8 {
+                    self.syncs();
+                }
+                self.housekeeping();
+                self.save_journals();
                 self.ui.status(|s| {
                     s.state = why.into();
                     s.tasks.clear();
@@ -1488,7 +2212,11 @@ impl Fleet {
                 }
                 continue;
             }
-            self.asks();
+            if self.proto == 8 {
+                self.syncs();
+            } else {
+                self.asks();
+            }
             self.dispatch();
             if let Some(d) = self.pool.recv(Duration::from_millis(50)) {
                 self.absorb(d);
@@ -1507,6 +2235,9 @@ impl Fleet {
                 self.follow_engine();
                 self.maybe_native();
                 self.rest_lanes();
+            }
+            if self.journals_at.elapsed() >= Duration::from_secs(1) {
+                self.save_journals();
             }
             if self.tasks.is_empty() && self.sending.is_empty() {
                 if self.stats_at.is_none_or(|t| t.elapsed() > STATS_EVERY) {
@@ -1565,8 +2296,18 @@ impl Fleet {
         let rel = fetch_release(&self.net)?;
         self.stale = false;
         if rel.engine == self.rel.engine {
-            self.ui.status(|s| s.state = "服务器协议已更新，请更新 simfleet".into());
-            self.ui.log(format!("{C_BAD}[过旧]{C_END} 服务器不再接受本版本的协议（{PROTOCOL}），请更新 simfleet"));
+            // NOT THE ENGINE BUT THE PROTOCOL: protocol 7 while the server takes it.
+            if self.proto == 8 && !rel.protocols.is_empty() && !rel.protocols.contains(&8) && rel.protocols.contains(&7) {
+                self.fall_back("服务器不再接受协议 8");
+                return Ok(());
+            }
+            if rel.protocols.contains(&self.proto) {
+                // The site's release.json is a cache behind the server's word.
+                self.ui.log(format!("{C_GO}[引擎]{C_END} 服务器说本机引擎已过期，但 release.json 还没更新；1 分钟后再看"));
+            } else {
+                self.ui.status(|s| s.state = "服务器协议已更新，请更新 simfleet".into());
+                self.ui.log(format!("{C_BAD}[过旧]{C_END} 服务器不再接受本版本的协议（{}），请更新 simfleet", self.proto));
+            }
             std::thread::sleep(Duration::from_secs(60));
             return Ok(());
         }
@@ -1581,13 +2322,18 @@ impl Fleet {
     /// The site names `engine`, not ours: make it ready on a thread of its
     /// own — the wasm, and a native build if one is published (simfleet's, or
     /// WFSim's own) — while the lanes go on with the old one.
-    fn served_moved(&mut self, engine: String, until: String) {
+    /// `until`: when the site stops taking ours ("" already; `None` not said).
+    fn served_moved(&mut self, engine: String, until: Option<String>) {
         let busy = self.engine_load.as_ref().is_some_and(|(e, _)| *e == engine) || self.switch_to.as_ref().is_some_and(|(r, _)| r.engine == engine);
         if busy || Instant::now() < self.engine_retry {
             return;
         }
-        let kept = if until.is_empty() { "本机的引擎不再被接受".to_string() } else { format!("本机的引擎在 {until} 前仍被接受") };
-        self.ui.log(format!("{C_INFO}[引擎]{C_END} 网站引擎已更新 {} → {engine}；{kept}，新引擎在后台准备，准备好后接着用", self.rel.engine));
+        let kept = match until.as_deref() {
+            Some("") => "；本机的引擎不再被接受".to_string(),
+            Some(u) => format!("；本机的引擎在 {u} 前仍被接受"),
+            None => String::new(),
+        };
+        self.ui.log(format!("{C_INFO}[引擎]{C_END} 网站引擎已更新 {} → {engine}{kept}，新引擎在后台准备，准备好后接着用", self.rel.engine));
         let (net, paths, cfg, ui) = (self.net.clone(), self.paths.clone(), self.cfg.clone(), self.ui.clone());
         let h = std::thread::spawn(move || {
             let rel = fetch_release(&net).ok()?;
@@ -1604,6 +2350,7 @@ impl Fleet {
         // it still takes ours (`accepted`).
         if self.release_read.as_ref().is_some_and(|h| h.is_finished()) {
             if let Some(Some(r)) = self.release_read.take().and_then(|h| h.join().ok()) {
+                self.note_protocol(&r);
                 if let Some(e) = r["engine"].as_str().filter(|e| *e != self.rel.engine && e.len() == 12) {
                     let until = r["accepted"]
                         .as_array()
@@ -1613,7 +2360,7 @@ impl Fleet {
                         .and_then(|a| a["until"].as_str())
                         .unwrap_or("")
                         .to_string();
-                    self.served_moved(e.to_string(), until);
+                    self.served_moved(e.to_string(), Some(until));
                 }
             }
         }
@@ -1641,7 +2388,10 @@ impl Fleet {
                 }
             }
         }
-        let idle = self.tasks.is_empty() && self.packs.is_empty() && self.sending.is_empty() && self.groups.iter().all(|g| g.asking.is_none());
+        let idle = self.tasks.is_empty()
+            && self.packs.is_empty()
+            && self.sending.is_empty()
+            && self.groups.iter().all(|g| g.asking.is_none() && g.syncing.is_none());
         if idle {
             if let Some((rel, code)) = self.switch_to.take() {
                 self.take_engine(rel, code);
@@ -1721,42 +2471,58 @@ impl Fleet {
         }
         self.stats_at = Some(Instant::now());
         let since = sys::local_midnight_utc_hour();
-        let groups: Vec<(String, Vec<Value>, Vec<Value>)> = self
+        // A PROTOCOL 8 ID'S POINTS come with its syncs (`since` → `points`); only
+        // an id that has not synced lately is asked.
+        let fresh = |g: &Group| g.points.as_ref().filter(|(t, _)| t.elapsed() < STATS_EVERY * 2).map(|(_, p)| p.clone());
+        let groups: Vec<(String, Vec<Value>, Vec<Value>, Option<Value>)> = self
             .groups
             .iter()
             .map(|g| {
                 let mine = |riven: bool| -> Vec<Value> {
                     self.recent.iter().filter(|(v, k, _)| *v == g.verifier && *k == riven).map(|(_, _, x)| x.clone()).collect()
                 };
-                (g.verifier.clone(), mine(false), mine(true))
+                (g.verifier.clone(), mine(false), mine(true), fresh(g))
             })
             .collect();
         let (net, ui, name, seen) = (self.net.clone(), self.ui.clone(), self.cfg.account.name.clone(), self.rank_seen.clone());
+        let p7 = self.proto == 7;
         self.stats_job = Some(std::thread::spawn(move || {
             let (mut device, mut today, mut any) = (0u64, 0u64, false);
-            for (v, _, _) in &groups {
-                if let Some(p) = net.post_ok("/api/board/points", &json!({ "verifier": v, "since": since })) {
+            for (v, _, _, have) in &groups {
+                if let Some(p) = have.clone().or_else(|| net.post_ok("/api/board/points", &json!({ "verifier": v, "since": since }))) {
                     any = true;
                     device += p["points"].as_u64().unwrap_or(0);
                     today += p["today"]["points"].as_u64().unwrap_or(0);
                 }
             }
             let dev = net.session.as_ref().map(|_| account::devices(&net));
-            // THE SITE'S SIDE - who is computing, what is owed, the week's ranking;
-            // the ranking is the page's own (`/api/contributors`).
-            let demand = net.get("/api/board/demand").ok().map(|r| r.body).filter(|b| b["ok"] == json!(true));
-            let top = net.get("/api/contributors?period=week&limit=40").ok().map(|r| r.body).filter(|b| b["ok"] == json!(true));
+            // THE SITE'S SIDE - who is computing, what is owed, the week's ranking -
+            // read as the page reads it: files on the CDN, the worker's endpoint
+            // where a file is not reached (docs/BOARD.md §"The public stats").
+            let demand = net
+                .get(DEMAND_FILE)
+                .ok()
+                .map(|r| r.body)
+                .filter(|b| b["ok"] == json!(true) && b["v"] == json!(1))
+                .or_else(|| net.get("/api/board/demand").ok().map(|r| r.body))
+                .filter(|b| b["ok"] == json!(true));
+            // Signed in, the worker's ranking marks this account's row.
+            let file = net.session.is_none().then(|| ranking_file(&net)).flatten();
+            let top = file
+                .or_else(|| net.get("/api/contributors?period=week&limit=40").ok().map(|r| r.body))
+                .filter(|b| b["ok"] == json!(true));
             let rows: Vec<Value> = top.as_ref().and_then(|t| t["contributors"].as_array().cloned()).unwrap_or_default();
             let rates = paces(&seen, &rows, Instant::now());
-            let (mut confirmed, mut waiting, mut told) = (0u64, 0u64, false);
-            for (v, orders, tasks) in &groups {
+            // Protocol 7's board rows' standing (protocol 8's comes with its syncs), and the riven gains'.
+            let (mut board, mut riven, mut board_told, mut riven_told) = ((0u64, 0u64), (0u64, 0u64), false, false);
+            for (v, orders, tasks, _) in &groups {
                 if !orders.is_empty() {
                     if let Some(m) = net.post_ok("/api/board/mine", &json!({ "verifier": v, "orders": orders })) {
-                        told = true;
+                        board_told = true;
                         for o in m["orders"].as_array().into_iter().flatten() {
                             match o["state"].as_str() {
-                                Some("confirmed") => confirmed += 1,
-                                Some("waiting") | Some("checking") => waiting += 1,
+                                Some("confirmed") => board.0 += 1,
+                                Some("waiting") | Some("checking") => board.1 += 1,
                                 _ => {}
                             }
                         }
@@ -1764,17 +2530,19 @@ impl Fleet {
                 }
                 if !tasks.is_empty() {
                     if let Some(m) = net.post_ok("/api/appraise/mine", &json!({ "verifier": v, "tasks": tasks })) {
-                        told = true;
+                        riven_told = true;
                         for o in m["tasks"].as_array().into_iter().flatten() {
                             match o["state"].as_str() {
-                                Some("confirmed") => confirmed += 1,
-                                Some("waiting") => waiting += 1,
+                                Some("confirmed") => riven.0 += 1,
+                                Some("waiting") => riven.1 += 1,
                                 _ => {}
                             }
                         }
                     }
                 }
             }
+            let no_board = groups.iter().all(|(_, o, _, _)| o.is_empty());
+            let no_riven = groups.iter().all(|(_, _, t, _)| t.is_empty());
             ui.status(|s| {
                 if any {
                     s.device_points = Some(device);
@@ -1819,13 +2587,34 @@ impl Fleet {
                         })
                         .collect();
                 }
-                if told || groups.iter().all(|(_, o, t)| o.is_empty() && t.is_empty()) {
-                    s.confirmed = confirmed;
-                    s.waiting = waiting;
+                if riven_told || no_riven {
+                    s.riven_states = riven;
+                }
+                // (Protocol 8's is set in `show`, from the syncs.)
+                if p7 && (board_told || no_board) {
+                    s.board_states = board;
                 }
             });
         }));
     }
+}
+
+/// THE PUBLIC FILES the page reads before the worker (docs/BOARD.md §"The
+/// public stats", §"Demand"): what is owed and who is computing, and the
+/// rankings, each period's, written by the worker's cron.
+const DEMAND_FILE: &str = "https://cdn.wfsim.app/demand.json";
+const RANKING_FILE: &str = "https://cdn.wfsim.app/stats/contributors.json";
+/// …the ranking passed over once older than this by the server's clock, or of another day (its keys are that day's).
+const RANKING_STALE_MS: u64 = 30 * 60_000;
+
+/// The week's ranking from the file, in the shape `/api/contributors` answers.
+fn ranking_file(net: &Net) -> Option<Value> {
+    let f = net.get(RANKING_FILE).ok().filter(|r| r.status == 200)?.body;
+    let now = net.server_now_ms();
+    let at = f["at"].as_str().and_then(sys::parse_iso)?;
+    let fresh = f["v"] == json!(1) && now.saturating_sub(at) <= RANKING_STALE_MS && f["day"].as_str() == Some(&sys::iso(now)[..10]);
+    let week = f["rankings"]["week"].as_array().filter(|_| fresh)?;
+    Some(json!({ "ok": true, "total": week.len(), "contributors": week.iter().take(40).collect::<Vec<_>>() }))
 }
 
 /// THE RANKING'S PACE: no time is given beside a contributor's points, so it

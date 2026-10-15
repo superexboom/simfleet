@@ -69,6 +69,10 @@ pub struct Config {
     /// runs it alone.
     #[serde(default = "yes")]
     pub watch: bool,
+    /// The board's protocol: 8 (one sync for everything, fleet.rs) or 7 (packs
+    /// asked, answered and renewed apart). The server may say 7 for a session.
+    #[serde(default = "default_protocol")]
+    pub protocol: u32,
     /// The ids beyond `verifier`, made as groups open. Keep them to yourself too.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_verifiers: Vec<String>,
@@ -100,6 +104,9 @@ fn default_core_type() -> String {
 fn yes() -> bool {
     true
 }
+fn default_protocol() -> u32 {
+    8
+}
 
 /// `max_slots = 0`: a quarter of the logical processors, 2 to 16. A pack is
 /// at most twenty rows, which a big machine runs through in seconds, and the
@@ -128,6 +135,7 @@ impl Config {
             native_riven: true,
             official_engine: true,
             watch: true,
+            protocol: default_protocol(),
             extra_verifiers: Vec::new(),
             account: Account::default(),
         }
@@ -178,6 +186,18 @@ impl Paths {
         let text = std::fs::read_to_string(&self.config)?;
         let c: Config = toml::from_str(&text).with_context(|| format!("读取 {} 失败", self.config.display()))?;
         Ok(Some(c))
+    }
+
+    /// THE IDS ANOTHER SIMFLEET ADDED to this config meanwhile (the same folder
+    /// run twice), kept beside `c`'s own: each saves the whole file.
+    pub fn merge_extras(&self, c: &mut Config) {
+        if let Ok(Some(disk)) = self.load() {
+            for v in disk.extra_verifiers {
+                if v != c.verifier && !c.extra_verifiers.contains(&v) {
+                    c.extra_verifiers.push(v);
+                }
+            }
+        }
     }
 
     pub fn save(&self, c: &Config) -> Result<()> {

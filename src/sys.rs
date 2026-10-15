@@ -113,6 +113,110 @@ pub fn iso(ms: u64) -> String {
     format!("{y:04}-{mo:02}-{d:02}T{:02}:{:02}:{:02}.{:03}Z", t / 3600, t / 60 % 60, t % 60, ms % 1000)
 }
 
+/// The day count since 1970-01-01 of a civil date (`civil` backwards).
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let (era, yoe) = (y.div_euclid(400), y.rem_euclid(400));
+    let doy = (153 * ((m as i64 + 9) % 12) + 2) / 5 + d as i64 - 1;
+    era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468
+}
+
+fn epoch_ms(y: i64, mo: u32, d: u32, h: i64, mi: i64, s: i64, ms: i64) -> Option<u64> {
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || !(0..24).contains(&h) || !(0..60).contains(&mi) || !(0..=60).contains(&s) {
+        return None;
+    }
+    u64::try_from(((days_from_civil(y, mo, d) * 86_400 + h * 3600 + mi * 60 + s) * 1000) + ms).ok()
+}
+
+/// `2026-10-10T05:06:07.123Z` (the fraction optional) in ms since the epoch.
+pub fn parse_iso(t: &str) -> Option<u64> {
+    let b = t.as_bytes();
+    if b.len() < 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' || !t.ends_with('Z') {
+        return None;
+    }
+    let n = |a: usize, z: usize| t.get(a..z).filter(|x| x.bytes().all(|c| c.is_ascii_digit())).and_then(|x| x.parse::<i64>().ok());
+    let ms = match &t[19..t.len() - 1] {
+        "" => 0,
+        f => {
+            let f = f.strip_prefix('.').filter(|f| !f.is_empty() && f.bytes().all(|c| c.is_ascii_digit()))?;
+            format!("{:0<3}", &f[..f.len().min(3)]).parse().ok()?
+        }
+    };
+    epoch_ms(n(0, 4)?, n(5, 7)? as u32, n(8, 10)? as u32, n(11, 13)?, n(14, 16)?, n(17, 19)?, ms)
+}
+
+/// An HTTP `Date` (`Thu, 15 Oct 2026 02:17:45 GMT`) in ms since the epoch.
+pub fn parse_http_date(t: &str) -> Option<u64> {
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let p: Vec<&str> = t.split_whitespace().collect();
+    if p.len() != 6 || p[5] != "GMT" {
+        return None;
+    }
+    let mo = MONTHS.iter().position(|m| *m == p[2])? as u32 + 1;
+    let hms: Vec<i64> = p[4].split(':').map(|x| x.parse().ok()).collect::<Option<_>>()?;
+    let [h, mi, s] = hms[..] else { return None };
+    epoch_ms(p[3].parse().ok()?, mo, p[1].parse().ok()?, h, mi, s, 0)
+}
+
+/// A number in [0, 1), for the waits the protocol spreads at random.
+pub fn random_unit() -> f64 {
+    let mut b = [0u8; 4];
+    getrandom::fill(&mut b).expect("system randomness");
+    u32::from_le_bytes(b) as f64 / (u32::MAX as f64 + 1.0)
+}
+
+/// A COMPUTER ID IN USE by this process, for as long as this lives: a file in
+/// the temp folder named by the id's digest (never the id), held open with no
+/// sharing on Windows and under `flock` on Unix, so another simfleet — the
+/// same folder run twice, or a copy of it — sees the id is taken. An id is one
+/// client (docs/CLIENTS.md "Identity"): a protocol 8 sync names everything its
+/// id holds, and gives back whatever it does not name.
+pub struct IdLock(#[allow(dead_code)] std::fs::File);
+
+pub enum IdUse {
+    Mine(IdLock),
+    /// Another process holds it.
+    Taken,
+    /// No lock could be made here (the temp folder): used without one.
+    Unknown,
+}
+
+pub fn lock_id(id: &str) -> IdUse {
+    use sha2::Digest;
+    let h: String = sha2::Sha256::digest(format!("simfleet-id:{id}").as_bytes()).iter().take(8).map(|x| format!("{x:02x}")).collect();
+    let path = std::env::temp_dir().join(format!("simfleet-id-{h}.lock"));
+    let mut open = std::fs::OpenOptions::new();
+    open.read(true).write(true).create(true).truncate(false);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        match open.share_mode(0).open(&path) {
+            Ok(f) => IdUse::Mine(IdLock(f)),
+            // ERROR_SHARING_VIOLATION: another process has it open.
+            Err(e) if e.raw_os_error() == Some(32) => IdUse::Taken,
+            Err(_) => IdUse::Unknown,
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let Ok(f) = open.open(&path) else { return IdUse::Unknown };
+        // SAFETY: a plain call on a descriptor this file owns.
+        if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            IdUse::Mine(IdLock(f))
+        } else if std::io::Error::last_os_error().raw_os_error() == Some(libc::EWOULDBLOCK) {
+            IdUse::Taken
+        } else {
+            IdUse::Unknown
+        }
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = (open, path);
+        IdUse::Unknown
+    }
+}
+
 /// Local time minus UTC, in minutes.
 #[cfg(windows)]
 pub fn utc_offset_min() -> i64 {
@@ -235,6 +339,35 @@ pub fn thread_cpu_us() -> u64 {
     0
 }
 
+/// CPU time this whole process has been given, every thread of it, in µs.
+#[cfg(windows)]
+pub fn process_cpu_us() -> u64 {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+    let t = |f: FILETIME| ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64;
+    let z = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let (mut made, mut ended, mut k, mut u) = (z, z, z, z);
+    // SAFETY: plain out-parameters on this process's pseudo-handle.
+    if unsafe { GetProcessTimes(GetCurrentProcess(), &mut made, &mut ended, &mut k, &mut u) } == 0 {
+        return 0;
+    }
+    (t(k) + t(u)) / 10
+}
+#[cfg(unix)]
+pub fn process_cpu_us() -> u64 {
+    // SAFETY: the struct it fills.
+    let mut r: libc::rusage = unsafe { std::mem::zeroed() };
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut r) } != 0 {
+        return 0;
+    }
+    let us = |t: libc::timeval| t.tv_sec as u64 * 1_000_000 + t.tv_usec as u64;
+    us(r.ru_utime) + us(r.ru_stime)
+}
+#[cfg(not(any(windows, unix)))]
+pub fn process_cpu_us() -> u64 {
+    0
+}
+
 /// CPU time so far, in 100 ns: all cores together (busy and idle), the idle
 /// part of it, and this process's.
 #[cfg(windows)]
@@ -310,5 +443,31 @@ mod tests {
     fn iso_matches_js() {
         assert_eq!(super::iso(0), "1970-01-01T00:00:00.000Z");
         assert_eq!(super::iso(1_791_633_967_123), "2026-10-10T12:06:07.123Z");
+    }
+
+    #[test]
+    fn instants_read_back() {
+        use super::{iso, parse_http_date, parse_iso};
+        for ms in [0, 951_782_400_000, 1_791_633_967_123, 1_798_761_599_999] {
+            assert_eq!(parse_iso(&iso(ms)), Some(ms));
+        }
+        assert_eq!(parse_iso("2026-10-15T02:17:38Z"), Some(1_792_030_658_000));
+        assert_eq!(parse_iso("2026-10-15T02:17:38.8Z"), Some(1_792_030_658_800));
+        assert_eq!(parse_http_date("Thu, 15 Oct 2026 02:17:38 GMT"), Some(1_792_030_658_000));
+        for bad in ["", "2026-10-15", "2026-13-15T02:17:38Z", "2026-10-15T02:17:38.Z", "2026-10-15 02:17:38Z"] {
+            assert_eq!(parse_iso(bad), None, "{bad}");
+        }
+        assert_eq!(parse_http_date("Thu, 15 Oct 2026 02:17 GMT"), None);
+    }
+
+    #[test]
+    fn an_id_is_one_process_s() {
+        let id = super::random_hex(12);
+        let a = super::lock_id(&id);
+        assert!(matches!(a, super::IdUse::Mine(_)));
+        // Another open of the same file is refused (another process's would be too).
+        assert!(matches!(super::lock_id(&id), super::IdUse::Taken));
+        drop(a);
+        assert!(matches!(super::lock_id(&id), super::IdUse::Mine(_)));
     }
 }
