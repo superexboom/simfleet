@@ -583,8 +583,9 @@ fn engine_id(dir: &std::path::Path) -> Result<Vec<String>> {
         .map(|p| p.strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/"))
         .collect();
     let mut ids = Vec::new();
-    for fold_case in [true, false] {
+    for fold_case in [false, true] {
         // Python sorts paths by their PARTS (case-insensitively on Windows).
+        // The case-sensitive order first: WFSim's site is built on Linux.
         let key = |r: &String| -> Vec<String> { r.split('/').map(|x| if fold_case { x.to_lowercase() } else { x.to_string() }).collect() };
         let mut list = rel.clone();
         list.sort_by_key(key);

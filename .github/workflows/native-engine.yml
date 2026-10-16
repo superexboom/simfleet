@@ -3,8 +3,10 @@
 # wfsim.app answers GitHub's runners with a bot challenge, so nothing here asks
 # it anything. Every 10 minutes a small Linux job computes the engine id of
 # WFSim's main (tools/engine_id.py — the id the site serves is that of the
-# source it was built from) and looks at what release `engine-<id>` holds. For
-# each platform with a file missing, a job at that commit, with WFSim's own
+# source it was built from, its files in the order Linux sorts them: WFSim's
+# site is built on its CI's Linux runner) and looks at what release
+# `engine-<id>` holds. For each platform with a file missing, a job at that
+# commit, with WFSim's own
 # pinned toolchain:
 #
 #   1. builds the wasm the way WFSim builds it (the reference),

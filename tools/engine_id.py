@@ -4,7 +4,10 @@
 Prints every spelling it can take: the paths are sorted by their parts, which
 Python does case-insensitively on Windows and case-sensitively elsewhere, so a
 tree is matched against the served id under both orders (as `simfleet
-engine-id` does).
+engine-id` does). The case-sensitive one first: WFSim's site is built on its
+CI's Linux runner since 532015dd ("ship: a push of source is a release"), so
+that is the id wfsim.app serves; the Windows one was, when its maintainer's
+machine built it.
 
     python tools/engine_id.py <wfsim checkout>
 """
@@ -50,5 +53,5 @@ def engine_id(root: pathlib.Path, fold_case: bool) -> str:
 
 if __name__ == "__main__":
     root = pathlib.Path(sys.argv[1])
-    for i in dict.fromkeys(engine_id(root, f) for f in (True, False)):
+    for i in dict.fromkeys(engine_id(root, f) for f in (False, True)):
         print(i)
