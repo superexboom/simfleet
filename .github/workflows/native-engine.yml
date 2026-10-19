@@ -198,7 +198,9 @@ jobs:
           for cpu in $CPUS; do
             v=""; [ "$cpu" = v3 ] && v=-v3
             f="${{ matrix.lib }}$ENGINE$v.${{ matrix.ext }}"
-            ( cd target/release/engines && sha256sum "$f" | awk -v f="$f" '{print $1"  "f}' > "$f.sha256" && cp "$f" "$f.sha256" ../../../out/ )
+            # macOS has shasum, not sha256sum.
+            sum() { if command -v sha256sum > /dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi; }
+            ( cd target/release/engines && sum "$f" | awk -v f="$f" '{print $1"  "f}' > "$f.sha256" && cp "$f" "$f.sha256" ../../../out/ )
             cat "target/release/engines/$ENGINE$v.patches" >> out/patches 2>/dev/null || true
           done
       - uses: actions/upload-artifact@v4

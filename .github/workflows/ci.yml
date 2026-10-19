@@ -23,6 +23,12 @@ jobs:
           bin=target/release/simfleet; [ -f "$bin.exe" ] && bin="$bin.exe"
           "$bin" version
           "$bin" cpu
+      # The release's package, made as release.yml makes it.
+      - name: Package
+        shell: pwsh
+        run: |
+          ./tools/package.ps1
+          Get-ChildItem dist -File | ForEach-Object { "$($_.Name) $($_.Length)" }
       # Apple silicon runs signed code only: the linker's ad-hoc signature
       # must survive the strip, or the binary is killed at launch.
       - name: Signature (macOS)
@@ -31,3 +37,8 @@ jobs:
           file target/release/simfleet
           codesign --verify --verbose=2 target/release/simfleet
           codesign -dv target/release/simfleet 2>&1 | grep -E "Signature|Identifier|flags"
+          # …and in the package, unpacked as a user would.
+          mkdir -p /tmp/unpack && tar -C /tmp/unpack -xzf dist/simfleet-*-macos-arm64.tar.gz
+          codesign --verify --verbose=2 /tmp/unpack/simfleet/simfleet
+          /tmp/unpack/simfleet/simfleet version
+          ls -la /tmp/unpack/simfleet
