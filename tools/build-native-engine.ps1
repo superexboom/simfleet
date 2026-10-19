@@ -112,7 +112,9 @@ $built = $LASTEXITCODE
 if ($applied.Count -gt 0) { git -C $src checkout -q -- webapi engine optimizer }
 if ($built -ne 0) { exit 1 }
 New-Item -ItemType Directory -Force $Out | Out-Null
-$lib, $name = if ($win) { "simfleet_native_engine.dll", "$want$suffix.dll" } else { "libsimfleet_native_engine.so", "lib$want$suffix.so" }
+$lib, $name = if ($win) { "simfleet_native_engine.dll", "$want$suffix.dll" }
+    elseif ($IsMacOS) { "libsimfleet_native_engine.dylib", "lib$want$suffix.dylib" }
+    else { "libsimfleet_native_engine.so", "lib$want$suffix.so" }
 Copy-Item (Join-Path (Join-Path $env:CARGO_TARGET_DIR "release") $lib) (Join-Path $Out $name) -Force
 "$found" | Set-Content -Encoding ascii (Join-Path $Out "$want.commit")
 ($applied -join "`n") | Set-Content -Encoding ascii (Join-Path $Out "$want$suffix.patches")

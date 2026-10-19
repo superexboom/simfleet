@@ -1,5 +1,6 @@
 # Build and pack a release: dist/simfleet-<version>-windows-x64.zip, or on
-# Linux (pwsh) dist/simfleet-<version>-linux-x64.tar.gz - simfleet,
+# Linux (pwsh) dist/simfleet-<version>-linux-x64.tar.gz, on macOS (Apple
+# silicon) dist/simfleet-<version>-macos-arm64.tar.gz - simfleet,
 # README.md, LICENSE, NOTICE.md, THIRD-PARTY-LICENSES.md.
 #
 # The native engine is NOT included: simfleet downloads the published build of
@@ -28,7 +29,8 @@ if ($win) {
     Remove-Item $out -ErrorAction SilentlyContinue
     Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $out
 } else {
-    $out = Join-Path $dist "simfleet-$ver-linux-x64.tar.gz"
+    $plat = if ($IsMacOS) { "macos-arm64" } else { "linux-x64" }
+    $out = Join-Path $dist "simfleet-$ver-$plat.tar.gz"
     tar -C $dist -czf $out simfleet
     if ($LASTEXITCODE -ne 0) { exit 1 }
 }

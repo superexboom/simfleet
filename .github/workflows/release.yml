@@ -1,5 +1,5 @@
-# A tag v* builds simfleet from this source on GitHub's Windows and Linux
-# runners and attaches both to that tag's release. The native engine is never
+# A tag v* builds simfleet from this source on GitHub's Windows, Linux and
+# macOS (Apple silicon) runners and attaches all three to that tag's release. The native engine is never
 # included: simfleet downloads the published build itself (native-engine.yml).
 name: release
 on:
@@ -17,6 +17,9 @@ jobs:
           - os: linux
             # The oldest glibc the runners have, so the binary runs on more systems.
             runner: ubuntu-22.04
+          - os: macos
+            # Apple silicon (arm64), macOS 14; the binary runs on macOS 11 and later.
+            runner: macos-14
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
@@ -49,6 +52,7 @@ jobs:
             echo
             echo "- **Windows x64**（\`*-windows-x64.zip\`）：解压后双击 \`simfleet.exe\`。"
             echo "- **Linux x64**（\`*-linux-x64.tar.gz\`，glibc 2.35 及以上，如 Ubuntu 22.04+、Debian 12+）：\`tar xzf\` 后运行 \`./simfleet/simfleet\`；没有键鼠检测，按「离开电脑时」的核心数计算。"
+            echo "- **macOS（Apple 芯片 M1 及以后）**（\`*-macos-arm64.tar.gz\`）：\`tar xzf\` 后在终端运行 \`./simfleet/simfleet\`。没有 Apple 开发者签名，第一次运行前执行一次 \`xattr -dr com.apple.quarantine simfleet\`（或在「系统设置 → 隐私与安全性」里点「仍要打开」）。有键鼠空闲检测和电池检测，计算时不让 Mac 自动睡眠。"
             echo "- 第一次运行会询问是否同意计算和核心预算。引擎在运行时从 wfsim.app 下载（WFSim 官方发布的 wasm），网站更新后自动跟上；有对应的原生引擎时会自动下载并逐位校验后使用。"
             echo
             echo "源码：https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_SHA}（AGPL-3.0-or-later）"

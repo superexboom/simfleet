@@ -34,6 +34,8 @@
 
 **Linux x64**：下载 `simfleet-<版本>-linux-x64.tar.gz`，`tar xzf` 后运行 `./simfleet/simfleet`（需要 glibc 2.35 及以上，如 Ubuntu 22.04+、Debian 12+）。Linux 上没有键鼠空闲检测，始终按「离开电脑时」的核心数计算；`priority = "idle"` 用的是 `SCHED_IDLE` 加 nice 19，只吃没人要的 CPU。放进 systemd 或 tmux 都行，收到 SIGTERM/SIGHUP 会先交还任务再退出；用 systemd 的 `Restart=` 管重启时可以加 `--no-watch`。
 
+**macOS（Apple 芯片，M1 及以后）**：下载 `simfleet-<版本>-macos-arm64.tar.gz`，`tar xzf` 后在终端运行 `./simfleet/simfleet`（macOS 11 及以上）。simfleet 没有 Apple 开发者签名，第一次运行前在终端执行一次 `xattr -dr com.apple.quarantine simfleet`（或者先运行一次被拦下，再到「系统设置 → 隐私与安全性」里点「仍要打开」）。和 Windows 一样有键鼠空闲检测（离开电脑多久按 `idle_after_secs` 算）和电池检测（`pause_on_battery`）；计算时会阻止 Mac 因无人操作而自动睡眠（屏幕照常关闭），暂停或不计算时放开。原生引擎是 `engines/lib<引擎号>.dylib`，同样由 Action 编译发布、逐位比对后才用；WFSim 官方原生库没有 macOS 版。
+
 1. 把 `simfleet.exe` 放进一个文件夹（这个文件夹就是安装目录，配置和缓存都在里面；删掉文件夹就是卸载）。
 2. 双击运行。第一次会问三件事：是否同意计算、离开电脑时用几个核心、要不要登录。
 3. 之后每次双击就开始算。按 **P** 暂停/继续，**+ / -** 调整离开电脑时的核心数（加 **Shift** 调使用电脑时的），**Q**（或 Ctrl+C、直接关窗口）退出——退出前会把手头的任务交还服务器，不会让任务白白挂 30 分钟。
@@ -138,6 +140,8 @@ Intel 12 代以后的大小核 CPU 上，Windows 会把空闲优先级的后台�
 
 和任务管理器对照时注意：Windows 10/11 任务管理器的 CPU 百分比默认是「处理器效用」，按当前频率相对基础频率折算，睿频时一个忙着的核心可以算到接近两个核心的百分比。simfleet 的 CPU 条和「实得」按时间计（忙了多少时间），睿频高的 Intel CPU 上会比任务管理器低；资源监视器、Process Explorer 显示的是按时间计的数。「核心」一行里每格的 `P`/`E` 是那条线程最近实际跑在哪种核心上。识别结果和分配方案用 `simfleet cpu` 查看；首次设置时检测到 Intel 大小核也会问一次。
 
+**Apple 芯片（macOS）**：macOS 不允许把线程绑到指定核心，只能给线程设 QoS 等级，由系统按等级挑核心：`background` 只在能效核上跑，更高的等级优先用性能核、满了再用能效核。所以在 Apple 芯片上 `core_type` 的意思是：`auto` 用 `utility`（性能核优先，能效核也用，让着你正在用的程序；`priority = "normal"` 时用 `user_initiated`），`p` 用 `user_initiated`，`e` 用 `background`（只用能效核，最省电、最安静，也最慢），`windows` 不设等级。紫卡增益走原生时优化器另起的工作线程继承计算线程的等级。M 系列没有超线程，上面 Intel 的超线程问题在这里不存在；系统不告诉程序线程跑在哪个核心上，所以面板不显示每格的 `P`/`E` 和处理器个数。`simfleet cpu` 显示芯片型号、性能核和能效核个数以及当前的等级。
+
 ## Go 还是 Rust：实测
 
 关键事实：网站对客户端结果做**逐位比对**，所以客户端必须跑和浏览器完全相同的引擎；而 WFSim 发布非常频繁，引擎号（源码哈希）一变，旧引擎就领不到任务。所以最省心的做法是**直接下载网站正在发布的那个 wasm 引擎来跑**——客户端本体不用跟着更新。宿主语言本身几乎不干活，速度取决于 wasm 运行时的编译器。
@@ -196,7 +200,7 @@ simfleet 因此有两个引擎：
 本仓库的 [native-engine](.github/workflows/native-engine.yml) Action 每 10 分钟计算一次 WFSim `main` 分支的引擎号（避开整点和半点：GitHub 负载高时会丢掉定时任务，整点最严重，原来的「每 30 分钟」曾连续 5 个小时一次都没跑；一次构建结束时 `main` 又换了引擎就马上再跑一次；同一个引擎编失败了，定时任务 3 小时内不再重试，手动触发随时重编）（wfsim.app 对 GitHub 的服务器会弹出人机验证，所以 Action 完全不访问网站；网站发布的引擎号就是它所用源码的哈希）。遇到还没发布过的引擎号，它会在那次提交上，用 WFSim 自己锁定的 Rust 和 wasm-bindgen 版本：
 
 1. 照 WFSim 的做法编译出 wasm，作为比对的参照；
-2. **把 Digital Extremes 的卡牌文本清空**（`tools/strip_card_text.py`），然后用这次提交原样的代码编译原生引擎（WFSim 的 [客户端约定](https://github.com/magenie33/wfsim/blob/main/docs/CLIENTS.md)：原生版必须是网站那次提交、未经修改）。每个平台编两份：一份任何 x86-64 都能跑，一份是 x86-64-v3（即 AVX2、FMA、BMI2 这一代指令，2013 年以后的 CPU 基本都有）。Windows 是 `<引擎号>.dll` / `<引擎号>-v3.dll`，Linux 是 `lib<引擎号>.so` / `lib<引擎号>-v3.so`。WFSim 对卡牌文本没有授权（见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)），所以发布的版本里不含它；引擎只拿这些文本做显示，不影响任何分数；
+2. **把 Digital Extremes 的卡牌文本清空**（`tools/strip_card_text.py`），然后用这次提交原样的代码编译原生引擎（WFSim 的 [客户端约定](https://github.com/magenie33/wfsim/blob/main/docs/CLIENTS.md)：原生版必须是网站那次提交、未经修改）。每个平台编两份：一份任何 x86-64 都能跑，一份是 x86-64-v3（即 AVX2、FMA、BMI2 这一代指令，2013 年以后的 CPU 基本都有）。Windows 是 `<引擎号>.dll` / `<引擎号>-v3.dll`，Linux 是 `lib<引擎号>.so` / `lib<引擎号>-v3.so`；macOS（Apple 芯片）只编一份 `lib<引擎号>.dylib`，这个目标的基线就是 M1 的指令集，所有 M 系列都能跑。WFSim 对卡牌文本没有授权（见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)），所以发布的版本里不含它；引擎只拿这些文本做显示，不影响任何分数；
 3. 在 WFSim 仓库里提交的榜单快照上取一把武器（Braton Prime）的 8 条真实榜单（4 把尺子 × 2 种模式），每一份都和参照 wasm **逐位比对**（`simfleet check-native`：分数、work 和 gas），全部一致才发布。某个平台没通过就不发布它，那个平台继续用 wasm；
 4. 发布为 Release `engine-<引擎号>`，附 sha256，说明里写明对应的 WFSim 提交、simfleet 提交和构建记录。已经发布的文件从不替换，只补缺的。
 

@@ -190,7 +190,21 @@ static CPU_US: [AtomicU64; LANES] = [const { AtomicU64::new(0) }; LANES];
 static WALL_US: [AtomicU64; LANES] = [const { AtomicU64::new(0) }; LANES];
 
 /// Decide for this run. A line for the log: what was done, or why nothing was.
-pub fn init(prefer: Prefer) -> Option<String> {
+/// `priority` is the config's: on macOS it chooses the lanes' QoS class too.
+pub fn init(prefer: Prefer, priority: &str) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        apple::init(prefer, priority)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = priority;
+        init_intel(prefer)
+    }
+}
+
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn init_intel(prefer: Prefer) -> Option<String> {
     let topo = Topology::read();
     if let Err(why) = topo.hybrid() {
         return (!matches!(prefer, Prefer::Auto | Prefer::Windows)).then(|| format!("大小核亲和性：{why}"));
@@ -220,8 +234,10 @@ pub fn init(prefer: Prefer) -> Option<String> {
     Some(line)
 }
 
-/// At a lane thread's start: its tier's CPU set.
+/// At a lane thread's start: its tier's CPU set (on macOS, its QoS class).
 pub fn apply_lane(lane: usize) {
+    #[cfg(target_os = "macos")]
+    apple::apply_lane();
     let Some(p) = PLAN.get() else { return };
     if let Some((_, ids)) = Topology::lane_tier(&p.tiers, lane) {
         set_thread_cpus(ids);
@@ -252,7 +268,10 @@ pub fn process_default(lanes: usize) {
 /// A lane's job measured: where it ran, the CPU time it was given, its wall time.
 pub fn note_job(lane: usize, cpu_us: u64, wall_us: u64) {
     if lane < LANES {
-        LAST[lane].store(crate::sys::current_cpu() + 1, Ordering::Relaxed);
+        let cpu = crate::sys::current_cpu();
+        if cpu != crate::sys::NO_CPU {
+            LAST[lane].store(cpu + 1, Ordering::Relaxed);
+        }
         CPU_US[lane].fetch_add(cpu_us, Ordering::Relaxed);
         WALL_US[lane].fetch_add(wall_us, Ordering::Relaxed);
     }
@@ -282,9 +301,115 @@ pub fn lane_kinds(n: usize) -> Vec<Option<char>> {
         .collect()
 }
 
-/// The setting in effect, on an Intel hybrid.
+/// The setting in effect, on an Intel hybrid (or on Apple silicon).
 pub fn active() -> Option<Prefer> {
+    #[cfg(target_os = "macos")]
+    if let Some(p) = apple::active() {
+        return Some(p);
+    }
     PLAN.get().map(|p| p.prefer)
+}
+
+/// The setup's question about where the lanes go, on a machine where the
+/// answer matters (an Intel hybrid, Apple silicon); None elsewhere.
+pub fn core_question() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    if let Some((p, e)) = crate::macos::perf_levels() {
+        return Some(format!(
+            "\n检测到 Apple 芯片（性能核 {p} 个，能效核 {e} 个）。计算线程怎么放？\n  回车 = 自动（性能核优先、能效核也用，让着你正在用的程序），p = 优先性能核（更快），e = 只用能效核（最省电、最安静，也最慢），windows = 交给系统："
+        ));
+    }
+    let topo = Topology::read();
+    topo.hybrid().is_ok().then(|| {
+        format!(
+            "\n检测到 Intel 大小核（P 核 {} 个、{} 线程，E 核 {} 个）。计算线程怎么放？\n  回车 = 自动（先 P 核，再 E 核，最后 P 核超线程，最快），p = 优先 P 核，e = 优先 E 核（更省电、更不打扰），windows = 交给系统：",
+            topo.cores(true),
+            topo.count(true),
+            topo.cores(false)
+        )
+    })
+}
+
+/// APPLE SILICON (macOS): no thread affinity exists there; a thread's QoS
+/// class steers it (macos.rs). Each lane asks for the class the setting
+/// names, and the threads a lane starts (a native riven gain's scoring) take
+/// its class with them:
+///
+/// - `auto`: `utility` — the performance cores first, the efficiency cores
+///   too, yielding to what the person runs (`user_initiated` with
+///   `priority = "normal"`);
+/// - `p`: `user_initiated`, the performance cores' first claim;
+/// - `e`: `background` — the efficiency cores alone, the least power and heat;
+/// - `windows`: no class asked, the system's default.
+#[cfg(target_os = "macos")]
+mod apple {
+    use super::Prefer;
+    use crate::macos::{QOS_BACKGROUND, QOS_USER_INITIATED, QOS_UTILITY};
+    use std::sync::OnceLock;
+
+    struct Qos {
+        prefer: Prefer,
+        class: Option<u32>,
+        levels: Option<(usize, usize)>,
+    }
+    static QOS: OnceLock<Qos> = OnceLock::new();
+
+    pub fn class_of(prefer: Prefer, priority: &str) -> Option<u32> {
+        match prefer {
+            Prefer::Windows => None,
+            Prefer::E => Some(QOS_BACKGROUND),
+            Prefer::P => Some(QOS_USER_INITIATED),
+            Prefer::Auto => Some(if priority == "normal" { QOS_USER_INITIATED } else { QOS_UTILITY }),
+        }
+    }
+
+    pub fn class_name(class: Option<u32>) -> &'static str {
+        match class {
+            Some(QOS_USER_INITIATED) => "user_initiated（性能核优先）",
+            Some(QOS_UTILITY) => "utility（性能核优先，能效核也用，让着前台程序）",
+            Some(QOS_BACKGROUND) => "background（只用能效核）",
+            _ => "不指定（系统默认）",
+        }
+    }
+
+    pub fn init(prefer: Prefer, priority: &str) -> Option<String> {
+        let levels = crate::macos::perf_levels();
+        let class = class_of(prefer, priority);
+        let _ = QOS.set(Qos { prefer, class, levels });
+        let chip = crate::macos::chip();
+        let chip = if chip.is_empty() { "Apple 芯片".to_string() } else { chip };
+        Some(match levels {
+            Some((p, e)) => format!("{chip}：性能核 {p} 个，能效核 {e} 个；{}，计算线程 QoS {}", prefer.name(), class_name(class)),
+            None => format!("{chip}：系统没有分出性能核和能效核；计算线程 QoS {}", class_name(class)),
+        })
+    }
+
+    pub fn apply_lane() {
+        if let Some(c) = QOS.get().and_then(|q| q.class) {
+            crate::macos::set_thread_qos(c);
+        }
+    }
+
+    /// The setting, where Apple silicon's two kinds are there and a class asked.
+    pub fn active() -> Option<Prefer> {
+        QOS.get().filter(|q| q.levels.is_some() && q.class.is_some()).map(|q| q.prefer)
+    }
+
+    pub fn report(prefer: Prefer, priority: &str) -> String {
+        let chip = crate::macos::chip();
+        let mut s = format!("芯片：{}\n逻辑处理器：{} 个\n", if chip.is_empty() { "?" } else { &chip }, crate::sys::cores());
+        match crate::macos::perf_levels() {
+            Some((p, e)) => s += &format!("性能核 {p} 个，能效核 {e} 个（hw.perflevel0 / hw.perflevel1）\n"),
+            None => s += "系统没有分出性能核和能效核（hw.nperflevels < 2）\n",
+        }
+        s += &format!(
+            "当前设置 core_type = {}（{}），priority = {priority}：计算线程 QoS {}\nmacOS 不能把线程绑到指定核心，只能用 QoS 引导；background 只在能效核上跑，其余优先性能核。\n",
+            prefer.key(),
+            prefer.name(),
+            class_name(class_of(prefer, priority))
+        );
+        s
+    }
 }
 
 // ---- the platform ------------------------------------------------------------------
@@ -437,7 +562,21 @@ fn power_throttling(slow: bool) {
 fn power_throttling(_slow: bool) {}
 
 /// `simfleet cpu`: what was detected and where each lane would go.
-pub fn report(prefer: Prefer, lanes: usize) -> String {
+pub fn report(prefer: Prefer, lanes: usize, priority: &str) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = lanes;
+        apple::report(prefer, priority)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = priority;
+        report_intel(prefer, lanes)
+    }
+}
+
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn report_intel(prefer: Prefer, lanes: usize) -> String {
     let t = Topology::read();
     let mut s = format!(
         "CPU 厂商：{}\n逻辑处理器：{} 个\n",

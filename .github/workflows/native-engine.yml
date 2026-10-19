@@ -14,7 +14,8 @@
 #      and builds, WFSim's code as committed (docs/CLIENTS.md),
 #      native-engine/ twice: for any x86-64, and for x86-64-v3 (AVX2; about
 #      10% faster, the same bits) — Windows <id>.dll / <id>-v3.dll, Linux
-#      lib<id>.so / lib<id>-v3.so,
+#      lib<id>.so / lib<id>-v3.so — and once for Apple silicon, macOS
+#      lib<id>.dylib (aarch64-apple-darwin, whose baseline is the M1's own),
 #   3. holds both to the reference wasm on 8 board rows of WFSim's committed
 #      board snapshot (`simfleet check-native`).
 #
@@ -51,6 +52,7 @@ jobs:
       commit: ${{ steps.c.outputs.commit }}
       windows: ${{ steps.c.outputs.windows }}
       linux: ${{ steps.c.outputs.linux }}
+      macos: ${{ steps.c.outputs.macos }}
       tried: ${{ steps.c.outputs.tried }}
     steps:
       - uses: actions/checkout@v5
@@ -65,15 +67,17 @@ jobs:
           echo "WFSim main $commit carries engine $engine"
           assets=$(gh release view "engine-$engine" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null || true)
           missing() { for f in "$@"; do grep -qx "$f" <<< "$assets" || return 0; done; return 1; }
-          win=false; lin=false
+          win=false; lin=false; mac=false
           missing "$engine.dll" "$engine-v3.dll" && win=true
           missing "lib$engine.so" "lib$engine-v3.so" && lin=true
-          echo "windows needed: $win, linux needed: $lin"
+          missing "lib$engine.dylib" && mac=true
+          echo "windows needed: $win, linux needed: $lin, macos needed: $mac"
           echo "windows=$win" >> "$GITHUB_OUTPUT"
           echo "linux=$lin" >> "$GITHUB_OUTPUT"
+          echo "macos=$mac" >> "$GITHUB_OUTPUT"
           echo "found=$engine" >> "$GITHUB_OUTPUT"
           echo "tried=tried-$engine-$GITHUB_SHA-$(( $(date -u +%s) / 10800 ))" >> "$GITHUB_OUTPUT"
-          if [ "$win" = true ] || [ "$lin" = true ]; then
+          if [ "$win" = true ] || [ "$lin" = true ] || [ "$mac" = true ]; then
             echo "commit=$commit" >> "$GITHUB_OUTPUT"
             echo "go=true" >> "$GITHUB_OUTPUT"
           fi
@@ -110,17 +114,28 @@ jobs:
             exe: target/release/simfleet.exe
             lib: ""
             ext: dll
+            cpus: "baseline v3"
           - os: linux
             # The oldest glibc the runners have, so the library loads on more systems.
             runner: ubuntu-22.04
             exe: target/release/simfleet
             lib: lib
             ext: so
+            cpus: "baseline v3"
+          - os: macos
+            # Apple silicon (arm64). One build: the target's baseline is the
+            # M1's own (apple-m1), and every M-series chip runs it.
+            runner: macos-14
+            exe: target/release/simfleet
+            lib: lib
+            ext: dylib
+            cpus: "baseline"
     runs-on: ${{ matrix.runner }}
     env:
       ENGINE: ${{ needs.check.outputs.engine }}
       COMMIT: ${{ needs.check.outputs.commit }}
-      GO: ${{ matrix.os == 'windows' && needs.check.outputs.windows || needs.check.outputs.linux }}
+      GO: ${{ needs.check.outputs[matrix.os] }}
+      CPUS: ${{ matrix.cpus }}
     steps:
       - uses: actions/checkout@v5
         if: env.GO == 'true'
@@ -157,13 +172,13 @@ jobs:
           cd .wfsim-src
           cargo build --release --locked -p wfsim-wasm --target wasm32-unknown-unknown
           wasm-bindgen "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/wfsim_wasm.wasm" --target no-modules --no-typescript --out-dir ../reference
-      - name: The native engine, card text blanked, for any x86-64 and for x86-64-v3
+      - name: The native engine, card text blanked, for each CPU level (x86-64 and x86-64-v3; Apple silicon's one)
         if: env.GO == 'true'
         shell: pwsh
         env:
           RUSTUP_TOOLCHAIN: ${{ steps.w.outputs.rust }}
         run: |
-          foreach ($cpu in "", "x86-64-v3") {
+          foreach ($cpu in ($env:CPUS -split ' ' | ForEach-Object { if ($_ -eq 'v3') { 'x86-64-v3' } else { '' } })) {
             ./tools/build-native-engine.ps1 -Strip -Commit $env:COMMIT -Engine $env:ENGINE -Cpu $cpu
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
@@ -171,7 +186,7 @@ jobs:
         if: env.GO == 'true'
         shell: bash
         run: |
-          for cpu in baseline v3; do
+          for cpu in $CPUS; do
             echo "== $cpu"
             SIMFLEET_CPU=$cpu ${{ matrix.exe }} check-native --engine "$ENGINE" --wasm reference/wfsim_wasm_bg.wasm --boards .wfsim-src/site/board --weapons 1
           done
@@ -180,7 +195,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p out
-          for v in "" -v3; do
+          for cpu in $CPUS; do
+            v=""; [ "$cpu" = v3 ] && v=-v3
             f="${{ matrix.lib }}$ENGINE$v.${{ matrix.ext }}"
             ( cd target/release/engines && sha256sum "$f" | awk -v f="$f" '{print $1"  "f}' > "$f.sha256" && cp "$f" "$f.sha256" ../../../out/ )
             cat "target/release/engines/$ENGINE$v.patches" >> out/patches 2>/dev/null || true
@@ -217,7 +233,7 @@ jobs:
         shell: bash
         run: |
           shopt -s nullglob
-          files=(in/engine-*/*.dll in/engine-*/*.so)
+          files=(in/engine-*/*.dll in/engine-*/*.so in/engine-*/*.dylib)
           if [ ${#files[@]} -eq 0 ]; then echo "no platform passed"; exit 0; fi
           have=$(gh release view "engine-$ENGINE" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null || true)
           up=()
@@ -246,7 +262,7 @@ jobs:
           {
             echo "Native build of WFSim engine **$ENGINE** for simfleet. simfleet downloads it on its own when wfsim.app serves this engine; there is nothing to install."
             echo
-            echo "- **Builds.** Windows \`$ENGINE.dll\` and Linux \`lib$ENGINE.so\` run on any x86-64, the \`-v3\` ones on x86-64-v3 CPUs (AVX2, FMA, BMI2; about 10% faster on board rows). simfleet picks the one the CPU runs; all give the same bits. A platform missing below did not match the wasm, and computes with it."
+            echo "- **Builds.** Windows \`$ENGINE.dll\` and Linux \`lib$ENGINE.so\` run on any x86-64, the \`-v3\` ones on x86-64-v3 CPUs (AVX2, FMA, BMI2; about 10% faster on board rows); macOS \`lib$ENGINE.dylib\` on Apple silicon. simfleet picks the one the CPU runs; all give the same bits. A platform missing below did not match the wasm, and computes with it."
             echo "- **Source.** WFSim commit [\`$COMMIT\`](https://github.com/magenie33/wfsim/tree/$COMMIT) (AGPL-3.0-or-later, by magenie33 and WFSim contributors), through $via. Built by $run."
             echo "- **No card text.** Digital Extremes' card text was blanked from WFSim's \`data/\` before the build ([tools/strip_card_text.py](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/tools/strip_card_text.py)), since WFSim grants nothing for it ([LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)). The engine only displays that text; no score depends on it."
             echo "- **Checked.** Each matched the wasm built from the same commit bit for bit on 8 rows of WFSim's committed board (one weapon, every ruler and mode) (\`simfleet check-native\`), and simfleet checks the one it uses against wfsim.app's own wasm on a canary row before every use."

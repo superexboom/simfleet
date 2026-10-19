@@ -21,9 +21,14 @@ pub fn idle_ms() -> u64 {
         GetTickCount().wrapping_sub(li.dwTime) as u64
     }
 }
+/// macOS: the login session's last input (CoreGraphics).
+#[cfg(target_os = "macos")]
+pub fn idle_ms() -> u64 {
+    crate::macos::idle_ms()
+}
 /// No input to watch here (a server, or a Linux desktop): always away, so the
 /// budget is `idle_cores`.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn idle_ms() -> u64 {
     u64::MAX
 }
@@ -40,8 +45,18 @@ pub fn on_battery() -> bool {
         s.ACLineStatus == 0 && s.BatteryFlag != 128
     }
 }
-/// Linux: a battery that says it is discharging.
-#[cfg(not(windows))]
+/// macOS: the power source IOKit says provides the power.
+#[cfg(target_os = "macos")]
+pub fn on_battery() -> bool {
+    crate::macos::on_battery()
+}
+/// Neither: no battery known.
+#[cfg(not(any(windows, unix)))]
+pub fn on_battery() -> bool {
+    false
+}
+/// Linux (and any other Unix): a battery that says it is discharging.
+#[cfg(all(unix, not(target_os = "macos")))]
 pub fn on_battery() -> bool {
     let Ok(dir) = std::fs::read_dir("/sys/class/power_supply") else { return false };
     dir.flatten().any(|e| {
@@ -306,10 +321,12 @@ pub fn current_cpu() -> u32 {
     // SAFETY: no arguments.
     unsafe { libc::sched_getcpu().max(0) as u32 }
 }
+/// Not known (macOS has no call for it): `NO_CPU`, which the lanes' record skips.
 #[cfg(not(any(windows, target_os = "linux")))]
 pub fn current_cpu() -> u32 {
-    0
+    NO_CPU
 }
+pub const NO_CPU: u32 = u32::MAX;
 
 /// CPU time this thread has been given, in µs.
 #[cfg(windows)]
@@ -390,8 +407,19 @@ pub fn cpu_times() -> Option<(u64, u64, u64)> {
     Some((t(kernel) + t(user), t(idle), t(pk) + t(pu)))
 }
 
+/// macOS, from Mach, in µs.
+#[cfg(target_os = "macos")]
+pub fn cpu_times() -> Option<(u64, u64, u64)> {
+    let (all, idle) = crate::macos::cpu_load_us()?;
+    Some((all, idle, process_cpu_us()))
+}
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+pub fn cpu_times() -> Option<(u64, u64, u64)> {
+    None
+}
+
 /// Linux, from /proc, in clock ticks.
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 pub fn cpu_times() -> Option<(u64, u64, u64)> {
     let stat = std::fs::read_to_string("/proc/stat").ok()?;
     let f: Vec<u64> = stat.lines().next()?.split_whitespace().skip(1).take(8).filter_map(|x| x.parse().ok()).collect();
@@ -425,8 +453,28 @@ pub fn memory() -> Option<(u64, u64, u64)> {
     }
 }
 
+/// macOS, from Mach (sysctl, `host_statistics64`, `task_info`).
+#[cfg(target_os = "macos")]
+pub fn memory() -> Option<(u64, u64, u64)> {
+    crate::macos::memory()
+}
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+pub fn memory() -> Option<(u64, u64, u64)> {
+    None
+}
+
+/// While the lanes compute, the machine does not go to sleep for want of
+/// input: macOS (a Mac sleeps after its energy settings' idle minutes, and the
+/// lanes with it). Elsewhere nothing is held, as before.
+#[cfg(target_os = "macos")]
+pub fn keep_awake(on: bool) {
+    crate::macos::keep_awake(on)
+}
+#[cfg(not(target_os = "macos"))]
+pub fn keep_awake(_on: bool) {}
+
 /// Linux, from /proc.
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 pub fn memory() -> Option<(u64, u64, u64)> {
     let kb = |text: &str, key: &str| -> Option<u64> {
         text.lines().find(|l| l.starts_with(key))?.split_whitespace().nth(1)?.parse::<u64>().ok().map(|k| k * 1024)
@@ -439,6 +487,34 @@ pub fn memory() -> Option<(u64, u64, u64)> {
 
 #[cfg(test)]
 mod tests {
+    /// WHAT macOS SAYS, read as the console reads it: memory and the load
+    /// make sense, the battery and the idle time answer, the sleep hold is
+    /// taken and let go, a thread's QoS class is granted.
+    /// `cargo test --release mac_reads -- --nocapture` prints them.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_reads() {
+        let (used, total, me) = super::memory().expect("memory");
+        println!("memory: {:.1} of {:.1} GB used, this process {:.0} MB", used as f64 / 1e9, total as f64 / 1e9, me as f64 / 1e6);
+        assert!(total > 1 << 30 && used > 0 && used <= total && me > 0);
+        let a = super::cpu_times().expect("cpu times");
+        let mut x = 0u64;
+        for i in 0..20_000_000u64 {
+            x = x.wrapping_mul(31).wrapping_add(i);
+        }
+        std::hint::black_box(x);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let b = super::cpu_times().expect("cpu times");
+        println!("cpu: {:?} -> {:?}", a, b);
+        assert!(b.0 > a.0 && b.1 >= a.1 && b.2 > a.2 && b.0 - a.0 >= b.1 - a.1);
+        println!("on battery: {}, idle: {} ms", super::on_battery(), super::idle_ms());
+        println!("chip: {:?}, perf levels: {:?}", crate::macos::chip(), crate::macos::perf_levels());
+        super::keep_awake(true);
+        super::keep_awake(false);
+        assert!(crate::macos::set_thread_qos(crate::macos::QOS_UTILITY));
+        assert_eq!(super::current_cpu(), super::NO_CPU);
+    }
+
     #[test]
     fn iso_matches_js() {
         assert_eq!(super::iso(0), "1970-01-01T00:00:00.000Z");

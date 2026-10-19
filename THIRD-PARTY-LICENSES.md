@@ -6,7 +6,7 @@ for a binary distribution. (simfleet itself is AGPL-3.0-or-later; see LICENSE.)
 
 ## Overview
 
-- **Apache License 2.0** (121 crates)
+- **Apache License 2.0** (126 crates)
 - **MIT License** (22 crates)
 - **ISC License** (19 crates)
 - **BSD 3-Clause "New" or "Revised" License** (3 crates)
@@ -21,7 +21,7 @@ for a binary distribution. (simfleet itself is AGPL-3.0-or-later; see LICENSE.)
 
 Used by:
 
-- [simfleet 0.6.2](https://github.com/superexboom/simfleet)
+- [simfleet 0.7.1](https://github.com/superexboom/simfleet)
 
 ```
                     GNU AFFERO GENERAL PUBLIC LICENSE
@@ -3373,6 +3373,8 @@ Used by:
 - [bitflags 2.13.2](https://github.com/bitflags/bitflags)
 - [bumpalo 3.20.3](https://github.com/fitzgen/bumpalo)
 - [cfg-if 1.0.5](https://github.com/rust-lang/cfg-if)
+- [core-foundation-sys 0.8.7](https://github.com/servo/core-foundation-rs)
+- [core-foundation 0.10.1](https://github.com/servo/core-foundation-rs)
 - [curve25519-dalek-derive 0.1.1](https://github.com/dalek-cryptography/curve25519-dalek)
 - [either 1.19.0](https://github.com/rayon-rs/either)
 - [equivalent 1.0.2](https://github.com/indexmap-rs/equivalent)
@@ -3401,6 +3403,8 @@ Used by:
 - [rustls-native-certs 0.8.4](https://github.com/rustls/rustls-native-certs)
 - [rustls 0.23.45](https://github.com/rustls/rustls)
 - [scopeguard 1.2.0](https://github.com/bluss/scopeguard)
+- [security-framework-sys 2.17.0](https://github.com/kornelski/rust-security-framework)
+- [security-framework 3.7.0](https://github.com/kornelski/rust-security-framework)
 - [signal-hook-mio 0.2.5](https://github.com/vorner/signal-hook)
 - [signal-hook-registry 1.4.8](https://github.com/vorner/signal-hook)
 - [signal-hook 0.3.18](https://github.com/vorner/signal-hook)
@@ -4276,6 +4280,7 @@ Used by:
 - [itoa 1.0.18](https://github.com/dtolnay/itoa)
 - [libc 0.2.190](https://github.com/rust-lang/libc)
 - [litrs 1.0.0](https://github.com/LukasKalbertodt/litrs)
+- [mach2 0.6.0](https://github.com/JohnTitor/mach2)
 - [miniz_oxide 0.9.1](https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide)
 - [proc-macro2 1.0.107](https://github.com/dtolnay/proc-macro2)
 - [pulley-interpreter 49.0.2](https://github.com/bytecodealliance/wasmtime/tree/main/pulley)

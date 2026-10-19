@@ -1095,13 +1095,20 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
             c.text(x + 1, yy, 7, "实得", DIM);
             let st = Sty { fg: Some(if share < 0.6 { 203 } else if share < 0.85 { 179 } else { 255 }), bold: true, ..PLAIN };
             let u = c.text(x + 8, yy, w.saturating_sub(9), &format!("{eff:.1} 核"), st);
-            let rest = format!("  {:.0}%/线程 · {} 处理器", share * 100.0, s.processors);
+            // No processor count where the system tells none (macOS).
+            let rest = if s.processors == 0 {
+                format!("  {:.0}%/线程", share * 100.0)
+            } else {
+                format!("  {:.0}%/线程 · {} 处理器", share * 100.0, s.processors)
+            };
             c.text(x + 8 + u, yy, w.saturating_sub(9 + u), &rest, DIM);
             yy += 1;
         }
         if let (Some(pref), true) = (s.core_pref, yy < end) {
             let (p, e) = s.lane_kind.iter().flatten().fold((0, 0), |a, k| if *k == 'P' { (a.0 + 1, a.1) } else { (a.0, a.1 + 1) });
-            kv(c, x, yy, w, "大小核", pref, &format!("  在 P {p} / E {e}"));
+            // Where each lane ran is known on an Intel hybrid, not on Apple silicon.
+            let tail = if s.lane_kind.is_empty() { String::new() } else { format!("  在 P {p} / E {e}") };
+            kv(c, x, yy, w, "大小核", pref, &tail);
             yy += 1;
         }
         // THE LANES: each core of the machine, coloured by the group whose job it runs.

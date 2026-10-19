@@ -205,7 +205,7 @@ impl Paths {
         let body = toml::to_string_pretty(c)?;
         let text = format!(
             "# simfleet — WFSim 志愿计算客户端的配置。可以直接编辑；运行中按键调整的核心数会在退出时写回。\n\
-             # core_type（只对 Intel 大小核有效）：auto 先 P 核、再 E 核、最后 P 核超线程；p 优先性能核；e 优先能效核；windows 交给系统。\n\
+             # core_type（只对 Intel 大小核和 Apple 芯片有效）：auto 先 P 核、再 E 核、最后 P 核超线程（Apple 芯片：性能核优先、能效核也用）；p 优先性能核；e 优先能效核（Apple 芯片：只用能效核）；windows 交给系统。\n\
              # verifier 是本机的计算者 id，account.session 是登录凭据：都请勿发给别人。\n\n{body}"
         );
         let tmp = self.config.with_extension("toml.tmp");

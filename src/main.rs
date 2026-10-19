@@ -20,6 +20,8 @@ mod config;
 mod engine;
 mod fleet;
 mod jsnum;
+#[cfg(target_os = "macos")]
+mod macos;
 mod net;
 mod sync;
 mod sys;
@@ -202,14 +204,8 @@ fn wizard(paths: &Paths, old: Option<Config>, full: bool) -> Result<Option<Confi
     } else if let Ok(n) = a.parse::<usize>() {
         c.active_cores = n.clamp(1, cores);
     }
-    let topo = affinity::Topology::read();
-    if topo.hybrid().is_ok() {
-        let a = ask(&format!(
-            "\n检测到 Intel 大小核（P 核 {} 个、{} 线程，E 核 {} 个）。计算线程怎么放？\n  回车 = 自动（先 P 核，再 E 核，最后 P 核超线程，最快），p = 优先 P 核，e = 优先 E 核（更省电、更不打扰），windows = 交给系统：",
-            topo.cores(true),
-            topo.count(true),
-            topo.cores(false)
-        ));
+    if let Some(q) = affinity::core_question() {
+        let a = ask(&q);
         c.core_type = affinity::Prefer::parse(&a).key().into();
     }
     println!("\n预算：离开时 {} 核，使用时 {}。可随时编辑 {}", c.idle_cores,
@@ -272,7 +268,7 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<(
         &cfg.verifier[..6],
         paths.config.display()
     ));
-    if let Some(l) = affinity::init(affinity::Prefer::parse(&cfg.core_type)) {
+    if let Some(l) = affinity::init(affinity::Prefer::parse(&cfg.core_type), &cfg.priority) {
         ui.log(format!("{C_INFO}[CPU]{C_END} {l}"));
     }
     if watch::is_client() {
@@ -631,7 +627,7 @@ fn main() {
             }
             "cpu" => {
                 let c = paths.load()?.unwrap_or_else(|| Config::fresh(sys::cores()));
-                print!("{}", affinity::report(affinity::Prefer::parse(&c.core_type), c.idle_cores.max(c.active_cores)));
+                print!("{}", affinity::report(affinity::Prefer::parse(&c.core_type), c.idle_cores.max(c.active_cores), &c.priority));
             }
             "check-native" => check_native(&paths, flag("--engine"), flag("--wasm"), flag("--data"), flag("--boards"), flag("--rows"), flag("--lanes").and_then(|x| x.parse().ok()), flag("--weapons").and_then(|x| x.parse().ok()).unwrap_or(4))?,
             "bench" => {

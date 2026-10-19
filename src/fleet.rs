@@ -2160,15 +2160,15 @@ impl Fleet {
         } else {
             "，多半是被别的程序占用了（simfleet 只用别人不用的 CPU）"
         };
-        self.ui.log(format!(
-            "{C_GO}[CPU]{C_END} {lanes} 条计算线程每条只拿到 {:.0}% 的算力（分布在 {processors} 个逻辑处理器上）{why}",
-            share * 100.0
-        ));
+        let on = if processors == 0 { String::new() } else { format!("（分布在 {processors} 个逻辑处理器上）") };
+        self.ui.log(format!("{C_GO}[CPU]{C_END} {lanes} 条计算线程每条只拿到 {:.0}% 的算力{on}{why}", share * 100.0));
     }
 
     fn measure(&mut self) {
         self.lane_yield();
         let lanes = if self.held_why().is_some() { 0 } else { self.lanes() };
+        // macOS: the Mac stays awake while the lanes may compute (sys.rs).
+        sys::keep_awake(lanes > 0);
         let (window, total) = self.meter.read(self.pool.busy_ms, lanes, self.tasks.len());
         self.ui.status(|s| {
             s.utilisation = window;
