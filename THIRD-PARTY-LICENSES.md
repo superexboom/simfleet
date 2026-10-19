@@ -21,7 +21,7 @@ for a binary distribution. (simfleet itself is AGPL-3.0-or-later; see LICENSE.)
 
 Used by:
 
-- [simfleet 0.7.1](https://github.com/superexboom/simfleet)
+- [simfleet 0.7.2](https://github.com/superexboom/simfleet)
 
 ```
                     GNU AFFERO GENERAL PUBLIC LICENSE
