@@ -51,7 +51,6 @@ simfleet — WFSim 志愿计算客户端（非官方，基于 WFSim 引擎）
   simfleet status          看一眼本机和账号的贡献
   simfleet bench           本机测速（不连任务服务器派活）
   simfleet cpu             看 CPU 识别结果：是否 Intel 大小核、计算线程会放在哪种核心上
-  simfleet engine-id <dir> 计算一份 WFSim 源码的引擎号（原生引擎构建脚本用）
 
 运行时按键: P 暂停/继续 · + / - 空闲时的核心数 · Shift 加 + / - 使用电脑时的核心数（0 = 使用时暂停）
           [ / ] 并发上限 · L 全屏日志 · PgUp/PgDn 翻页 · Q 退出（会先把手头任务交还）
@@ -419,7 +418,7 @@ fn bench(paths: &Paths, cfg: &Config, lanes_arg: Option<usize>) -> Result<()> {
 /// Offline (the release workflow, which cannot reach wfsim.app): `--engine <id>
 /// --wasm <file> --boards <dir>` take the engine id, the reference wasm built
 /// from the same commit, and a WFSim checkout's `site/board/`.
-fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boards: Option<String>, rows: Option<String>, lanes: Option<usize>, weapons: usize) -> Result<()> {
+fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, data: Option<String>, boards: Option<String>, rows: Option<String>, lanes: Option<usize>, weapons: usize) -> Result<()> {
     let mut cfg = Config::fresh(sys::cores());
     cfg.native_engine = true;
     cfg.native_engine_url = String::new();
@@ -432,9 +431,20 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boa
             use sha2::{Digest, Sha256};
             let bytes = std::fs::read(&file).with_context(|| file.clone())?;
             let digest: String = Sha256::digest(&bytes).iter().take(6).map(|x| format!("{x:02x}")).collect();
-            let rel = work::Release { engine, wasm: digest, protocols: Vec::new() };
+            // `--data <pack>`: a data pack installed into the reference first
+            // (a module built apart from its data needs one; one that embeds
+            // its data takes it in place of its own, to the same bits).
+            let pack = match &data {
+                Some(f) => Some(std::sync::Arc::new(std::fs::read(f).with_context(|| f.clone())?)),
+                None => None,
+            };
+            let data_id: String = pack.as_ref().map(|p| Sha256::digest(p.as_slice()).iter().take(6).map(|x| format!("{x:02x}")).collect()).unwrap_or_default();
+            let rel = work::Release { engine, wasm: digest, protocols: Vec::new(), data: data_id };
             println!("引擎 {} · 参照 wasm {} ({})", rel.engine, rel.wasm, file);
-            work::build_code(&net, paths, &cfg, &ui, &rel, &bytes)?
+            if pack.is_some() {
+                println!("数据包 {} ({})", rel.data, data.as_deref().unwrap_or(""));
+            }
+            work::build_code(&net, paths, &cfg, &ui, &rel, &bytes, pack)?
         }
         (None, None) => {
             let rel = work::fetch_release(&net)?;
@@ -540,85 +550,6 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, boa
     Ok(())
 }
 
-/// WFSim scripts/build_site_app.py `engine_id`, for a source checkout.
-fn engine_id(dir: &std::path::Path) -> Result<Vec<String>> {
-    use sha2::{Digest, Sha256};
-    // THE CHECKOUT'S OWN LISTS (`ENGINE_SOURCES`, `ENGINE_SOURCES_NOT`), so a
-    // commit that changes what the id covers is hashed as that commit does;
-    // these (as of WFSim 2fb8138) when its script cannot be read.
-    let script = std::fs::read_to_string(dir.join("scripts").join("build_site_app.py")).unwrap_or_default();
-    let list = |name: &str, default: &[&str]| -> Vec<String> {
-        let found = script.lines().position(|l| l.starts_with(name) && l[name.len()..].trim_start().starts_with('=')).and_then(|i| {
-            let tail: String = script.lines().skip(i).collect::<Vec<_>>().join("
-");
-            let open = tail.find('(')?;
-            let close = open + tail[open..].find(')')?;
-            Some(tail[open + 1..close].split('"').skip(1).step_by(2).map(String::from).collect::<Vec<_>>())
-        });
-        found.filter(|v| !v.is_empty()).unwrap_or_else(|| default.iter().map(|s| s.to_string()).collect())
-    };
-    let sources = list("ENGINE_SOURCES", &["engine/src", "webapi/src", "wasm/src", "tools/gas-macro", "data"]);
-    let not = list(
-        "ENGINE_SOURCES_NOT",
-        &["data/i18n/", "data/board_state.yaml", "data/market.yaml", "data/assets.yaml", "data/notes.yaml", "data/README.md"],
-    );
-    fn walk(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        if let Ok(rd) = std::fs::read_dir(d) {
-            for e in rd.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    walk(&p, out);
-                } else {
-                    out.push(p);
-                }
-            }
-        }
-    }
-    let mut files = Vec::new();
-    for s in &sources {
-        walk(&dir.join(s), &mut files);
-    }
-    let rel: Vec<String> = files
-        .iter()
-        .map(|p| p.strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/"))
-        .collect();
-    let mut ids = Vec::new();
-    for fold_case in [false, true] {
-        // Python sorts paths by their PARTS (case-insensitively on Windows).
-        // The case-sensitive order first: WFSim's site is built on Linux.
-        let key = |r: &String| -> Vec<String> { r.split('/').map(|x| if fold_case { x.to_lowercase() } else { x.to_string() }).collect() };
-        let mut list = rel.clone();
-        list.sort_by_key(key);
-        list.push("Cargo.lock".into());
-        let mut h = Sha256::new();
-        for r in list {
-            if not.iter().any(|n| r.starts_with(n.as_str())) {
-                continue;
-            }
-            let bytes = std::fs::read(dir.join(&r)).with_context(|| r.clone())?;
-            let mut norm = Vec::with_capacity(bytes.len());
-            let mut i = 0;
-            while i < bytes.len() {
-                if bytes[i] == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
-                    i += 1;
-                    continue;
-                }
-                norm.push(bytes[i]);
-                i += 1;
-            }
-            h.update(r.as_bytes());
-            h.update([0]);
-            h.update(&norm);
-            h.update([0]);
-        }
-        let id: String = h.finalize().iter().map(|x| format!("{x:02x}")).collect::<String>()[..12].to_string();
-        if !ids.contains(&id) {
-            ids.push(id);
-        }
-    }
-    Ok(ids)
-}
-
 fn main() {
     enable_vt();
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -634,12 +565,6 @@ fn main() {
         match cmd {
             "help" | "-h" | "--help" => print!("{HELP}"),
             "version" | "-V" | "--version" => println!("simfleet {}", env!("CARGO_PKG_VERSION")),
-            "engine-id" => {
-                let dir = args.get(1).context("用法: simfleet engine-id <WFSim 源码目录>")?;
-                for id in engine_id(std::path::Path::new(dir))? {
-                    println!("{id}");
-                }
-            }
             "setup" => {
                 wizard(&paths, paths.load()?, true)?;
             }
@@ -708,7 +633,7 @@ fn main() {
                 let c = paths.load()?.unwrap_or_else(|| Config::fresh(sys::cores()));
                 print!("{}", affinity::report(affinity::Prefer::parse(&c.core_type), c.idle_cores.max(c.active_cores)));
             }
-            "check-native" => check_native(&paths, flag("--engine"), flag("--wasm"), flag("--boards"), flag("--rows"), flag("--lanes").and_then(|x| x.parse().ok()), flag("--weapons").and_then(|x| x.parse().ok()).unwrap_or(4))?,
+            "check-native" => check_native(&paths, flag("--engine"), flag("--wasm"), flag("--data"), flag("--boards"), flag("--rows"), flag("--lanes").and_then(|x| x.parse().ok()), flag("--weapons").and_then(|x| x.parse().ok()).unwrap_or(4))?,
             "bench" => {
                 let c = paths.load()?.unwrap_or_else(|| Config::fresh(1));
                 bench(&paths, &c, flag("--lanes").and_then(|x| x.parse().ok()))?;

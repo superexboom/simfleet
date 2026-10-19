@@ -61,7 +61,8 @@ $found = $null
 $candidates = if ($Commit) { @($Commit) } else { git -C $src rev-list -n $Depth HEAD }
 foreach ($c in $candidates) {
     git -C $src checkout -q $c
-    $ids = & $exe engine-id $src
+    # The id as that commit counts it (tools/engine_id.py runs its own code).
+    $ids = & $python (Join-Path (Join-Path $root "tools") "engine_id.py") $src
     if ($ids -contains $want) { $found = $c; break }
 }
 if (-not $found) {

@@ -38,6 +38,10 @@ pub struct Release {
     /// The protocols the server takes (`protocols_served`); empty from a
     /// release.json that does not say.
     pub protocols: Vec<u32>,
+    /// The engine's official data pack (`data`, the first 12 hex of its
+    /// SHA-256: `/pkg/pack.data.<data>.json`); empty from a release that names
+    /// none, whose engine carries its data.
+    pub data: String,
 }
 
 const ID_OK: fn(&str) -> bool = |s| !s.is_empty() && s.len() <= 40 && s.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
@@ -50,8 +54,8 @@ pub fn protocols_of(v: &Value) -> Vec<u32> {
 pub fn fetch_release(net: &Net) -> Result<Release> {
     let r = net.get("/release.json")?;
     let s = |k: &str| r.body[k].as_str().unwrap_or("").to_string();
-    let rel = Release { engine: s("engine"), wasm: s("wasm"), protocols: protocols_of(&r.body) };
-    if !ID_OK(&rel.engine) || !ID_OK(&rel.wasm) {
+    let rel = Release { engine: s("engine"), wasm: s("wasm"), protocols: protocols_of(&r.body), data: s("data") };
+    if !ID_OK(&rel.engine) || !ID_OK(&rel.wasm) || !(rel.data.is_empty() || ID_OK(&rel.data)) {
         bail!("release.json 无法识别：{}", r.body);
     }
     Ok(rel)
@@ -140,27 +144,62 @@ pub fn load_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release)
             b
         }
     };
-    build_code(net, paths, cfg, ui, rel, &bytes)
+    let pack = fetch_data(net, paths, ui, rel)?;
+    build_code(net, paths, cfg, ui, rel, &bytes, pack)
 }
 
-/// The engine from its wasm `bytes` (named by `rel`): compiled (or read from
-/// the compile cache), with a native build beside it if one matches.
-pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release, bytes: &[u8]) -> Result<Arc<Code>> {
+/// THE RELEASE'S DATA PACK (WFSim docs/CLIENTS.md "The official data pack"):
+/// `/pkg/pack.data.<data>.json`, kept in the cache by its name and checked
+/// against the digest in it, as the wasm is. None for a release naming none.
+pub fn fetch_data(net: &Net, paths: &Paths, ui: &Ui, rel: &Release) -> Result<Option<Arc<Vec<u8>>>> {
+    if rel.data.is_empty() {
+        return Ok(None);
+    }
+    std::fs::create_dir_all(&paths.cache)?;
+    let name = format!("pack.data.{}.json", rel.data);
+    let file = paths.cache.join(&name);
+    let digest_ok = |b: &[u8]| hex(&Sha256::digest(b)).starts_with(&rel.data);
+    let bytes = match std::fs::read(&file) {
+        Ok(b) if digest_ok(&b) => b,
+        _ => {
+            ui.log(format!("{C_INFO}[引擎]{C_END} 下载数据包 {name}"));
+            let b = net.download(&format!("/pkg/{name}"), |got, total| {
+                ui.status(|s| s.note = format!("下载数据包 {:.1}/{:.1} MB", got as f64 / 1e6, total as f64 / 1e6))
+            })?;
+            ui.status(|s| s.note.clear());
+            if !digest_ok(&b) {
+                bail!("下载的数据包校验失败（sha256 与 {} 不符）", rel.data);
+            }
+            std::fs::write(&file, &b)?;
+            b
+        }
+    };
+    Ok(Some(Arc::new(bytes)))
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// The engine from its wasm `bytes` (named by `rel`) and its data `pack`:
+/// compiled (or read from the compile cache), with a native build beside it if
+/// one matches.
+pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release, bytes: &[u8], pack: Option<Arc<Vec<u8>>>) -> Result<Arc<Code>> {
     std::fs::create_dir_all(&paths.cache)?;
     let cwasm = paths.cache.join(format!("{}.wasmtime49.cwasm", rel.wasm));
     if !cwasm.exists() {
         ui.status(|s| s.note = "编译引擎（只在新版本第一次运行时）…".into());
     }
     let t = Instant::now();
-    let wasm = WasmCode::load(bytes, &cwasm)?;
+    let wasm = WasmCode::load(bytes, &cwasm)?.with_pack(pack.clone());
     if t.elapsed() > Duration::from_secs(1) {
         ui.log(format!("{C_INFO}[引擎]{C_END} 编译完成，用时 {:.1}s（已缓存）", t.elapsed().as_secs_f64()));
     }
-    // Only the current release is kept.
+    // Only the current release is kept: its module and its data pack.
     if let Ok(rd) = std::fs::read_dir(&paths.cache) {
         for e in rd.flatten() {
             let n = e.file_name().to_string_lossy().to_string();
-            if !n.contains(&rel.wasm) {
+            if !n.contains(&rel.wasm) && (rel.data.is_empty() || !n.contains(&rel.data)) {
                 let _ = std::fs::remove_file(e.path());
             }
         }
@@ -189,7 +228,7 @@ pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release
     if code.native.is_none() && cfg.native_engine && cfg.official_engine {
         let lib = paths.engines.join(official_lib_name(&rel.engine));
         if lib.exists() || fetch_official(net, ui, rel, &lib) {
-            match NativeLib::open_official(&lib, &rel.engine) {
+            match NativeLib::open_official(&lib, &rel.engine, pack.as_deref().map(|p| p.as_slice())) {
                 Ok(n) => code = held_to_wasm(code, n, ui, format!("WFSim 官方原生引擎 {}", rel.engine))?,
                 Err(e) => ui.log(format!("{C_BAD}[引擎]{C_END} WFSim 官方原生引擎加载失败：{}", load_failure(&e))),
             }
@@ -294,8 +333,15 @@ pub fn fetch_official(net: &Net, ui: &Ui, rel: &Release, lib: &std::path::Path) 
         if s["engine"].as_str() != Some(rel.engine.as_str()) {
             bail!("清单的引擎号是 {}", s["engine"]);
         }
-        if s["abi"].as_u64() != Some(1) {
-            bail!("不认识的接口版本 {}", s["abi"]);
+        // abi 1: `wfsim_api` and `wfsim_free`; abi 2 adds `wfsim_install_data`,
+        // given the release's data pack when it is loaded (engine.rs).
+        if !matches!(s["abi"].as_u64(), Some(1 | 2)) {
+            bail!("不认识的接口版本 {}，请更新 simfleet", s["abi"]);
+        }
+        if let Some(d) = s["data"]["sha256"].as_str() {
+            if !rel.data.is_empty() && !d.to_lowercase().starts_with(&rel.data) {
+                bail!("清单的数据包 {} 不是 release.json 的 {}", &d[..d.len().min(12)], rel.data);
+            }
         }
         let f = &s["files"][target];
         let (path, want) = (f["path"].as_str().context("清单里没有本平台")?, f["sha256"].as_str().context("sha256")?.to_lowercase());

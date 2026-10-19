@@ -10,6 +10,15 @@
 //! A NATIVE build of the same source (`engines/<engine id>.dll`, see
 //! native-engine/) is faster, and is used for board orders only once it has
 //! reproduced the wasm's bits on a canary row.
+//!
+//! THE DATA PACK (WFSim docs/CLIENTS.md "The official data pack"): the engine
+//! is code, and the game data it computes from is a file published beside it,
+//! named by release.json's `data`. Every wasm instance has it installed
+//! (`install_data_bytes`) before its first call, and WFSim's own library
+//! (abi 2, `wfsim_install_data`) once when it is loaded. From 2026-10-25 01:00
+//! UTC a served engine carries no data of its own and answers nothing without
+//! it; until then an installed pack replaces what it carries, to the same bits.
+//! simfleet's own builds are plain builds of the commit, which embed the data.
 
 use anyhow::{anyhow, bail, Context, Result};
 use std::path::Path;
@@ -30,6 +39,9 @@ pub struct WasmCode {
     engine: Engine,
     module: Module,
     linker: Linker<Host>,
+    /// The release's data pack, installed into every instance; None for a
+    /// release that names none (or a reference module that embeds its data).
+    pack: Option<Arc<Vec<u8>>>,
 }
 
 fn config() -> Config {
@@ -125,7 +137,13 @@ impl WasmCode {
                     .map_err(we)?;
             }
         }
-        Ok(WasmCode { engine, module, linker })
+        Ok(WasmCode { engine, module, linker, pack: None })
+    }
+
+    /// The data pack every instance of this module is given first.
+    pub fn with_pack(mut self, pack: Option<Arc<Vec<u8>>>) -> WasmCode {
+        self.pack = pack;
+        self
     }
 }
 
@@ -147,19 +165,36 @@ impl WasmInst {
             start.call(&mut store, ()).map_err(we)?;
         }
         let mem = inst.get_memory(&mut store, "memory").context("engine exports no memory")?;
-        Ok(WasmInst {
+        // The bytes door first: a string door copies a pack in at up to three
+        // bytes a character, and linear memory never shrinks (WFSim docs/WASM.md).
+        let install = ["install_data_bytes", "install_data"]
+            .iter()
+            .find_map(|n| inst.get_typed_func::<(u32, u32), (u32, u32)>(&mut store, n).ok());
+        let mut w = WasmInst {
             malloc: inst.get_typed_func(&mut store, "__wbindgen_malloc").map_err(we)?,
             free: inst.get_typed_func(&mut store, "__wbindgen_free").map_err(we)?,
             api: inst.get_typed_func(&mut store, "api").map_err(we)?,
             optimize: inst.get_func(&mut store, "optimize"),
             mem,
             store,
-        })
+        };
+        // THE DATA PACK, before the first call: once per instance.
+        if let Some(pack) = &code.pack {
+            let f = install.context("这个引擎没有安装数据包的入口（install_data），请更新 simfleet")?;
+            let p = w.put(pack.as_slice())?;
+            let (r, n) = f.call(&mut w.store, (p, pack.len() as u32)).map_err(we)?;
+            let why = w.take(r, n)?;
+            if !why.is_empty() {
+                bail!("数据包安装失败：{why}");
+            }
+        }
+        Ok(w)
     }
 
-    fn put(&mut self, s: &str) -> Result<u32> {
+    fn put(&mut self, s: impl AsRef<[u8]>) -> Result<u32> {
+        let s = s.as_ref();
         let p = self.malloc.call(&mut self.store, (s.len() as u32, 1)).map_err(we)?;
-        self.mem.data_mut(&mut self.store)[p as usize..p as usize + s.len()].copy_from_slice(s.as_bytes());
+        self.mem.data_mut(&mut self.store)[p as usize..p as usize + s.len()].copy_from_slice(s);
         Ok(p)
     }
 
@@ -195,6 +230,8 @@ impl WasmInst {
 
 type ApiFn = unsafe extern "C" fn(*const u8, usize, *const u8, usize, *mut usize) -> *mut u8;
 type OptimizeFn = unsafe extern "C" fn(*const u8, usize, *mut usize) -> *mut u8;
+/// `wfsim_install_data(body, body_len, &len) -> ptr` (abi 2), the answer "" or why.
+type InstallFn = unsafe extern "C" fn(*const u8, usize, *mut usize) -> *mut u8;
 type FreeFn = unsafe extern "C" fn(*mut u8, usize);
 type IdFn = unsafe extern "C" fn() -> *const std::ffi::c_char;
 
@@ -267,7 +304,8 @@ impl Drop for LibHandle {
 
 /// A native engine library: simfleet's build (native-engine/: `sfe_api`,
 /// `sfe_free`, `sfe_engine_id`, `sfe_optimize`) or WFSim's own (abi 1:
-/// `wfsim_api` and `wfsim_free`, the same two doors, and no optimizer).
+/// `wfsim_api` and `wfsim_free`, the same two doors, and no optimizer; abi 2
+/// adds `wfsim_install_data`, the data pack's door).
 /// Loaded and let go on the library thread (`lib_thread`), called from any.
 pub struct NativeLib {
     _lib: LibHandle,
@@ -310,15 +348,32 @@ impl NativeLib {
         }
     }
 
-    /// WFSim's official library of `engine` (docs/CLIENTS.md, abi 1), its
-    /// manifest's signature and the file's digest checked before (work.rs).
-    pub fn open_official(path: &Path, engine: &str) -> Result<NativeLib> {
-        // SAFETY: a library whose signed manifest names this engine and abi 1:
-        // two plain C functions over byte buffers, as `sfe_api` and `sfe_free`.
+    /// WFSim's official library of `engine` (docs/CLIENTS.md, abi 1 or 2), its
+    /// manifest's signature and the file's digest checked before (work.rs);
+    /// at abi 2 the release's data `pack` is installed in it here.
+    pub fn open_official(path: &Path, engine: &str, pack: Option<&[u8]>) -> Result<NativeLib> {
+        // SAFETY: a library whose signed manifest names this engine and abi 1
+        // or 2: plain C functions over byte buffers, as `sfe_api` and `sfe_free`.
         unsafe {
             let lib = LibHandle::open(path)?;
             let api: ApiFn = *lib.lib().get::<ApiFn>(b"wfsim_api\0")?;
             let free: FreeFn = *lib.lib().get::<FreeFn>(b"wfsim_free\0")?;
+            if let Ok(install) = lib.lib().get::<InstallFn>(b"wfsim_install_data\0") {
+                let pack = pack.context("WFSim 官方原生引擎要数据包，但 release.json 没有给出")?;
+                let mut n = 0usize;
+                let p = install(pack.as_ptr(), pack.len(), &mut n);
+                if p.is_null() {
+                    bail!("数据包安装失败");
+                }
+                let why = String::from_utf8_lossy(std::slice::from_raw_parts(p, n)).to_string();
+                free(p, n);
+                // THE SAME FILE LOADED AGAIN is the same module, its data in:
+                // installed the first time, or read since. The canary that
+                // follows holds it to the wasm either way.
+                if !why.is_empty() && !why.contains("is already installed") && !why.contains("was read before it was installed") {
+                    bail!("数据包安装失败：{why}");
+                }
+            }
             Ok(NativeLib {
                 _lib: lib,
                 api,
@@ -656,13 +711,14 @@ mod tests {
     /// A LIBRARY OPENED FROM A THREAD THAT ENDS (a background engine fetch),
     /// then called from a thread built where that one was: WFSim's own library
     /// crashed here before the library thread (`lib_thread`).
-    /// `SIMFLEET_TEST_LIB=<engines/…dll> cargo test --release lib_outlives_its_opener -- --ignored --nocapture`
+    /// `SIMFLEET_TEST_LIB=<engines/…dll> [SIMFLEET_TEST_PACK=<pack.data.….json>] cargo test --release lib_outlives_its_opener -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn lib_outlives_its_opener() {
         let path = std::path::PathBuf::from(std::env::var("SIMFLEET_TEST_LIB").expect("SIMFLEET_TEST_LIB"));
+        let pack = std::env::var("SIMFLEET_TEST_PACK").ok().map(|p| std::fs::read(p).expect("the pack"));
         let (opener, lib) = std::thread::spawn(move || {
-            let lib = NativeLib::open(&path).or_else(|_| NativeLib::open_official(&path, "test")).expect("open the library");
+            let lib = NativeLib::open(&path).or_else(|_| NativeLib::open_official(&path, "test", pack.as_deref())).expect("open the library");
             lib.api("/api/board/nothing", "{}").expect("an answer");
             (thread_block(), lib)
         })

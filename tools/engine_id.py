@@ -1,57 +1,63 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """WFSim's engine id (scripts/build_site_app.py `engine_id`) for a checkout.
 
-Prints every spelling it can take: the paths are sorted by their parts, which
-Python does case-insensitively on Windows and case-sensitively elsewhere, so a
-tree is matched against the served id under both orders (as `simfleet
-engine-id` does). The case-sensitive one first: WFSim's site is built on its
-CI's Linux runner since 532015dd ("ship: a push of source is a release"), so
-that is the id wfsim.app serves; the Windows one was, when its maintainer's
-machine built it.
+THE CHECKOUT'S OWN CODE computes it: `engine_id` and what it reads
+(`ENGINE_SOURCES`, `engine_files`, `lean_yaml`, ...) are taken out of that
+commit's build_site_app.py and run here, so a commit that changes how the id is
+counted is counted as that commit counts it. (WFSim moved to reading the data
+lean, comments and blank lines gone, and tests left out, in 6c6bd917 - "the
+official data pack"; a copy of the old rule here kept computing the old id.)
+Only the definitions are run, never the script.
+
+Prints every spelling it can take: paths sort case-insensitively on Windows
+and case-sensitively elsewhere, so both orders are printed. The case-sensitive
+one first: WFSim's site is built on its CI's Linux runner since 532015dd
+("ship: a push of source is a release"), so that is the id wfsim.app serves.
 
     python tools/engine_id.py <wfsim checkout>
 """
+import ast
+import builtins
 import hashlib
+import json
+import os
 import pathlib
+import re
 import sys
 
-import re
-
-# As of WFSim 2fb8138: used when the checkout's build_site_app.py cannot be read.
-SOURCES = ("engine/src", "webapi/src", "wasm/src", "tools/gas-macro", "data")
-NOT = ("data/i18n/", "data/board_state.yaml", "data/market.yaml",
-       "data/assets.yaml", "data/notes.yaml", "data/README.md")
+NAMES = ("ENGINE_SOURCES", "ENGINE_SOURCES_NOT")
 
 
-def lists(root: pathlib.Path):
-    """THE CHECKOUT'S OWN LISTS (ENGINE_SOURCES, ENGINE_SOURCES_NOT), so a
-    commit that changes what the id covers is hashed as that commit does."""
-    try:
-        text = (root / "scripts" / "build_site_app.py").read_text(encoding="utf-8")
-    except OSError:
-        return SOURCES, NOT
-    def tup(name, default):
-        m = re.search(r"^" + name + r"\s*=\s*\((.*?)\)", text, re.S | re.M)
-        got = tuple(re.findall(r'"([^"]*)"', m.group(1))) if m else ()
-        return got or default
-    return tup("ENGINE_SOURCES", SOURCES), tup("ENGINE_SOURCES_NOT", NOT)
+def definitions(root: pathlib.Path):
+    """The checkout's top-level constants the id reads and every function its
+    script defines, compiled - defined only, nothing called."""
+    text = (root / "scripts" / "build_site_app.py").read_text(encoding="utf-8")
+    tree = ast.parse(text)
+    keep = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            node.decorator_list = []
+            keep.append(node)
+        elif isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in NAMES for t in node.targets):
+            keep.append(node)
+    return compile(ast.Module(body=keep, type_ignores=[]), "build_site_app.py", "exec")
 
 
-def engine_id(root: pathlib.Path, fold_case: bool) -> str:
-    sources, skip = lists(root)
-    rels = sorted((p.relative_to(root).as_posix() for d in sources for p in (root / d).rglob("*") if p.is_file()),
-                  key=lambda r: [x.lower() if fold_case else x for x in r.split("/")])
-    rels.append("Cargo.lock")
-    h = hashlib.sha256()
-    for rel in rels:
-        if rel.startswith(skip):
-            continue
-        h.update(rel.encode("utf-8") + bytes(1))
-        h.update((root / rel).read_bytes().replace(b"\r\n", b"\n") + bytes(1))
-    return h.hexdigest()[:12]
+def engine_id(root: pathlib.Path, code, fold_case: bool) -> str:
+    def ordered(items, *args, **kw):
+        items = list(items)
+        if items and all(isinstance(p, pathlib.PurePath) for p in items) and not args and not kw:
+            # Python sorts paths by their parts, folded on Windows only.
+            return builtins.sorted(items, key=lambda p: [x.lower() if fold_case else x for x in p.as_posix().split("/")])
+        return builtins.sorted(items, *args, **kw)
+    ns = {"__name__": "wfsim_build_site_app", "ROOT": root, "Path": pathlib.Path, "hashlib": hashlib,
+          "json": json, "os": os, "re": re, "sys": sys, "sorted": ordered}
+    exec(code, ns)
+    return ns["engine_id"]()
 
 
 if __name__ == "__main__":
-    root = pathlib.Path(sys.argv[1])
-    for i in dict.fromkeys(engine_id(root, f) for f in (False, True)):
+    root = pathlib.Path(sys.argv[1]).resolve()
+    code = definitions(root)
+    for i in dict.fromkeys(engine_id(root, code, f) for f in (False, True)):
         print(i)
