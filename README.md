@@ -34,7 +34,7 @@
 
 **Linux x64**：下载 `simfleet-<版本>-linux-x64.tar.gz`，`tar xzf` 后运行 `./simfleet/simfleet`（需要 glibc 2.35 及以上，如 Ubuntu 22.04+、Debian 12+）。Linux 上没有键鼠空闲检测，始终按「离开电脑时」的核心数计算；`priority = "idle"` 用的是 `SCHED_IDLE` 加 nice 19，只吃没人要的 CPU。放进 systemd 或 tmux 都行，收到 SIGTERM/SIGHUP 会先交还任务再退出；用 systemd 的 `Restart=` 管重启时可以加 `--no-watch`。
 
-**macOS（Apple 芯片，M1 及以后）**：下载 `simfleet-<版本>-macos-arm64.tar.gz`，`tar xzf` 后在终端运行 `./simfleet/simfleet`（macOS 11 及以上）。simfleet 没有 Apple 开发者签名，第一次运行前在终端执行一次 `xattr -dr com.apple.quarantine simfleet`（或者先运行一次被拦下，再到「系统设置 → 隐私与安全性」里点「仍要打开」）。和 Windows 一样有键鼠空闲检测（离开电脑多久按 `idle_after_secs` 算）和电池检测（`pause_on_battery`）；计算时会阻止 Mac 因无人操作而自动睡眠（屏幕照常关闭），暂停或不计算时放开。原生引擎是 `engines/lib<引擎号>.dylib`，同样由 Action 编译发布、逐位比对后才用；WFSim 官方原生库没有 macOS 版。
+**macOS（Apple 芯片，M1 及以后）**：下载 `simfleet-<版本>-macos-arm64.tar.gz`，`tar xzf` 后在终端运行 `./simfleet/simfleet`（macOS 11 及以上）。simfleet 没有 Apple 开发者签名，第一次运行前在终端执行一次 `xattr -dr com.apple.quarantine simfleet`（或者先运行一次被拦下，再到「系统设置 → 隐私与安全性」里点「仍要打开」）。和 Windows 一样有键鼠空闲检测（离开电脑多久按 `idle_after_secs` 算）和电池检测（`pause_on_battery`）；计算时会阻止 Mac 因无人操作而自动睡眠（屏幕照常关闭），暂停或不计算时放开。原生引擎是 `engines/lib<引擎号>.dylib`，同样由 Action 编译发布、逐位比对后才用；WFSim 官方原生库从 2026-10-19 之后发布的第一个引擎起也有 macOS 版（`aarch64-macos`），自己的版本还没发布时一样先用它。
 
 1. 把 `simfleet.exe` 放进一个文件夹（这个文件夹就是安装目录，配置和缓存都在里面；删掉文件夹就是卸载）。
 2. 双击运行。第一次会问三件事：是否同意计算、离开电脑时用几个核心、要不要登录。

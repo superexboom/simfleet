@@ -298,6 +298,12 @@ fn official_target() -> Option<&'static str> {
         Some("x86_64-windows")
     } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
         Some("x86_64-linux")
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        // From the first engine WFSim ships after 2026-10-19; an engine
+        // without it is computed on our build or the wasm.
+        Some("aarch64-macos")
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        Some("x86_64-macos")
     } else {
         None
     }
