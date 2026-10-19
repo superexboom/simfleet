@@ -160,6 +160,7 @@ Intel 12 代以后的大小核 CPU 上，Windows 会把空闲优先级的后台�
 
 simfleet 因此有两个引擎：
 - **wasm（默认，永远可用）**：运行网站当前发布的 `/pkg/wfsim_wasm_bg.<摘要>.wasm`，按文件名里的 sha256 校验，编译一次后缓存；网站发新版时自动下载新引擎，客户端不用更新。
+- **数据包**（0.7.1 起）：WFSim 把引擎拆成了代码和游戏数据两部分（客户端约定「The official data pack」），`release.json` 的 `data` 指明这一版的数据包 `/pkg/pack.data.<摘要>.json`（约 4.6 MB）。simfleet 和 wasm 一起下载、按文件名里的 sha256 校验、存进 `cache\`，每个 wasm 实例第一次计算前装进去（`install_data_bytes`），WFSim 官方原生库（接口版本 2）加载时装一次。**2026-10-25 01:00 UTC 起网站的引擎不再自带数据，不装数据包就算不了任何东西**，所以 0.7.0 及更早的版本到那时就领不到能做的活了，要更新。simfleet 自己编的原生版是 WFSim 那次提交的普通构建，数据编在里面，不需要数据包。
 - **原生（自动，更快）**：`engines/<引擎号>.dll`，由本仓库的 Action 从 GitHub 上与网站引擎号完全相同的那次 WFSim 提交编译并发布，simfleet 自动下载（见下文「原生引擎」）。每次启动都会在一条金丝雀榜单上和 wasm **逐步逐位比对**，不一致就自动停用。紫卡增益也能用原生（见下文「紫卡增益走原生」），同样要先过一次和网站 wasm 的比对。
 
 本机（16 线程）实测，同一条榜单：
@@ -218,12 +219,13 @@ simfleet 只用网站**实际发布**的引擎号：启动时在 `engines\` 里�
 
 AVX-512 没有额外收益：引擎是一场场按事件推进的战斗模拟，分支多、几乎没有能成批向量化的数值循环，提速来自更新的标量指令，AVX2 那一代就已经有了。同理也不适合 GPU：GPU 的超越函数与 CPU 不逐位一致，而 WFSim 要求两台不同机器的结果逐位相同才算数。想强制用某一版，设环境变量 `SIMFLEET_CPU=baseline` 或 `SIMFLEET_CPU=v3`。
 
-自己编译（要 git、Rust，`-Strip` 还要 Python）：
+自己编译（要 git、Rust、Python：引擎号由 `tools/engine_id.py` 按那次提交自己的 `build_site_app.py` 里的算法计算，WFSim 改了算法也跟着变）：
 
 ```
 powershell -ExecutionPolicy Bypass -File tools\build-native-engine.ps1 [-Strip] [-Cpu x86-64-v3]
 pwsh tools/build-native-engine.ps1 [-Strip] [-Cpu x86-64-v3]      # Linux
 simfleet check-native [--rows tests/gas/rows.json] [--lanes N] [--weapons 1-4]   # 和网站的 wasm 逐位比对（默认 4 把武器、32 条）
+simfleet check-native --engine <引擎号> --wasm <参照 wasm> --data <数据包> --boards <WFSim>/site/board   # 离线：参照 wasm 先装数据包再比对
 powershell -ExecutionPolicy Bypass -File tools\publish-native-engine.ps1 [-Lanes N] [-Jobs N] [-NoUpload]   # 维护者：编译、检查、发布
 ```
 
