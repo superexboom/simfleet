@@ -14,6 +14,12 @@ assets stay immutable; bump the revision when replacing native behavior for
 an existing engine ID. Every published library includes its `.sha256` and
 `.build.json` provenance. `-NoPatch` keeps the unrevisioned comparison filename.
 
+Linux shared libraries use mimalloc's `local_dynamic_tls` feature because they
+load through `dlopen`; initial-exec TLS can exhaust glibc's static reserve as
+the library's thread-local search state grows. The executable allocator and
+Windows/macOS builds keep their existing settings. Native publication checks
+the real client loading the library, not just compilation.
+
 - `001-prepared-board.patch` exposes an immutable prepared fight to the local
   wrapper. It changes neither the battle loop nor the metered sources.
 - `002-single-worker.patch` runs one optimizer worker inline, preserving order,
