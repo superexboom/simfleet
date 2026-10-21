@@ -28,6 +28,8 @@ const CRASH_FILE: &str = "SIMFLEET_CRASH_FILE";
 /// How many times it was started again, and why the last one ended.
 const RESTARTS: &str = "SIMFLEET_RESTARTS";
 const LAST_EXIT: &str = "SIMFLEET_LAST_EXIT";
+/// A completed maintenance drain, distinct from a crash or the user's exit.
+pub const MAINTENANCE_EXIT: i32 = 75;
 /// A client that dies this soon after it started, `GIVE_UP` times in a row,
 /// is left dead: it would only die again.
 const QUICK: Duration = Duration::from_secs(60);
@@ -37,12 +39,32 @@ const WAITS: [u64; 4] = [5, 15, 30, 60];
 
 /// The client's process id while it runs, 0 between (signals, console events).
 static CHILD: AtomicU32 = AtomicU32::new(0);
-/// Ctrl+C (or a close) while no client runs: no start again.
+/// A user stop also cancels a maintenance restart racing with shutdown.
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// This process is a watched client.
 pub fn is_client() -> bool {
     std::env::var_os(CLIENT).is_some()
+}
+
+/// Called after tasks, journals, configuration and the UI have shut down.
+/// Without a watch, replace this process too; crash supervision remains off.
+pub fn replace_process() -> anyhow::Result<()> {
+    if is_client() {
+        std::process::exit(MAINTENANCE_EXIT);
+    }
+    let mut cmd = Command::new(std::env::current_exe()?);
+    cmd.args(std::env::args_os().skip(1));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        Err(cmd.exec().into())
+    }
+    #[cfg(not(unix))]
+    {
+        cmd.spawn()?;
+        std::process::exit(0);
+    }
 }
 
 /// The last start's reason, for the client's log: (times started again, why).
@@ -87,6 +109,19 @@ pub fn watch(paths: &Paths) -> Option<i32> {
             Ok(s) => s,
             Err(_) => return Some(1),
         };
+        if status.code() == Some(MAINTENANCE_EXIT) {
+            console::restore(&console);
+            if CANCEL.load(Ordering::SeqCst) {
+                return Some(0);
+            }
+            // The old address space is gone before the new one is started.
+            // Maintenance never consumes the crash retry allowance.
+            quick = 0;
+            restarts = 0;
+            last.clear();
+            eprintln!("{C_INFO}[内存] 旧进程已退出，内存已交还系统，继续计算。{C_END}");
+            continue;
+        }
         let Some(why) = died(&status) else { return Some(status.code().unwrap_or(1)) };
         console::restore(&console);
         let what = std::fs::read_to_string(crash_file).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
@@ -208,9 +243,7 @@ fn on_signals() {
     use windows_sys::Win32::System::Console::{SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_C_EVENT};
     unsafe extern "system" fn handler(kind: u32) -> i32 {
         if kind == CTRL_C_EVENT || kind == CTRL_BREAK_EVENT {
-            if CHILD.load(Ordering::SeqCst) == 0 {
-                CANCEL.store(true, Ordering::SeqCst);
-            }
+            CANCEL.store(true, Ordering::SeqCst);
             return 1;
         }
         // A close, a sign-out, a shutdown: Windows ends this process when the
@@ -242,9 +275,7 @@ fn on_signals() {
                 libc::kill(child as libc::pid_t, sig);
             }
         }
-        if sig != libc::SIGINT || child == 0 {
-            CANCEL.store(true, Ordering::SeqCst);
-        }
+        CANCEL.store(true, Ordering::SeqCst);
     }
     // SAFETY: the handler only uses atomics and kill.
     unsafe {

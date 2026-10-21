@@ -41,11 +41,20 @@ pub struct Config {
     /// (the scheduler decides). Ignored on any other CPU, AMD included (affinity.rs).
     #[serde(default = "default_core_type")]
     pub core_type: String,
+    /// Compute placement: auto, system, numa, cache. Does not change budget.
+    #[serde(default = "default_core_type")]
+    pub placement: String,
+    /// Empty means every NUMA node. Useful for independent process partitions.
+    #[serde(default)]
+    pub numa_nodes: Vec<u32>,
+    /// Rotate the selected physical-first CPU list for disjoint process budgets.
+    #[serde(default)]
+    pub cpu_offset: usize,
     /// Use a native engine build from `engines/` for board orders when one
-    /// matches the served engine (faster); riven gains always use the wasm.
+    /// matches the served engine; a validated optimizer can run riven gains too.
     pub native_engine: bool,
     /// Where published native engines are fetched from when `engines/` holds
-    /// none (`<url>/engine-<id>/<id>.dll`); "" never downloads one.
+    /// none (`<url>/engine-<id>/<id>-sfe<revision>.dll`); "" never downloads one.
     #[serde(default = "default_native_url")]
     pub native_engine_url: String,
     /// Computer ids run at once (each one holds a task and one asked ahead),
@@ -69,6 +78,10 @@ pub struct Config {
     /// runs it alone.
     #[serde(default = "yes")]
     pub watch: bool,
+    /// Soft process-memory ceiling in MiB; finish held work, save results,
+    /// then start a fresh process. Zero disables this maintenance.
+    #[serde(default = "default_memory_limit_mb")]
+    pub memory_limit_mb: u64,
     /// The board's protocol: 8 (one sync for everything, fleet.rs) or 7 (packs
     /// asked, answered and renewed apart). The server may say 7 for a session.
     #[serde(default = "default_protocol")]
@@ -104,6 +117,10 @@ fn default_core_type() -> String {
 fn yes() -> bool {
     true
 }
+
+fn default_memory_limit_mb() -> u64 {
+    2048
+}
 fn default_protocol() -> u32 {
     8
 }
@@ -128,6 +145,9 @@ impl Config {
             pause_on_battery: true,
             priority: "idle".into(),
             core_type: default_core_type(),
+            placement: "auto".into(),
+            numa_nodes: Vec::new(),
+            cpu_offset: 0,
             native_engine: true,
             native_engine_url: NATIVE_URL.into(),
             slots: 0,
@@ -135,6 +155,7 @@ impl Config {
             native_riven: true,
             official_engine: true,
             watch: true,
+            memory_limit_mb: default_memory_limit_mb(),
             protocol: default_protocol(),
             extra_verifiers: Vec::new(),
             account: Account::default(),

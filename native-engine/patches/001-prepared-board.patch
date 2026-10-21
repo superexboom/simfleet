@@ -1,0 +1,39 @@
+diff --git a/webapi/src/lib.rs b/webapi/src/lib.rs
+index 349a2d7849..16dad998c5 100644
+--- a/webapi/src/lib.rs
++++ b/webapi/src/lib.rs
+@@ -34,6 +34,7 @@ mod request;
+ mod rivens;
+ mod shapley;
+ mod simulate;
++pub mod simfleet;
+ mod tenno;
+ mod warframe;
+ 
+diff --git a/webapi/src/simfleet.rs b/webapi/src/simfleet.rs
+new file mode 100644
+--- /dev/null
++++ b/webapi/src/simfleet.rs
+@@ -0,0 +1,22 @@
++//! Local native host extension. Simulation, random streams and gas remain
++//! the engine's; preparation is retained for one row and released with it.
++use serde_json::Value;
++use wfsim_engine::fight::{shard, Shard};
++
++pub struct PreparedBoard {
++    ready: crate::simulate::Ready,
++    keep: bool,
++}
++
++impl PreparedBoard {
++    pub fn new(request: &Value) -> Result<Self, Value> {
++        Ok(Self {
++            ready: crate::simulate::ready(request, false)?,
++            keep: request.get("run_series").and_then(Value::as_bool).unwrap_or(false),
++        })
++    }
++
++    pub fn run(&self, index: u32) -> Shard {
++        shard(&self.ready.params, index, 1, self.ready.fight.seed, self.keep, &mut |_| {})
++    }
++}

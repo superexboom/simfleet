@@ -1,0 +1,54 @@
+diff --git a/webapi/src/board_rows.rs b/webapi/src/board_rows.rs
+index 46eee1c13b..acd8b72632 100644
+--- a/webapi/src/board_rows.rs
++++ b/webapi/src/board_rows.rs
+@@ -281,15 +281,7 @@ pub fn board_runs_json(v: &Value) -> Value {
+     let req = v.get("request").cloned().unwrap_or(Value::Null);
+     let from = v.get("from").and_then(Value::as_u64).unwrap_or(0) as u32;
+     let count = v.get("count").and_then(Value::as_u64).unwrap_or(0) as u32;
+-    let mut shards = Vec::with_capacity(count as usize);
+-    for k in from..from.saturating_add(count) {
+-        let piece = simulate_shard_json(&req, k, 1, &mut |_, _| {});
+-        if serde_json::from_value::<wfsim_engine::fight::Shard>(piece.clone()).is_err() {
+-            return piece;
+-        }
+-        shards.push(piece);
+-    }
+-    json!({ "ok": true, "shards": shards })
++    crate::simulate::board_shards_prepared(&req, from, count)
+ }
+ 
+ /// `/api/board/fold` — `{request, from, count, acc?}` → `{acc}`. The page
+diff --git a/webapi/src/simulate.rs b/webapi/src/simulate.rs
+index 1868bae4c1..698d2621fb 100644
+--- a/webapi/src/simulate.rs
++++ b/webapi/src/simulate.rs
+@@ -145,6 +145,28 @@ pub fn simulate_shard_json(
+     simulate_from(v, Work::Shard(from, count), on_run)
+ }
+ 
++/// Prepare a board batch once while retaining one independent shard per run.
++/// Report-only Forma accounting does not affect the fight or its gas meter.
++pub(crate) fn board_shards_prepared(v: &Value, from: u32, count: u32) -> Value {
++    if count == 0 {
++        return json!({ "ok": true, "shards": [] });
++    }
++    let prepared = match ready(v, false) {
++        Ok(r) => r,
++        Err(e) => return e,
++    };
++    let keep = get_bool(v, "run_series", false);
++    let mut shards = Vec::with_capacity(count as usize);
++    for k in from..from.saturating_add(count) {
++        let s = wfsim_engine::fight::shard(&prepared.params, k, 1, prepared.fight.seed, keep, &mut |_| {});
++        match serde_json::to_value(&s) {
++            Ok(piece) => shards.push(piece),
++            Err(e) => return err_json(format!("shard: {e}")),
++        }
++    }
++    json!({ "ok": true, "shards": shards })
++}
++
+ /// …AND THE MERGE, which produces the ordinary simulate response.
+ ///
+ /// The page fans the shards out and collects them; every field of the answer is

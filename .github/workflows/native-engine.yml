@@ -5,13 +5,15 @@
 # WFSim's main (tools/engine_id.py — the id the site serves is that of the
 # source it was built from, its files in the order Linux sorts them: WFSim's
 # site is built on its CI's Linux runner) and looks at what release
-# `engine-<id>` holds. For each platform with a file missing, a job at that
+# `engine-<id>` holds for native-engine/revision. Each revision has distinct
+# filenames, so local optimizations can ship without replacing old assets.
+# For each platform with a file missing, a job at that
 # commit, with WFSim's own
 # pinned toolchain:
 #
 #   1. builds the wasm the way WFSim builds it (the reference),
 #   2. blanks Digital Extremes' card text (tools/strip_card_text.py, NOTICE.md)
-#      and builds, WFSim's code as committed (docs/CLIENTS.md),
+#      and builds with the local host patches recorded beside the DLL,
 #      native-engine/ twice: for any x86-64, and for x86-64-v3 (AVX2; about
 #      10% faster, the same bits) — Windows <id>.dll / <id>-v3.dll, Linux
 #      lib<id>.so / lib<id>-v3.so — and once for Apple silicon, macOS
@@ -54,6 +56,7 @@ jobs:
       linux: ${{ steps.c.outputs.linux }}
       macos: ${{ steps.c.outputs.macos }}
       tried: ${{ steps.c.outputs.tried }}
+      revision: ${{ steps.c.outputs.revision }}
     steps:
       - uses: actions/checkout@v5
       - id: c
@@ -64,13 +67,17 @@ jobs:
           git clone -q --depth 1 https://github.com/magenie33/wfsim.git wfsim
           commit=$(git -C wfsim rev-parse HEAD)
           engine=$(python3 tools/engine_id.py wfsim | head -1)
+          revision=$(tr -d '\r\n' < native-engine/revision)
+          [[ "$revision" =~ ^[0-9]+$ ]]
+          stem="$engine-sfe$revision"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
           echo "WFSim main $commit carries engine $engine"
           assets=$(gh release view "engine-$engine" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null || true)
           missing() { for f in "$@"; do grep -qx "$f" <<< "$assets" || return 0; done; return 1; }
           win=false; lin=false; mac=false
-          missing "$engine.dll" "$engine-v3.dll" && win=true
-          missing "lib$engine.so" "lib$engine-v3.so" && lin=true
-          missing "lib$engine.dylib" && mac=true
+          missing "$stem.dll" "$stem.dll.sha256" "$stem.dll.build.json" "$stem-v3.dll" "$stem-v3.dll.sha256" "$stem-v3.dll.build.json" && win=true
+          missing "lib$stem.so" "lib$stem.so.sha256" "lib$stem.so.build.json" "lib$stem-v3.so" "lib$stem-v3.so.sha256" "lib$stem-v3.so.build.json" && lin=true
+          missing "lib$stem.dylib" "lib$stem.dylib.sha256" "lib$stem.dylib.build.json" && mac=true
           echo "windows needed: $win, linux needed: $lin, macos needed: $mac"
           echo "windows=$win" >> "$GITHUB_OUTPUT"
           echo "linux=$lin" >> "$GITHUB_OUTPUT"
@@ -136,6 +143,7 @@ jobs:
       COMMIT: ${{ needs.check.outputs.commit }}
       GO: ${{ needs.check.outputs[matrix.os] }}
       CPUS: ${{ matrix.cpus }}
+      REVISION: ${{ needs.check.outputs.revision }}
     steps:
       - uses: actions/checkout@v5
         if: env.GO == 'true'
@@ -188,20 +196,22 @@ jobs:
         run: |
           for cpu in $CPUS; do
             echo "== $cpu"
-            SIMFLEET_CPU=$cpu ${{ matrix.exe }} check-native --engine "$ENGINE" --wasm reference/wfsim_wasm_bg.wasm --boards .wfsim-src/site/board --weapons 1
+            SIMFLEET_CPU=$cpu ${{ matrix.exe }} check-native --engine "$ENGINE" --wasm reference/wfsim_wasm_bg.wasm --boards .wfsim-src/site/board --weapons 1 | tee "check-$cpu.log"
+            grep -Eq '^CHECK-NATIVE rows=[1-9][0-9]* skipped=0 riven=same' "check-$cpu.log"
           done
       - name: The files
         if: env.GO == 'true'
         shell: bash
         run: |
           mkdir -p out
+          cp check-*.log out/
           for cpu in $CPUS; do
             v=""; [ "$cpu" = v3 ] && v=-v3
-            f="${{ matrix.lib }}$ENGINE$v.${{ matrix.ext }}"
+            f="${{ matrix.lib }}$ENGINE-sfe$REVISION$v.${{ matrix.ext }}"
             # macOS has shasum, not sha256sum.
             sum() { if command -v sha256sum > /dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi; }
-            ( cd target/release/engines && sum "$f" | awk -v f="$f" '{print $1"  "f}' > "$f.sha256" && cp "$f" "$f.sha256" ../../../out/ )
-            cat "target/release/engines/$ENGINE$v.patches" >> out/patches 2>/dev/null || true
+            ( cd target/release/engines && sum "$f" | awk -v f="$f" '{print $1"  "f}' > "$f.sha256" && cp "$f" "$f.sha256" "$f.build.json" ../../../out/ )
+            tr -d '\r' < "target/release/engines/$ENGINE-sfe$REVISION$v.patches" >> out/patches
           done
       - uses: actions/upload-artifact@v4
         if: env.GO == 'true'
@@ -226,6 +236,7 @@ jobs:
     env:
       ENGINE: ${{ needs.check.outputs.engine }}
       COMMIT: ${{ needs.check.outputs.commit }}
+      REVISION: ${{ needs.check.outputs.revision }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/download-artifact@v4
@@ -240,15 +251,17 @@ jobs:
           have=$(gh release view "engine-$ENGINE" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null || true)
           up=()
           for f in "${files[@]}"; do
-            grep -qx "$(basename "$f")" <<< "$have" || up+=("$f" "$f.sha256")
+            for asset in "$f" "$f.sha256" "$f.build.json"; do
+              grep -qx "$(basename "$asset")" <<< "$have" || up+=("$asset")
+            done
           done
           if [ ${#up[@]} -eq 0 ]; then echo "published meanwhile"; exit 0; fi
           patches=$(cat in/engine-*/patches 2>/dev/null | grep . | sort -u | sed 's/.*/`&`/' | paste -sd, - || true)
           run="[this run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
           tree="https://github.com/$GITHUB_REPOSITORY/tree/$GITHUB_SHA"
           sums=""
-          for ((i = 0; i < ${#up[@]}; i += 2)); do
-            sums+="- \`$(basename "${up[i]}")\`: \`$(cut -d' ' -f1 "${up[i+1]}")\`"$'\n'
+          for f in "${files[@]}"; do
+            sums+="- \`$(basename "$f")\`: \`$(cut -d' ' -f1 "$f.sha256")\`"$'\n'
           done
           via="native-engine/ at simfleet [\`$GITHUB_SHA\`]($tree) (mimalloc as the allocator, as WFSim's own library has it)"
           if [ -n "$patches" ]; then
@@ -256,7 +269,7 @@ jobs:
           fi
           if [ -n "$have" ]; then
             gh release view "engine-$ENGINE" -R "$GITHUB_REPOSITORY" --json body -q .body > notes.md
-            printf '\n**Added later**, built by %s from %s, card text blanked and checked the same way:\n\n%s' "$run" "$via" "$sums" >> notes.md
+            printf '\n**Native revision sfe%s**, built by %s from %s, card text blanked and checked against the reference WASM. Build manifests record each patch hash. simfleet 0.8.1 and later prefer these files:\n\n%s' "$REVISION" "$run" "$via" "$sums" >> notes.md
             gh release upload "engine-$ENGINE" "${up[@]}" -R "$GITHUB_REPOSITORY"
             gh release edit "engine-$ENGINE" -R "$GITHUB_REPOSITORY" --notes-file notes.md
             exit 0
@@ -264,7 +277,7 @@ jobs:
           {
             echo "Native build of WFSim engine **$ENGINE** for simfleet. simfleet downloads it on its own when wfsim.app serves this engine; there is nothing to install."
             echo
-            echo "- **Builds.** Windows \`$ENGINE.dll\` and Linux \`lib$ENGINE.so\` run on any x86-64, the \`-v3\` ones on x86-64-v3 CPUs (AVX2, FMA, BMI2; about 10% faster on board rows); macOS \`lib$ENGINE.dylib\` on Apple silicon. simfleet picks the one the CPU runs; all give the same bits. A platform missing below did not match the wasm, and computes with it."
+            echo "- **Builds.** Native revision \`sfe$REVISION\`: Windows \`$ENGINE-sfe$REVISION.dll\` and Linux \`lib$ENGINE-sfe$REVISION.so\` run on any x86-64, the \`-v3\` ones on x86-64-v3 CPUs (AVX2, FMA, BMI2); macOS \`lib$ENGINE-sfe$REVISION.dylib\` on Apple silicon. simfleet 0.8.1 and later prefer this revision. Each build has a SHA-256 file and a source/patch manifest."
             echo "- **Source.** WFSim commit [\`$COMMIT\`](https://github.com/magenie33/wfsim/tree/$COMMIT) (AGPL-3.0-or-later, by magenie33 and WFSim contributors), through $via. Built by $run."
             echo "- **No card text.** Digital Extremes' card text was blanked from WFSim's \`data/\` before the build ([tools/strip_card_text.py](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/tools/strip_card_text.py)), since WFSim grants nothing for it ([LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)). The engine only displays that text; no score depends on it."
             echo "- **Checked.** Each matched the wasm built from the same commit bit for bit on 8 rows of WFSim's committed board (one weapon, every ruler and mode) (\`simfleet check-native\`), and simfleet checks the one it uses against wfsim.app's own wasm on a canary row before every use."

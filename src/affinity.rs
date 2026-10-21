@@ -76,13 +76,16 @@ impl Prefer {
 }
 
 /// One logical processor.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Cpu {
     pub id: u32,
     pub group: u16,
-    pub index: u8,
-    pub core: u8,
+    pub index: u32,
+    pub core: u32,
     pub class: u8,
+    pub numa: u32,
+    pub llc: u32,
+    pub cache_bytes: u64,
 }
 
 pub struct Topology {
@@ -122,7 +125,7 @@ impl Topology {
     }
     /// Physical cores of a kind.
     pub fn cores(&self, p: bool) -> usize {
-        let mut seen: Vec<(u16, u8)> = self.cpus.iter().filter(|c| self.is_p(c) == p).map(|c| (c.group, c.core)).collect();
+        let mut seen: Vec<(u16, u32)> = self.cpus.iter().filter(|c| self.is_p(c) == p).map(|c| (c.group, c.core)).collect();
         seen.sort_unstable();
         seen.dedup();
         seen.len()
@@ -182,7 +185,7 @@ struct Plan {
 
 static PLAN: OnceLock<Plan> = OnceLock::new();
 
-const LANES: usize = 256;
+const LANES: usize = 4096;
 /// Each lane's processor at its last job, plus one (0: not yet)…
 static LAST: [AtomicU32; LANES] = [const { AtomicU32::new(0) }; LANES];
 /// …and, over all its jobs, the CPU time it was given and their wall time (µs).
@@ -236,6 +239,7 @@ fn init_intel(prefer: Prefer) -> Option<String> {
 
 /// At a lane thread's start: its tier's CPU set (on macOS, its QoS class).
 pub fn apply_lane(lane: usize) {
+    if crate::placement::apply_lane(lane) { return; }
     #[cfg(target_os = "macos")]
     apple::apply_lane();
     let Some(p) = PLAN.get() else { return };
@@ -252,6 +256,7 @@ pub fn apply_lane(lane: usize) {
 /// process, are kept to the processors the first `lanes` lanes are given. (On
 /// Linux a new thread takes its creator's affinity: nothing to do.)
 pub fn process_default(lanes: usize) {
+    if crate::placement::active() { crate::placement::process_default(lanes);return; }
     static SET_FOR: AtomicU64 = AtomicU64::new(0);
     let Some(p) = PLAN.get() else { return };
     if lanes == 0 || SET_FOR.swap(lanes as u64, Ordering::Relaxed) == lanes as u64 {
@@ -452,10 +457,15 @@ fn cpu_sets() -> Vec<Cpu> {
             // Type 0 is CpuSetInformation.
             if e.Type == 0 {
                 let c = e.Anonymous.CpuSet;
-                out.push(Cpu { id: c.Id, group: c.Group, index: c.LogicalProcessorIndex, core: c.CoreIndex, class: c.EfficiencyClass });
+                let proc = windows_sys::Win32::System::Kernel::PROCESSOR_NUMBER { Group: c.Group, Number: c.LogicalProcessorIndex, Reserved: 0 };
+                let mut node = u16::MAX;
+                windows_sys::Win32::System::Threading::GetNumaProcessorNodeEx(&proc, &mut node);
+                out.push(Cpu { id: c.Id, group: c.Group, index: c.LogicalProcessorIndex as u32, core: c.CoreIndex as u32, class: c.EfficiencyClass,
+                    numa: if node == u16::MAX { c.NumaNodeIndex as u32 } else { node as u32 }, llc: c.LastLevelCacheIndex as u32, cache_bytes: 0 });
             }
             off += e.Size as usize;
         }
+        crate::placement::cache_sizes(&mut out);
         out
     }
 }
@@ -480,12 +490,13 @@ fn cpu_sets() -> Vec<Cpu> {
     let Some(online) = read("/sys/devices/system/cpu/online").map(|t| list(&t)) else { return Vec::new() };
     online
         .into_iter()
-        .filter(|&n| n < 256)
+        .filter(|&n| n < libc::CPU_SETSIZE as u32 && crate::placement::linux_cpu_allowed(n))
         .map(|n| {
             let sib = read(&format!("/sys/devices/system/cpu/cpu{n}/topology/thread_siblings_list"))
                 .and_then(|t| list(&t).into_iter().min())
                 .unwrap_or(n);
-            Cpu { id: n, group: 0, index: n as u8, core: sib.min(255) as u8, class: u8::from(p_cores.contains(&n)) }
+            let (numa, llc, cache_bytes) = crate::placement::linux_locality(n);
+            Cpu { id: n, group: 0, index: n, core: sib, class: u8::from(p_cores.contains(&n)), numa, llc, cache_bytes }
         })
         .collect()
 }
@@ -496,7 +507,7 @@ fn cpu_sets() -> Vec<Cpu> {
 }
 
 #[cfg(windows)]
-fn set_thread_cpus(ids: &[u32]) {
+pub(crate) fn set_thread_cpus(ids: &[u32]) {
     use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadSelectedCpuSets};
     if !ids.is_empty() {
         // SAFETY: ids from GetSystemCpuSetInformation; the pseudo-handle is this thread.
@@ -507,7 +518,7 @@ fn set_thread_cpus(ids: &[u32]) {
 }
 
 #[cfg(target_os = "linux")]
-fn set_thread_cpus(ids: &[u32]) {
+pub(crate) fn set_thread_cpus(ids: &[u32]) {
     // SAFETY: a zeroed cpu_set_t, filled with the ids, for this thread (0).
     unsafe {
         let mut set: libc::cpu_set_t = std::mem::zeroed();
@@ -521,10 +532,10 @@ fn set_thread_cpus(ids: &[u32]) {
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
-fn set_thread_cpus(_ids: &[u32]) {}
+pub(crate) fn set_thread_cpus(_ids: &[u32]) {}
 
 #[cfg(windows)]
-fn set_process_cpus(ids: &[u32]) {
+pub(crate) fn set_process_cpus(ids: &[u32]) {
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, SetProcessDefaultCpuSets};
     // SAFETY: ids from GetSystemCpuSetInformation; the pseudo-handle is this process.
     unsafe {
@@ -533,7 +544,7 @@ fn set_process_cpus(ids: &[u32]) {
 }
 
 #[cfg(not(windows))]
-fn set_process_cpus(_ids: &[u32]) {}
+pub(crate) fn set_process_cpus(_ids: &[u32]) {}
 
 /// EcoQoS for the whole process: on (`slow`) or off.
 #[cfg(windows)]
@@ -623,7 +634,7 @@ mod tests {
     fn topo(cpus: &[(u8, u8)]) -> Topology {
         Topology {
             vendor: "GenuineIntel".into(),
-            cpus: cpus.iter().enumerate().map(|(i, &(class, core))| Cpu { id: 256 + i as u32, group: 0, index: i as u8, core, class }).collect(),
+            cpus: cpus.iter().enumerate().map(|(i, &(class, core))| Cpu { id: 256 + i as u32, group: 0, index: i as u32, core: core as u32, class, ..Default::default() }).collect(),
         }
     }
 
@@ -689,7 +700,7 @@ mod tests {
         let t = Topology::read();
         let want: Vec<&Cpu> = t.cpus.iter().filter(|c| c.group == 0).rev().take(2).collect();
         let ids: Vec<u32> = want.iter().map(|c| c.id).collect();
-        let allowed: Vec<u32> = want.iter().map(|c| c.index as u32).collect();
+        let allowed: Vec<u32> = want.iter().map(|c| u32::from(c.group)*64+c.index).collect();
         let seen = std::thread::spawn(move || {
             set_thread_cpus(&ids);
             let mut seen = std::collections::BTreeSet::new();
@@ -718,7 +729,7 @@ mod tests {
         let (lane, rest) = (&mine[mine.len() - 2..], &mine[..2]);
         let ids = |c: &[&Cpu]| -> Vec<u32> { c.iter().map(|c| c.id).collect() };
         let (lane_ids, rest_ids) = (ids(lane), ids(rest));
-        let allowed: Vec<u32> = rest.iter().map(|c| c.index as u32).collect();
+        let allowed: Vec<u32> = rest.iter().map(|c| u32::from(c.group)*64+c.index).collect();
         set_process_cpus(&rest_ids);
         let seen = std::thread::spawn(move || {
             set_thread_cpus(&lane_ids);

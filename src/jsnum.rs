@@ -10,86 +10,7 @@
 //! the keys.
 
 use serde_json::{Map, Value};
-use std::fmt::Write;
-
-/// The text with every number re-spelt the way `JSON.stringify` would spell the
-/// f64 it parses to. Strings are copied untouched.
-pub fn normalize(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = String::with_capacity(s.len());
-    let mut i = 0;
-    let mut start = 0; // start of the run copied verbatim
-    while i < b.len() {
-        let c = b[i];
-        if c == b'"' {
-            i += 1;
-            while i < b.len() {
-                match b[i] {
-                    b'\\' => i += 2,
-                    b'"' => {
-                        i += 1;
-                        break;
-                    }
-                    _ => i += 1,
-                }
-            }
-            continue;
-        }
-        if c == b'-' || c.is_ascii_digit() {
-            let j0 = i;
-            let mut j = i + 1;
-            let mut plain = true;
-            while j < b.len() && matches!(b[j], b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-') {
-                if !b[j].is_ascii_digit() {
-                    plain = false;
-                }
-                j += 1;
-            }
-            let tok = &s[j0..j];
-            // A short plain integer is already what JS would print.
-            let digits = tok.trim_start_matches('-').len();
-            if !(plain && digits <= 15 && tok != "-0") {
-                if let Ok(x) = tok.parse::<f64>() {
-                    out.push_str(&s[start..j0]);
-                    fmt_js(x, &mut out);
-                    start = j;
-                }
-            }
-            i = j;
-            continue;
-        }
-        i += 1;
-    }
-    out.push_str(&s[start..]);
-    out
-}
-
-fn fmt_js(x: f64, out: &mut String) {
-    let a = x.abs();
-    if x == 0.0 {
-        out.push('0');
-    } else if x.fract() == 0.0 && a < 9007199254740992.0 {
-        let _ = write!(out, "{x:.0}");
-    } else if x.fract() == 0.0 && a < 1e21 {
-        // JS prints the SHORTEST digits and pads with zeros (2^64 is
-        // "18446744073709552000"); an integer read from it is that integer.
-        let e = format!("{a:e}");
-        let (mant, exp) = e.split_once('e').unwrap_or((&e, "0"));
-        let digits: String = mant.chars().filter(|c| c.is_ascii_digit()).collect();
-        let exp: usize = exp.parse().unwrap_or(0);
-        if x < 0.0 {
-            out.push('-');
-        }
-        out.push_str(&digits);
-        for _ in digits.len()..=exp {
-            out.push('0');
-        }
-    } else if !(1e-6..1e21).contains(&a) {
-        let _ = write!(out, "{x:e}");
-    } else {
-        let _ = write!(out, "{x}");
-    }
-}
+use crate::json_numbers::normalize;
 
 /// An array index as JS defines one: canonical digits below 2^32 − 1.
 fn index_key(k: &str) -> Option<u32> {
@@ -132,7 +53,7 @@ pub fn js_order(v: &mut Value) {
 
 /// Parse text the way a browser would hold it.
 pub fn parse(s: &str) -> anyhow::Result<Value> {
-    let mut v: Value = serde_json::from_str(&normalize(s))?;
+    let mut v: Value = serde_json::from_str(&normalize(s, false))?;
     js_order(&mut v);
     Ok(v)
 }
@@ -142,9 +63,34 @@ mod tests {
     use super::*;
     #[test]
     fn numbers_as_js_prints_them() {
-        assert_eq!(normalize(r#"{"a":-0.0,"b":1.0,"c":0.1,"d":"-0.0","e":12345678901234567890,"f":1e-7,"g":-3}"#),
+        assert_eq!(normalize(r#"{"a":-0.0,"b":1.0,"c":0.1,"d":"-0.0","e":12345678901234567890,"f":1e-7,"g":-3}"#, true),
             r#"{"a":0,"b":1,"c":0.1,"d":"-0.0","e":12345678901234567000,"f":1e-7,"g":-3}"#);
-        assert_eq!(normalize("[1.5e300,2.5E-3]"), "[1.5e300,0.0025]");
+        assert_eq!(normalize("[1.5e300,2.5E-3]", true), "[1.5e300,0.0025]");
+    }
+
+    #[test]
+    fn fractional_fast_path_preserves_rounding_and_integer_accessors() {
+        let cases = ["-0", "-0.0", "1.0", "1e3", "2.5E-3", "1e-7", "5e-324", "-5e-324",
+            "9007199254740991", "9007199254740993", "12345678901234567890", "18446744073709551615",
+            "-9223372036854775809", "1e21", "1.7976931348623157e308", "0.10000000000000001"];
+        let compare = |s: &str| {
+            let fast = parse(s).unwrap();
+            let slow: Value = serde_json::from_str(&normalize(s, true)).unwrap();
+            assert_eq!(fast.to_string(), slow.to_string(), "{s}");
+            assert_eq!(fast.as_u64(), slow.as_u64(), "{s}");
+            assert_eq!(fast.as_i64(), slow.as_i64(), "{s}");
+            assert_eq!(fast.as_f64().map(f64::to_bits), slow.as_f64().map(f64::to_bits), "{s}");
+        };
+        for s in cases { compare(s); }
+        // Deterministic float bit patterns cover subnormals, both signs,
+        // exponent spelling, and large integers that cannot fit in a u64.
+        let mut bits = 17u64;
+        for _ in 0..10000 {
+            bits = bits.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let x = f64::from_bits(bits);
+            if x.is_finite() { compare(&format!("{x:e}")); }
+        }
+        assert_eq!(parse(r#"{"s":"1.0\\\"-0","x":2.5E-3}"#).unwrap()["s"], Value::String("1.0\\\"-0".into()));
     }
     #[test]
     fn index_keys_first() {

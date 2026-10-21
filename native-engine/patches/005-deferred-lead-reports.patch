@@ -1,0 +1,136 @@
+--- a/optimizer/src/quick.rs
++++ b/optimizer/src/quick.rs
+@@ -62,6 +62,11 @@
+     /// batch. A caller that sees any pause discards the answers and runs again.
+     fn pending(&self) -> bool {
+         false
++    }
++    /// Any outstanding work in THIS call, for skipping a discarded report.
++    /// Override when `pending` describes only the most recent score call.
++    fn has_pending_work(&self) -> bool {
++        self.pending()
+     }
+     /// A step's SHORT measurement, on the same stream as [`Self::score`];
+     /// `None` = no screen, every candidate is measured in full.
+@@ -425,15 +430,22 @@
+     let mut answers: Vec<QuickAnswer<S::Build>> = Vec::new();
+     let mut failures = Vec::new();
+     let mut progress = Vec::with_capacity(starts.len());
++    let mut paused = false;
+     for (i, start) in starts.iter().enumerate() {
+         run.stats.starts += 1;
+         run.free.clear();
+         let out = run.descend(start);
++        // A later start can clear pending() by reading a cached score. Keep
++        // every pause: this call's answers are discarded if ANY start waits.
++        paused |= space.has_pending_work();
+         progress.push(StartProgress { settled: out.is_err() || run.now.settled, ..run.now });
+         match out {
+             Err(why) => failures.push(QuickFailure { start: i, why }),
+             Ok((build, score, from, moves, cut)) => {
+                 run.stats.cut |= cut;
++                if paused {
++                    continue;
++                }
+                 let id = space.identity(&build);
+                 match answers.iter_mut().find(|a| space.identity(&a.build) == id) {
+                     Some(a) => {
+@@ -445,6 +457,9 @@
+                 }
+             }
+         }
++    }
++    if paused {
++        return QuickRun { answers: Vec::new(), failures, stats: run.stats, progress, pool: Vec::new() };
+     }
+     rank_ties(&mut answers, |a| a.score, |a, b| space.prefer(&a.build, &b.build));
+     // THE SAME SCORE ON THE PAIRED STREAM IS THE SAME BUILD for the list
+@@ -565,6 +580,60 @@
+         assert_eq!(answers[1].build, [Some(0), Some(9), Some(9)], "a fixed position never moves");
+     }
+ 
++    #[test]
++    fn a_paused_start_does_not_build_a_report_even_if_a_later_start_clears_pending() {
++        struct Deferred {
++            missed: AtomicBool,
++            waiting: AtomicBool,
++            reports: std::sync::atomic::AtomicUsize,
++        }
++        impl QuickSpace for Deferred {
++            type Build = [Option<u8>; 3];
++            fn positions(&self, b: &Self::Build) -> Vec<Position> { Digits.positions(b) }
++            fn empty(&self, b: &Self::Build) -> Vec<Position> { Digits.empty(b) }
++            fn candidates(&self, b: &Self::Build, p: Position) -> Vec<Self::Build> { Digits.candidates(b, p) }
++            fn legal(&self, b: &Self::Build) -> bool { Digits.legal(b) }
++            fn key(&self, b: &Self::Build) -> String { Digits.key(b) }
++            fn score(&self, bs: &[Self::Build]) -> Vec<Score> {
++                let known = bs.iter().all(|b| *b == [Some(0); 3]);
++                self.missed.store(!known, Ordering::Relaxed);
++                if !known { self.waiting.store(true, Ordering::Relaxed); }
++                if known { Digits.score(bs) } else { vec![None; bs.len()] }
++            }
++            fn pending(&self) -> bool { self.missed.load(Ordering::Relaxed) }
++            fn has_pending_work(&self) -> bool { self.waiting.load(Ordering::Relaxed) }
++            fn identity(&self, b: &Self::Build) -> String {
++                self.reports.fetch_add(1, Ordering::Relaxed);
++                self.key(b)
++            }
++        }
++        let space = Deferred { missed: AtomicBool::new(false), waiting: AtomicBool::new(false), reports: Default::default() };
++        let starts = vec![
++            QuickStart { build: [None; 3], fixed: vec![], unnamed: vec![] },
++            QuickStart { build: [Some(0); 3], fixed: Digits.positions(&[Some(0); 3]), unnamed: vec![] },
++        ];
++        let cfg = QuickConfig { max_evals: 0, stop: Vec::new() };
++        let result = quick_descent(&space, &starts, &cfg);
++        assert!(!space.pending(), "the last start cleared the last-call flag");
++        assert_eq!(result.progress.len(), 2, "all starts still get a turn");
++        assert!(!result.progress[0].settled);
++        assert!(result.progress[1].settled);
++        assert_eq!(space.reports.load(Ordering::Relaxed), 0, "no discarded report is materialized");
++        assert!(result.answers.is_empty());
++        assert!(result.pool.is_empty());
++        // A previous call's last-score flag must not discard this call's
++        // completed answer when an illegal first start never asks for a score.
++        let space = Deferred { missed: AtomicBool::new(true), waiting: AtomicBool::new(false), reports: Default::default() };
++        let starts = vec![
++            QuickStart { build: [Some(9); 3], fixed: Digits.positions(&[Some(9); 3]), unnamed: vec![] },
++            QuickStart { build: [Some(0); 3], fixed: Digits.positions(&[Some(0); 3]), unnamed: vec![] },
++        ];
++        let result = quick_descent(&space, &starts, &cfg);
++        assert_eq!(result.failures.len(), 1);
++        assert_eq!(result.answers.len(), 1);
++        assert_eq!(result.answers[0].build, [Some(0); 3]);
++    }
++
+     /// Two slots under a capacity of 10, each digit costing itself: slot 0
+     /// moves no number, slot 1 scores its digit. The fill seats a 9 in slot 0
+     /// by preference, so slot 1's 9 fits only once slot 0 is lowered — and the
+--- a/webapi/src/optimize/quick.rs
++++ b/webapi/src/optimize/quick.rs
+@@ -577,6 +577,13 @@
+         self.lead && FLEET.with(|f| f.borrow().missed)
+     }
+ 
++    fn has_pending_work(&self) -> bool {
++        self.lead && FLEET.with(|f| {
++            let f = f.borrow();
++            !f.pending.is_empty() || !f.pending_rough.is_empty()
++        })
++    }
++
+     /// Below two fights there is no spread to rank by, and at `runs` or more
+     /// the screen is the full measurement — either way, no screen.
+     fn screen(&self, bs: &[QBuild]) -> Option<Vec<Score>> {
+@@ -1112,6 +1119,11 @@
+             .map(|p| json!({ "settled": p.settled, "round": p.round, "at": p.at, "of": p.of }))
+             .collect();
+         FLEET.with(|f| f.borrow_mut().progress = json!(rows));
++        // The caller returns only pending/progress for this step. Building
++        // contender summaries here would be discarded before anyone reads them.
++        if ctx.has_pending_work() {
++            return (Vec::new(), Default::default(), QuickReport::default());
++        }
+     }
+     let mut report = QuickReport {
+         failures: failures.iter().map(|f| json!({ "start": global(f.start), "why": f.why })).collect(),

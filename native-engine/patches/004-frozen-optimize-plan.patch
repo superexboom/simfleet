@@ -1,0 +1,29 @@
+diff --git a/webapi/src/optimize.rs b/webapi/src/optimize.rs
+index b9f78213c6..14e23d61c9 100644
+--- a/webapi/src/optimize.rs
++++ b/webapi/src/optimize.rs
+@@ -260,6 +260,7 @@ impl Replay {
+ type Prepared = std::sync::Mutex<std::collections::HashMap<(u32, usize), Option<std::sync::Arc<crate::simulate::Entrant>>>>;
+ 
+ /// Everything the heavy phase needs, validated up front.
++#[derive(Clone)]
+ pub struct OptimizePlan {
+     weapon_id: String,
+     pool: Vec<ModDef>,
+@@ -365,6 +366,16 @@ pub struct OptimizePlan {
+     replay: std::sync::Arc<Replay>,
+ }
+ 
++impl OptimizePlan {
++    /// Resume one frozen request with a different fleet message. The parsed
++    /// scenario and its preparation cache remain attached to the request.
++    pub fn for_fleet(&self, fleet: Value) -> Self {
++        let mut plan = self.clone();
++        plan.fleet = fleet;
++        plan
++    }
++}
++
+ /// Validate an optimize request. `Err` is the ready-to-send error response.
+ pub fn parse_optimize(v: &Value) -> Result<OptimizePlan, Value> {
+     // A quick request that names no scope searches the quick calc's whole one.

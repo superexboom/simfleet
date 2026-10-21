@@ -1,0 +1,80 @@
+--- a/webapi/src/optimize/quick.rs
++++ b/webapi/src/optimize/quick.rs
+@@ -92,6 +92,17 @@
+ 
+ thread_local! {
+     pub(crate) static FLEET: std::cell::RefCell<Fleet> = std::cell::RefCell::new(Fleet::default());
++    // Replaying a lead revisits the same metadata. Bound both maps, reset at
++    // fresh, and keep them separate from FLEET: score() holds its borrow.
++    static LEAD_MEMO: std::cell::RefCell<LeadMemo> = std::cell::RefCell::new(LeadMemo::default());
++}
++
++const LEAD_MEMO_LIMIT: usize = 4096;
++
++#[derive(Default)]
++struct LeadMemo {
++    keys: HashMap<QBuild, String>,
++    preferences: HashMap<QBuild, wfsim_engine::board::builds::Preference<'static>>,
+ }
+ 
+ pub(crate) struct QuickCtx<'a> {
+@@ -682,9 +693,17 @@
+ 
+     /// ORDER-BLIND: the cards as a set, since a build scores at its best order.
+     fn key(&self, b: &QBuild) -> String {
+-        let mut mods: Vec<&str> = b.mods.iter().flatten().map(|&i| self.pool[i].id).collect();
+-        mods.sort_unstable();
+-        format!("{mods:?} x{} a{} e{} m{} v{}", b.exilus, b.arcane, b.evo, b.mode, b.val)
++        if self.lead {
++            return LEAD_MEMO.with(|m| {
++                let mut m = m.borrow_mut();
++                if let Some(k) = m.keys.get(b) { return k.clone(); }
++                let key = self.key_now(b);
++                if m.keys.len() >= LEAD_MEMO_LIMIT { m.keys.clear(); }
++                m.keys.insert(b.clone(), key.clone());
++                key
++            });
++        }
++        self.key_now(b)
+     }
+ 
+     /// The canonical form: the same cards whatever their slots, the same
+@@ -704,8 +723,28 @@
+ }
+ 
+ impl QuickCtx<'_> {
++    fn key_now(&self, b: &QBuild) -> String {
++        let mut mods: Vec<&str> = b.mods.iter().flatten().map(|&i| self.pool[i].id).collect();
++        mods.sort_unstable();
++        format!("{mods:?} x{} a{} e{} m{} v{}", b.exilus, b.arcane, b.evo, b.mode, b.val)
++    }
++
+     /// What the board's order reads of a build.
+     fn preference(&self, b: &QBuild) -> wfsim_engine::board::builds::Preference<'static> {
++        if self.lead {
++            return LEAD_MEMO.with(|m| {
++                let mut m = m.borrow_mut();
++                if let Some(p) = m.preferences.get(b) { return p.clone(); }
++                let p = self.preference_now(b);
++                if m.preferences.len() >= LEAD_MEMO_LIMIT { m.preferences.clear(); }
++                m.preferences.insert(b.clone(), p.clone());
++                p
++            });
++        }
++        self.preference_now(b)
++    }
++
++    fn preference_now(&self, b: &QBuild) -> wfsim_engine::board::builds::Preference<'static> {
+         let cards: Vec<&ModDef> = b
+             .mods
+             .iter()
+@@ -968,6 +1007,9 @@
+     /// The leader takes the scores the fleet returned; `fresh` begins a new
+     /// search and forgets the last one's.
+     pub(crate) fn lead_take(scores: &[Value], fresh: bool) {
++        if fresh {
++            LEAD_MEMO.with(|m| *m.borrow_mut() = LeadMemo::default());
++        }
+         FLEET.with(|f| {
+             let mut f = f.borrow_mut();
+             if fresh {

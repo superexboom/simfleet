@@ -5,6 +5,9 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn cores() -> usize {
+    #[cfg(windows)]
+    { (unsafe { windows_sys::Win32::System::Threading::GetActiveProcessorCount(0xffff) } as usize).max(1) }
+    #[cfg(not(windows))]
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
 }
 
@@ -313,8 +316,12 @@ pub fn hostname() -> String {
 /// The logical processor this thread runs on now.
 #[cfg(windows)]
 pub fn current_cpu() -> u32 {
-    // SAFETY: no arguments.
-    unsafe { windows_sys::Win32::System::Threading::GetCurrentProcessorNumber() }
+    // A group-relative index alone aliases CPU 0 in every processor group.
+    unsafe {
+        let mut n = windows_sys::Win32::System::Kernel::PROCESSOR_NUMBER::default();
+        windows_sys::Win32::System::Threading::GetCurrentProcessorNumberEx(&mut n);
+        n.Group as u32 * 64 + n.Number as u32
+    }
 }
 #[cfg(target_os = "linux")]
 pub fn current_cpu() -> u32 {
@@ -431,6 +438,33 @@ pub fn cpu_times() -> Option<(u64, u64, u64)> {
     let rest: Vec<&str> = me.rsplit_once(')')?.1.split_whitespace().collect();
     let (utime, stime): (u64, u64) = (rest.get(11)?.parse().ok()?, rest.get(12)?.parse().ok()?);
     Some((f.iter().sum(), f[3] + f[4], utime + stime))
+}
+
+/// Windows private commit includes leaked pages even when the OS pages them
+/// out. Working-set trimming cannot fool the process replacement threshold.
+#[cfg(windows)]
+pub fn process_memory() -> Option<u64> {
+    use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    // SAFETY: correctly sized writable structure for this process.
+    unsafe {
+        let mut p: PROCESS_MEMORY_COUNTERS_EX = std::mem::zeroed();
+        p.cb = std::mem::size_of_val(&p) as u32;
+        (K32GetProcessMemoryInfo(GetCurrentProcess(), (&mut p as *mut PROCESS_MEMORY_COUNTERS_EX).cast(), p.cb) != 0)
+            .then_some(p.PrivateUsage as u64)
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn process_memory() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let kb = |key: &str| status.lines().find(|l| l.starts_with(key))?.split_whitespace().nth(1)?.parse::<u64>().ok();
+    Some(kb("VmRSS:")?.saturating_add(kb("VmSwap:").unwrap_or(0)).saturating_mul(1024))
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn process_memory() -> Option<u64> {
+    memory().map(|(_, _, me)| me)
 }
 
 /// Physical memory in use and in all, and this process's working set, in bytes.

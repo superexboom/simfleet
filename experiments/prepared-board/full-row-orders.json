@@ -1,0 +1,125 @@
+[
+  {
+    "record": {
+      "mods": [
+        "primed_cryo_rounds",
+        "malignant_force",
+        "primary_acuity",
+        "galvanized_aptitude",
+        "galvanized_scope",
+        "vile_acceleration",
+        "vital_sense",
+        "riven"
+      ],
+      "evolutions": [
+        "braton_prime_evo1_incarnon_form",
+        "braton_prime_munitions_grit",
+        "braton_prime_voids_guidance",
+        "braton_prime_critical_parallel"
+      ],
+      "arcanes": [
+        "primary_deadhead"
+      ],
+      "weapon": "braton_prime",
+      "exilus": "vigilante_supplies",
+      "riven_pos": [
+        "corrosive",
+        "critical_damage",
+        "fire_rate"
+      ],
+      "riven_rolls": [
+        1.1,
+        1.1,
+        1.1,
+        0.9
+      ],
+      "riven_neg": "zoom"
+    },
+    "ruler": "demolisher",
+    "mode": "cycle"
+  },
+  {
+    "record": {
+      "mods": [
+        "high_voltage",
+        "malignant_force",
+        "primary_acuity",
+        "primed_bane_of_grineer",
+        "galvanized_scope",
+        "vile_acceleration",
+        "vital_sense",
+        "riven"
+      ],
+      "evolutions": [
+        "torid_evo1_incarnon_form",
+        "torid_final_fusillade",
+        "torid_swift_deliverance",
+        "torid_survivors_edge"
+      ],
+      "arcanes": [
+        "primary_deadhead"
+      ],
+      "weapon": "torid",
+      "exilus": "vigilante_supplies",
+      "riven_pos": [
+        "critical_damage",
+        "damage",
+        "viral"
+      ],
+      "riven_rolls": [
+        1.1,
+        1.1,
+        1.1,
+        0.9
+      ],
+      "riven_neg": "zoom"
+    },
+    "ruler": "demolisher",
+    "mode": "cycle"
+  },
+  {
+    "record": {
+      "weapon": "fulmin_prime",
+      "mods": [
+        "thermite_rounds",
+        "primed_shred",
+        "split_chamber",
+        "serration",
+        "hammer_shot",
+        "rifle_elementalist",
+        "magnetic_capacity",
+        "continuous_misery@2"
+      ],
+      "evolutions": [],
+      "arcanes": [
+        "primary_debilitate"
+      ],
+      "valence": "",
+      "exilus": "vigilante_supplies"
+    },
+    "ruler": "heavy_gunner",
+    "mode": "semi_auto"
+  },
+  {
+    "record": {
+      "weapon": "kuva_hind",
+      "mods": [
+        "hellfire",
+        "thermite_rounds",
+        "serration",
+        "galvanized_scope",
+        "hammer_shot",
+        "rifle_elementalist",
+        "vile_acceleration",
+        "vital_sense"
+      ],
+      "evolutions": [],
+      "arcanes": [
+        "primary_crux"
+      ],
+      "valence": "heat"
+    },
+    "ruler": "standard_multi_target",
+    "mode": "semi_auto"
+  }
+]

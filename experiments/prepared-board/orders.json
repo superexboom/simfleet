@@ -1,0 +1,456 @@
+[
+  {
+    "record": {
+      "mods": [
+        "primed_cryo_rounds",
+        "malignant_force",
+        "riven",
+        "galvanized_chamber",
+        "primed_shred",
+        "galvanized_aptitude",
+        "galvanized_scope",
+        "magnetic_capacity"
+      ],
+      "evolutions": [
+        "braton_prime_evo1_incarnon_form",
+        "braton_prime_munitions_grit",
+        "braton_prime_voids_guidance",
+        "braton_prime_critical_parallel"
+      ],
+      "arcanes": [
+        "primary_deadhead"
+      ],
+      "weapon": "braton_prime",
+      "riven_pos": [
+        "critical_chance",
+        "critical_damage",
+        "heat"
+      ],
+      "riven_rolls": [
+        1.1,
+        1.1,
+        1.1
+      ]
+    },
+    "ruler": "standard_multi_target",
+    "mode": "cycle"
+  },
+  {
+    "record": {
+      "mods": [
+        "primed_cryo_rounds",
+        "malignant_force",
+        "primary_acuity",
+        "galvanized_aptitude",
+        "galvanized_scope",
+        "vile_acceleration",
+        "vital_sense",
+        "riven"
+      ],
+      "evolutions": [
+        "braton_prime_evo1_incarnon_form",
+        "braton_prime_munitions_grit",
+        "braton_prime_voids_guidance",
+        "braton_prime_critical_parallel"
+      ],
+      "arcanes": [
+        "primary_deadhead"
+      ],
+      "weapon": "braton_prime",
+      "exilus": "vigilante_supplies",
+      "riven_pos": [
+        "corrosive",
+        "critical_damage",
+        "fire_rate"
+      ],
+      "riven_rolls": [
+        1.1,
+        1.1,
+        1.1,
+        0.9
+      ],
+      "riven_neg": "zoom"
+    },
+    "ruler": "demolisher",
+    "mode": "cycle"
+  },
+  {
+    "record": {
+      "mods": [
+        "primed_cryo_rounds",
+        "thermite_rounds",
+        "high_voltage",
+        "galvanized_chamber",
+        "galvanized_scope",
+        "hammer_shot",
+        "vile_acceleration",
+        "riven"
+      ],
+      "evolutions": [
+        "torid_evo1_incarnon_form",
+        "torid_final_fusillade",
+        "torid_swift_deliverance",
+        "torid_survivors_edge"
+      ],
+      "arcanes": [
+        "primary_deadhead"
+      ],
+      "weapon": "torid",
+      "exilus": "vigilante_supplies",
+      "riven_pos": [
+        "critical_chance",
+        "critical_damage",
+        "multishot"
+      ],
+      "riven_rolls": [
+        1.1,
+        1.1,
+        1.1,
+        0.9
+      ],
+      "riven_neg": "magazine_capacity"
+    },
+    "ruler": "standard_multi_target",
+    "mode": "cycle"
+  },
+  {
+    "record": {
+      "mods": [
+        "high_voltage",
+        "malignant_force",
+        "primary_acuity",
+        "primed_bane_of_grineer",
+        "galvanized_scope",
+        "vile_acceleration",
+        "vital_sense",
+        "riven"
+      ],
+      "evolutions": [
+        "torid_evo1_incarnon_form",
+        "torid_final_fusillade",
+        "torid_swift_deliverance",
+        "torid_survivors_edge"
+      ],
+      "arcanes": [
+        "primary_deadhead"
+      ],
+      "weapon": "torid",
+      "exilus": "vigilante_supplies",
+      "riven_pos": [
+        "critical_damage",
+        "damage",
+        "viral"
+      ],
+      "riven_rolls": [
+        1.1,
+        1.1,
+        1.1,
+        0.9
+      ],
+      "riven_neg": "zoom"
+    },
+    "ruler": "demolisher",
+    "mode": "cycle"
+  },
+  {
+    "record": {
+      "mods": [
+        "jolt",
+        "seeker",
+        "galvanized_diffusion",
+        "primed_target_cracker",
+        "galvanized_crosshairs",
+        "galvanized_shot",
+        "magnetic_might",
+        "riven"
+      ],
+      "evolutions": [
+        "dual_toxocyst_evo1_incarnon_form",
+        "dual_toxocyst_fevered_frenzy",
+        "dual_toxocyst_marksmans_hand",
+        "dual_toxocyst_commodores_fortune"
+      ],
+      "arcanes": [
+        "secondary_deadhead"
+      ],
+      "weapon": "dual_toxocyst",
+      "exilus": "eject_magazine",
+      "riven_pos": [
+        "fire_rate",
+        "multishot",
+        "viral"
+      ],
+      "riven_rolls": [
+        1.1,
+        1.1,
+        1.1,
+        0.9
+      ],
+      "riven_neg": "zoom"
+    },
+    "ruler": "standard_multi_target",
+    "mode": "cycle"
+  },
+  {
+    "record": {
+      "mods": [
+        "primed_convulsion",
+        "galvanized_diffusion",
+        "primed_expel_grineer",
+        "primed_target_cracker",
+        "galvanized_crosshairs",
+        "galvanized_shot",
+        "anemic_agility",
+        "riven"
+      ],
+      "evolutions": [
+        "dual_toxocyst_evo1_incarnon_form",
+        "dual_toxocyst_fevered_frenzy",
+        "dual_toxocyst_ready_retaliation",
+        "dual_toxocyst_commodores_fortune"
+      ],
+      "arcanes": [
+        "secondary_deadhead"
+      ],
+      "weapon": "dual_toxocyst",
+      "exilus": "eject_magazine",
+      "riven_pos": [
+        "critical_damage",
+        "multishot",
+        "viral"
+      ],
+      "riven_rolls": [
+        1.1,
+        1.1,
+        1.1,
+        0.9
+      ],
+      "riven_neg": "magazine_capacity"
+    },
+    "ruler": "demolisher",
+    "mode": "cycle"
+  },
+  {
+    "record": {
+      "weapon": "acceltra",
+      "mods": [
+        "wildfire",
+        "primary_acuity",
+        "serration",
+        "hunter_track",
+        "rifle_elementalist",
+        "vital_sense",
+        "continuous_misery",
+        "hush"
+      ],
+      "evolutions": [],
+      "arcanes": [
+        "primary_compression"
+      ],
+      "valence": "",
+      "exilus": "vigilante_supplies"
+    },
+    "ruler": "demolisher",
+    "mode": "base"
+  },
+  {
+    "record": {
+      "weapon": "braton_prime",
+      "mods": [
+        "hellfire",
+        "thermite_rounds",
+        "primary_acuity",
+        "galvanized_aptitude",
+        "hammer_shot",
+        "speed_trigger",
+        "vile_acceleration",
+        "magnetic_capacity"
+      ],
+      "evolutions": [
+        "braton_prime_evo1_incarnon_form",
+        "braton_prime_daring_reverie",
+        "braton_prime_voids_guidance",
+        "braton_prime_prelude_of_might"
+      ],
+      "arcanes": [
+        "primary_deadhead"
+      ],
+      "valence": ""
+    },
+    "ruler": "demolisher",
+    "mode": "base"
+  },
+  {
+    "record": {
+      "weapon": "burston_prime",
+      "mods": [
+        "primed_cryo_rounds",
+        "infected_clip",
+        "galvanized_chamber",
+        "serration",
+        "critical_delay",
+        "vile_acceleration",
+        "vital_sense",
+        "gilded_truth"
+      ],
+      "evolutions": [
+        "burston_prime_evo1_incarnon_form",
+        "burston_prime_forceful_finality",
+        "burston_prime_ready_retaliation",
+        "burston_prime_absolute_valor"
+      ],
+      "arcanes": [
+        "primary_deadhead"
+      ],
+      "valence": ""
+    },
+    "ruler": "standard_single_target",
+    "mode": "base"
+  },
+  {
+    "record": {
+      "weapon": "fulmin_prime",
+      "mods": [
+        "thermite_rounds",
+        "primed_shred",
+        "split_chamber",
+        "serration",
+        "hammer_shot",
+        "rifle_elementalist",
+        "magnetic_capacity",
+        "continuous_misery@2"
+      ],
+      "evolutions": [],
+      "arcanes": [
+        "primary_debilitate"
+      ],
+      "valence": "",
+      "exilus": "vigilante_supplies"
+    },
+    "ruler": "heavy_gunner",
+    "mode": "semi_auto"
+  },
+  {
+    "record": {
+      "weapon": "kuva_hind",
+      "mods": [
+        "hellfire",
+        "thermite_rounds",
+        "serration",
+        "galvanized_scope",
+        "hammer_shot",
+        "rifle_elementalist",
+        "vile_acceleration",
+        "vital_sense"
+      ],
+      "evolutions": [],
+      "arcanes": [
+        "primary_crux"
+      ],
+      "valence": "heat"
+    },
+    "ruler": "standard_multi_target",
+    "mode": "semi_auto"
+  },
+  {
+    "record": {
+      "weapon": "larkspur_prime",
+      "mods": [
+        "contamination_casing",
+        "hypothermic_shell",
+        "primed_combustion_rounds",
+        "magma_chamber",
+        "primed_dual_rounds",
+        "primed_rubedo_lined_barrel",
+        "ammo_chain",
+        "magnetized_cycle"
+      ],
+      "evolutions": [],
+      "arcanes": [
+        "primary_overcharge",
+        "secondary_enervate"
+      ],
+      "valence": ""
+    },
+    "ruler": "standard_single_target",
+    "mode": "base"
+  },
+  {
+    "record": {
+      "weapon": "phenmor",
+      "mods": [
+        "primed_cryo_rounds",
+        "malignant_force",
+        "thermite_rounds",
+        "galvanized_chamber",
+        "galvanized_aptitude",
+        "vigilante_armaments",
+        "vile_acceleration",
+        "radiated_reload"
+      ],
+      "evolutions": [
+        "phenmor_evo1_incarnon_form",
+        "phenmor_rapid_wrath",
+        "phenmor_retributions_vessel",
+        "phenmor_elemental_excess",
+        "phenmor_devouring_attrition"
+      ],
+      "arcanes": [
+        "primary_debilitate"
+      ],
+      "valence": ""
+    },
+    "ruler": "standard_single_target",
+    "mode": "cycle"
+  },
+  {
+    "record": {
+      "weapon": "torid",
+      "mods": [
+        "malignant_force",
+        "rime_rounds",
+        "hellfire",
+        "galvanized_chamber",
+        "serration",
+        "critical_delay",
+        "vile_acceleration",
+        "vital_sense"
+      ],
+      "evolutions": [
+        "torid_evo1_incarnon_form",
+        "torid_final_fusillade",
+        "torid_swift_deliverance",
+        "torid_elemental_balance"
+      ],
+      "arcanes": [
+        "primary_merciless"
+      ],
+      "valence": ""
+    },
+    "ruler": "demolisher",
+    "mode": "cycle"
+  },
+  {
+    "record": {
+      "weapon": "zenith",
+      "mods": [
+        "hellfire",
+        "thermite_rounds",
+        "heavy_caliber",
+        "primary_acuity",
+        "primed_shred",
+        "galvanized_scope",
+        "vile_acceleration",
+        "vital_sense"
+      ],
+      "evolutions": [],
+      "arcanes": [
+        "primary_deadhead"
+      ],
+      "valence": "",
+      "exilus": "vigilante_supplies"
+    },
+    "ruler": "demolisher",
+    "mode": "base"
+  }
+]

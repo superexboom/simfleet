@@ -14,7 +14,7 @@
 //! - RESULTS ARE KEPT ON DISK until a reply lists them taken or dropped
 //!   (`Journal`, as the page keeps them in IndexedDB), so a lost reply, a crash
 //!   or a restart costs no result.
-//! - AN ID HOLDING NOTHING READS THE WORK SIGNAL (`SIGNAL_URL`) instead of
+//! - AN ID HOLDING NOTHING READS THE WORK SIGNAL (`SIGNAL_PATH`) instead of
 //!   asking, its age read by the server's clock.
 //! - THE DIALS are the server's, read from every reply; the values here are
 //!   only its stated defaults, used until the first reply.
@@ -28,7 +28,7 @@ use std::time::Duration;
 
 pub const PROTOCOL: u32 = 8;
 /// THE WORK SIGNAL, at the edge: an idle id reads it instead of asking.
-pub const SIGNAL_URL: &str = "https://cdn.wfsim.app/work.json";
+pub const SIGNAL_PATH: &str = "/work.json";
 /// …not believed once older than this by the server's clock (`SIGNAL_STALE_MS`).
 const SIGNAL_STALE_MS: u64 = 90_000;
 /// WITHOUT A SIGNAL an id holding nothing syncs this often, jittered (`SYNC_FALLBACK_MS`).

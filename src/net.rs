@@ -125,6 +125,12 @@ impl Net {
         self.route.lock().map(|r| r.relay).unwrap_or(false)
     }
 
+    /// WFSim's public snapshots live on its CDN; an alternate server owns its
+    /// own snapshots. Local conformance runs never poll production's queue.
+    pub fn public_file(&self, path: &str) -> String {
+        format!("{}{path}", if self.base == SITE { "https://cdn.wfsim.app" } else { &self.base })
+    }
+
     /// The road for `path`: `Some(true)` by the relay, `Some(false)` direct,
     /// `None` when the relay does not carry it. A timing that is due starts on
     /// a thread of its own; this call goes by the road chosen last.

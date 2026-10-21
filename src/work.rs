@@ -13,7 +13,7 @@
 //! this side cannot tell and does not need to.
 
 use crate::config::{Config, Paths};
-use crate::engine::{Backend, Call, Code, Done, Exec, Job, NativeLib, Pool, WasmCode};
+use crate::engine::{Backend, Call, Code, Done, Exec, Job, NativeLib, NativeBoard, Pool, WasmCode};
 use crate::net::Net;
 use crate::ui::{Ui, C_BAD, C_END, C_GO, C_INFO};
 use crate::jsnum;
@@ -63,6 +63,10 @@ pub fn fetch_release(net: &Net) -> Result<Release> {
 
 /// `variant` is "" for the baseline build, or a CPU level ("-v3").
 pub fn native_lib_name(engine: &str, variant: &str) -> String {
+    legacy_native_lib_name(&format!("{engine}-sfe{}", include_str!("../native-engine/revision").trim()), variant)
+}
+
+fn legacy_native_lib_name(engine: &str, variant: &str) -> String {
     if cfg!(windows) {
         format!("{engine}{variant}.dll")
     } else if cfg!(target_os = "macos") {
@@ -206,9 +210,12 @@ pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release
     }
     let mut code = Code { wasm, native: None };
     // The best build this CPU runs that is here (or published) and passes.
-    for variant in if cfg.native_engine { native_variants() } else { vec![] } {
-        let lib = paths.engines.join(native_lib_name(&rel.engine, variant));
-        if !lib.exists() && (cfg.native_engine_url.is_empty() || !fetch_native(net, cfg, ui, rel, variant, &lib)) {
+    let variants = if cfg.native_engine { native_variants() } else { vec![] };
+    for (variant, name) in [true, false].into_iter().flat_map(|current| {
+        variants.iter().map(move |&variant| (variant, if current { native_lib_name(&rel.engine, variant) } else { legacy_native_lib_name(&rel.engine, variant) }))
+    }) {
+        let lib = paths.engines.join(name);
+        if !lib.exists() && (cfg.native_engine_url.is_empty() || !fetch_native(net, cfg, ui, rel, &lib)) {
             continue;
         }
         match NativeLib::open(&lib) {
@@ -274,6 +281,16 @@ fn held_to_wasm(mut code: Code, n: NativeLib, ui: &Ui, what: String) -> Result<C
     code.native = Some(n);
     let shared = Arc::new(code);
     let checked = canary(&shared);
+    if checked.is_ok() && shared.native.as_ref().is_some() {
+        match native_board_canary(&shared) {
+            Ok(true) => {
+                shared.native.as_ref().unwrap().board_checked.store(true, std::sync::atomic::Ordering::Release);
+                ui.log(format!("{C_INFO}[引擎]{C_END} 原生批次接口通过顺序与乱序校验，分片直接在引擎内合并"));
+            }
+            Ok(false) => {}
+            Err(e) => ui.log(format!("{C_GO}[引擎]{C_END} 原生批次接口未通过校验，沿用普通接口：{e:#}")),
+        }
+    }
     let mut code = Arc::try_unwrap(shared).map_err(|_| anyhow!("engine still shared"))?;
     match checked {
         Ok(()) => ui.log(format!("{C_INFO}[引擎]{C_END} {what} 与 wasm 逐位一致，榜单任务改用原生")),
@@ -310,7 +327,7 @@ fn official_target() -> Option<&'static str> {
 }
 
 pub fn official_lib_name(engine: &str) -> String {
-    native_lib_name(&format!("wfsim-{engine}"), "")
+    legacy_native_lib_name(&format!("wfsim-{engine}"), "")
 }
 
 fn unhex(s: &str) -> Option<Vec<u8>> {
@@ -396,8 +413,8 @@ pub fn ours_published(net: &Net, cfg: &Config, rel: &Release) -> bool {
 /// on real board rows). Checked against its `.sha256`; `load_code` then holds
 /// it to the wasm on the canary row before using it. Silent when there is none
 /// (releases before the `-v3` build have only the baseline).
-pub fn fetch_native(net: &Net, cfg: &Config, ui: &Ui, rel: &Release, variant: &str, lib: &std::path::Path) -> bool {
-    let name = native_lib_name(&rel.engine, variant);
+pub fn fetch_native(net: &Net, cfg: &Config, ui: &Ui, rel: &Release, lib: &std::path::Path) -> bool {
+    let name = lib.file_name().unwrap_or_default().to_string_lossy();
     let base = format!("{}/engine-{}/{}", cfg.native_engine_url.trim_end_matches('/'), rel.engine, name);
     let got = (|| -> Result<Vec<u8>> {
         let sum = String::from_utf8(net.download(&format!("{base}.sha256"), |_, _| {})?)?;
@@ -553,6 +570,25 @@ fn canary(code: &Arc<Code>) -> Result<()> {
     Ok(())
 }
 
+fn native_board_canary(code: &Arc<Code>) -> Result<bool> {
+    let mut exec = Exec::new(code.clone());
+    let order = call(&mut exec, Backend::Wasm, "/api/board/order", sample_order().to_string())?;
+    let mut req = order["request"].clone();
+    req["runs"] = json!(14);
+    let Some(probe) = NativeBoard::new(code.clone(), &req, "demolisher", true) else { return Ok(false) };
+    drop(probe);
+    let pieces = call(&mut exec, Backend::Wasm, "/api/board/runs", json!({"request":req,"from":0,"count":14}).to_string())?;
+    let fold = call(&mut exec, Backend::Wasm, "/api/board/fold", json!({"request":req,"pieces":pieces["shards"],"acc":null}).to_string())?;
+    let expected = call(&mut exec, Backend::Wasm, "/api/board/score", json!({"request":req,"acc":fold["acc"],"ruler":"demolisher"}).to_string())?;
+    for ranges in [vec![(0,14)], vec![(7,7),(0,7)], (0..14).rev().map(|i| (i,1)).collect()] {
+        let row = NativeBoard::new(code.clone(), &req, "demolisher", true).context("native context")?;
+        for (from,count) in ranges { exec.run(Backend::Native, &Call::NativeRuns(row.clone(),from,count))?; }
+        let actual = jsnum::parse(&exec.run(Backend::Native, &Call::NativeScore(row))?)?;
+        if actual != expected { bail!("native batch answer differs"); }
+    }
+    Ok(true)
+}
+
 pub struct RowScore {
     pub score: f64,
     pub metric: String,
@@ -574,6 +610,8 @@ pub struct RowScore {
 /// sixty the lanes would wait on it. The fold's body is the same text, byte for
 /// byte, as when it was read there.
 pub struct BoardRun {
+    native: Option<Arc<NativeBoard>>,
+    home: Option<usize>,
     req_s: String,
     ruler: String,
     pub runs: u32,
@@ -586,6 +624,7 @@ pub struct BoardRun {
     inflight: HashMap<u64, (u32, u32)>,
     /// The fold on a lane now, and the run it brings the row to.
     folding: Option<(u64, u32)>,
+    scoring: Option<u64>,
     acc: String,
     spent: f64,
 }
@@ -593,6 +632,8 @@ pub struct BoardRun {
 impl BoardRun {
     pub fn new(req: &Value, ruler: &str) -> BoardRun {
         BoardRun {
+            native: None,
+            home: None,
             req_s: req.to_string(),
             ruler: ruler.to_string(),
             runs: req["runs"].as_u64().unwrap_or(0) as u32,
@@ -602,13 +643,30 @@ impl BoardRun {
             ready: BTreeMap::new(),
             inflight: HashMap::new(),
             folding: None,
+            scoring: None,
             acc: "null".into(),
             spent: 0.0,
         }
     }
+    pub fn enable_native(&mut self, code: Arc<Code>, req: &Value) {
+        self.native = NativeBoard::new(code, req, &self.ruler, false);
+    }
+    pub fn job_on(&mut self, tag: u64, lanes: usize, lane: usize, remote: bool) -> Option<Call> {
+        if !remote && self.home.is_some_and(|h| !crate::placement::same_domain(h,lane)) { return None; }
+        let share = if remote { lanes } else { crate::placement::domain_lanes(lane,lanes) };
+        let call = self.job(tag,share)?;
+        self.home.get_or_insert(lane);
+        Some(call)
+    }
     /// The next job: a fold of what is contiguous first (it moves the row on),
     /// else the next piece. `lanes`: how many share the row.
     pub fn job(&mut self, tag: u64, lanes: usize) -> Option<Call> {
+        if self.runs > 0 && self.folded == self.runs && self.inflight.is_empty() && self.scoring.is_none() {
+            self.scoring = Some(tag);
+            if let Some(row) = &self.native { return Some(Call::NativeScore(row.clone())); }
+            let body = format!(r#"{{"ruler":{},"request":{},"acc":{}}}"#, json!(self.ruler), self.req_s, self.acc);
+            return Some(Call::Api("/api/board/score", body));
+        }
         if self.folding.is_none() {
             let mut upto = self.folded;
             let mut parts: Vec<String> = Vec::new();
@@ -626,28 +684,28 @@ impl BoardRun {
         }
         let left = self.runs - self.cursor;
         let want = self.est.map(|e| (PIECE_MS / e).round().max(1.0) as u32).unwrap_or(1);
-        let count = want.min(1000).min(left.div_ceil(lanes.max(1) as u32)).min(left).max(1);
+        // Native calls carry only an integer, but a one-run tail still pays
+        // dispatch and synchronization. Bound that floor by measured cost so
+        // a slow run is never forced into a long tail.
+        let floor = if self.native.is_some() {
+            self.est.map(|e| (20.0/e).floor().clamp(1.0,8.0) as u32).unwrap_or(1)
+        } else { 1 };
+        let count = want.min(1000).min(left.div_ceil(lanes.max(1) as u32)).max(floor).min(left).max(1);
         let (from, req) = (self.cursor, &self.req_s);
         self.inflight.insert(tag, (from, count));
         self.cursor += count;
+        if let Some(row) = &self.native { return Some(Call::NativeRuns(row.clone(), from, count)); }
         Some(Call::Runs(format!(r#"{{"request":{req},"from":{from},"count":{count}}}"#), count))
     }
-    /// A job back; the row's score once its last fold is in (scored on `exec`,
-    /// once a row).
-    pub fn done(&mut self, d: Done, exec: &mut Exec, backend: Backend) -> Result<Option<RowScore>> {
-        if let Some((_, upto)) = self.folding.filter(|(t, _)| *t == d.tag) {
-            self.folding = None;
-            self.acc = d.out?;
-            // The folds count in `compute_ms` too, as the page counts them.
-            self.spent += d.ms;
-            self.folded = upto;
-            if self.folded < self.runs {
-                return Ok(None);
+    /// A job back; even the final score runs on a lane. Scoring builds the
+    /// simulator's report and may replay a fight, so it cannot block dispatch.
+    pub fn done(&mut self, d: Done) -> Result<Option<RowScore>> {
+        if self.scoring == Some(d.tag) {
+            let s = jsnum::parse(&d.out?)?;
+            if s["ok"] == json!(false) {
+                bail!("/api/board/score: {}", s["error"].as_str().unwrap_or("engine refused"));
             }
-            let t = Instant::now();
-            let body = format!(r#"{{"ruler":{},"request":{},"acc":{}}}"#, json!(self.ruler), self.req_s, self.acc);
-            let s = call(exec, backend, "/api/board/score", body)?;
-            self.spent += t.elapsed().as_secs_f64() * 1000.0;
+            self.spent += d.ms;
             return Ok(Some(RowScore {
                 score: s["score"].as_f64().context("score")?,
                 metric: s["metric"].as_str().unwrap_or("").to_string(),
@@ -656,11 +714,23 @@ impl BoardRun {
                 counts: s["counts"].clone(),
             }));
         }
+        if let Some((_, upto)) = self.folding.filter(|(t, _)| *t == d.tag) {
+            self.folding = None;
+            self.acc = d.out?;
+            // The folds count in `compute_ms` too, as the page counts them.
+            self.spent += d.ms;
+            self.folded = upto;
+            return Ok(None);
+        }
         let Some((from, count)) = self.inflight.remove(&d.tag) else { return Ok(None) };
         let text = d.out?;
         self.spent += d.ms;
         let per = d.ms / count as f64;
         self.est = Some(self.est.map_or(per, |e| e * 0.7 + per * 0.3));
+        if self.native.is_some() {
+            self.folded = self.folded.max(text.parse::<u32>().context("native progress")?);
+            return Ok(None);
+        }
         let inner = text.strip_prefix('[').and_then(|t| t.strip_suffix(']')).context("/api/board/runs: shards")?;
         self.ready.insert(from, (count, inner.to_string()));
         Ok(None)
@@ -692,7 +762,7 @@ pub fn acc_text(out: &str) -> Result<String> {
 #[allow(clippy::too_many_arguments)]
 pub fn measure_row(
     pool: &mut Pool,
-    exec: &mut Exec,
+    _exec: &mut Exec,
     backend: Backend,
     req: &Value,
     ruler: &str,
@@ -701,6 +771,7 @@ pub fn measure_row(
     tick: &mut dyn FnMut(u32, u32),
 ) -> Result<Option<RowScore>> {
     let mut row = BoardRun::new(req, ruler);
+    if backend == Backend::Native { row.enable_native(pool.code().clone(), req); }
     if row.runs == 0 {
         bail!("a row of no runs");
     }
@@ -726,7 +797,7 @@ pub fn measure_row(
         }
         let Some(d) = pool.recv(Duration::from_millis(200)) else { continue };
         out -= 1;
-        if let Some(s) = row.done(d, exec, backend)? {
+        if let Some(s) = row.done(d)? {
             return Ok(Some(s));
         }
         tick(row.folded, row.runs);
@@ -820,6 +891,51 @@ pub fn board_payload(res: &Value, ctx: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_revision_does_not_rename_official_or_legacy_libraries() {
+        let revision = include_str!("../native-engine/revision").trim();
+        assert!(!revision.is_empty() && revision.bytes().all(|c| c.is_ascii_digit()));
+        for variant in ["", "-v3"] {
+            let old = legacy_native_lib_name("abcdef", variant);
+            let new = native_lib_name("abcdef", variant);
+            assert_eq!(new, old.replace("abcdef", &format!("abcdef-sfe{revision}")));
+            assert_ne!(new, old);
+        }
+        assert_eq!(official_lib_name("abcdef"), legacy_native_lib_name("wfsim-abcdef", ""));
+    }
+
+    #[test]
+    fn out_of_order_runs_fold_in_order_and_score_on_a_lane() {
+        let mut row = BoardRun::new(&json!({ "runs": 2 }), "demolisher");
+        assert!(matches!(row.job(1, 2), Some(Call::Runs(_, 1))));
+        assert!(matches!(row.job(2, 2), Some(Call::Runs(_, 1))));
+        let done = |tag, text: &str| Done { tag, lane: 0, ms: 1.0, out: Ok(text.into()) };
+        assert!(row.done(done(2, "[2]")).unwrap().is_none());
+        assert!(row.job(3, 2).is_none());
+        assert!(row.done(done(1, "[1]")).unwrap().is_none());
+        let Some(Call::Fold(body)) = row.job(4, 2) else { panic!("fold") };
+        assert_eq!(jsnum::parse(&body).unwrap()["pieces"], json!([1, 2]));
+        assert!(row.job(5, 2).is_none());
+        assert!(row.done(done(4, r#"{"sum":3}"#)).unwrap().is_none());
+        let Some(Call::Api("/api/board/score", body)) = row.job(6, 2) else { panic!("score") };
+        assert_eq!(jsnum::parse(&body).unwrap()["acc"], json!({ "sum": 3 }));
+        assert!(row.job(7, 2).is_none());
+        let score = row.done(done(6, r#"{"ok":true,"score":0.125,"metric":"kpm","work":17,"counts":{"gas":8}}"#)).unwrap().unwrap();
+        assert_eq!(score.score.to_bits(), 0.125f64.to_bits());
+        assert_eq!(score.work, 17);
+        assert_eq!(score.compute_ms, 4);
+        assert_eq!(score.counts["gas"], json!(8));
+    }
+
+    #[test]
+    fn failed_final_score_is_not_an_answer() {
+        let mut row = BoardRun::new(&json!({ "runs": 1 }), "demolisher");
+        row.folded = 1;
+        assert!(matches!(row.job(1, 1), Some(Call::Api("/api/board/score", _))));
+        let d = Done { tag: 1, lane: 0, ms: 1.0, out: Ok(r#"{"ok":false,"error":"bad acc"}"#.into()) };
+        assert!(matches!(row.done(d), Err(e) if e.to_string().contains("bad acc")));
+    }
     #[test]
     fn payload_like_the_page() {
         let res = json!({ "mods": ["serration", "riven:abc", "vigilante_armaments"], "exilus": "vigilante_armaments",

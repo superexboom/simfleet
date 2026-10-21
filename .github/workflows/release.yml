@@ -10,6 +10,7 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows
@@ -24,6 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - run: cargo test --release --locked
       - shell: pwsh
         run: ./tools/package.ps1
@@ -36,6 +38,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           path: in
@@ -46,10 +49,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${GITHUB_REF_NAME}"
-          sums=$(cd in && sha256sum simfleet-* | awk '{print "- `"$2"`: `"$1"`"}')
+          sums=$(cd in && cat *.sha256 | awk '{print "- `"$2"`: `"$1"`"}')
           {
             echo "simfleet ${tag} — WFSim 志愿计算客户端，单文件，无需安装 Rust 或运行库。"
             echo
+            if [ -f "docs/releases/$tag.md" ]; then cat "docs/releases/$tag.md"; echo; fi
             echo "- **Windows x64**（\`*-windows-x64.zip\`）：解压后双击 \`simfleet.exe\`。"
             echo "- **Linux x64**（\`*-linux-x64.tar.gz\`，glibc 2.35 及以上，如 Ubuntu 22.04+、Debian 12+）：\`tar xzf\` 后运行 \`./simfleet/simfleet\`；没有键鼠检测，按「离开电脑时」的核心数计算。"
             echo "- **macOS（Apple 芯片 M1 及以后）**（\`*-macos-arm64.tar.gz\`）：\`tar xzf\` 后在终端运行 \`./simfleet/simfleet\`。没有 Apple 开发者签名，第一次运行前执行一次 \`xattr -dr com.apple.quarantine simfleet\`（或在「系统设置 → 隐私与安全性」里点「仍要打开」）。有键鼠空闲检测和电池检测，计算时不让 Mac 自动睡眠。"

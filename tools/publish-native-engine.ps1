@@ -31,7 +31,10 @@ if ($LASTEXITCODE -ne 0) { exit 1 }
 
 $rel = Invoke-RestMethod "https://wfsim.app/release.json" -Headers @{ "Cache-Control" = "no-store" }
 $id = $rel.engine
-$files = @("$id.dll", "$id-v3.dll")
+$revision = (Get-Content -Raw -LiteralPath (Join-Path $root 'native-engine/revision')).Trim()
+if ($revision -notmatch '^[0-9]+$') { throw 'Invalid native build revision' }
+$stem = "$id-sfe$revision"
+$files = @("$stem.dll", "$stem-v3.dll")
 $ErrorActionPreference = "Continue"
 $have = @(gh release view "engine-$id" -R $Repo --json assets -q ".assets[].name" 2>$null)
 $ErrorActionPreference = "Stop"
@@ -39,8 +42,7 @@ $missing = @($files | Where-Object { $have -notcontains $_ })
 Write-Host "served engine $id (wasm $($rel.wasm)); release holds: $(if ($have.Count) { $have -join ', ' } else { 'nothing' })"
 if ($missing.Count -eq 0) { Write-Host "nothing to publish"; exit 0 }
 
-$stage = Join-Path $root "target\publish\$id"
-Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+$stage = Join-Path $root ("target/publish/$stem-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force (Join-Path $stage "engines") | Out-Null
 foreach ($cpu in "", "x86-64-v3") {
     & (Join-Path $PSScriptRoot "build-native-engine.ps1") -Strip -Engine $id -Cpu $cpu -Out (Join-Path $stage "engines")
@@ -72,6 +74,7 @@ foreach ($cpu in "baseline", "v3") {
     $line = $out | Where-Object { $_ -match "^CHECK-NATIVE rows=(\d+) skipped=\d+ riven=(\w+)" } | Select-Object -First 1
     if (-not $line) { Write-Host "no verdict line ($cpu): nothing published"; exit 1 }
     $null = $line -match "rows=(\d+) skipped=\d+ riven=(\w+)"
+    if ($Matches[2] -ne 'same') { throw "Riven conformance failed: $cpu" }
     $riven = if ($Matches[2] -eq "same") { "the riven canary gave the same answer" } else { "the riven canary did not agree (riven gains stay on the wasm)" }
     $verdicts += "$(if ($cpu -eq 'v3') { 'x86-64-v3' } else { 'x86-64' }): $($Matches[1]) rows bit for bit (WFSim's board rows and the client contract's gas vectors: score, work, gas), $riven"
 }
@@ -85,7 +88,7 @@ foreach ($f in $missing) {
     $p = Join-Path $stage "engines\$f"
     $sum = (Get-FileHash -Algorithm SHA256 $p).Hash.ToLower()
     "$sum  $f" | Set-Content -Encoding ascii -NoNewline "$p.sha256"
-    $up += @($p, "$p.sha256")
+    $up += @($p, "$p.sha256", "$p.build.json")
     $sums += "- ``$f``: ``$sum```n"
 }
 $head = (git -C $root rev-parse HEAD).Trim()
@@ -93,7 +96,7 @@ $tree = "https://github.com/$Repo/tree/$head"
 $checked = $verdicts -join "; "
 if ($have.Count -gt 0) {
     $notes = (gh release view "engine-$id" -R $Repo --json body -q .body | Out-String).TrimEnd()
-    $notes += "`n`n**Added later**, built and checked on a maintainer's machine by tools/publish-native-engine.ps1 at simfleet [``$head``]($tree), card text blanked the same way:`n`n$sums"
+    $notes += "`n`n**Native revision sfe$revision**, built and checked on a maintainer's machine by tools/publish-native-engine.ps1 at simfleet [``$head``]($tree), card text blanked. Each build manifest records applied patch hashes. Checks: $checked.`n`n$sums"
     Write-Text (Join-Path $stage "notes.md") $notes
     gh release upload "engine-$id" @up -R $Repo
     gh release edit "engine-$id" -R $Repo --notes-file (Join-Path $stage "notes.md")

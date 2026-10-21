@@ -20,6 +20,9 @@ mod config;
 mod engine;
 mod fleet;
 mod jsnum;
+mod json_numbers;
+mod maintenance;
+mod placement;
 #[cfg(target_os = "macos")]
 mod macos;
 mod net;
@@ -52,6 +55,8 @@ simfleet — WFSim 志愿计算客户端（非官方，基于 WFSim 引擎）
   simfleet logout          退出登录（之后的贡献记在本机）
   simfleet status          看一眼本机和账号的贡献
   simfleet bench           本机测速（不连任务服务器派活）
+    --lanes N --repeat N --backend native|wasm|both --placement auto|system|numa|cache
+    --order <json>         固定榜单输入；SIMFLEET_NATIVE_FAST=0 对照普通接口
   simfleet cpu             看 CPU 识别结果：是否 Intel 大小核、计算线程会放在哪种核心上
 
 运行时按键: P 暂停/继续 · + / - 空闲时的核心数 · Shift 加 + / - 使用电脑时的核心数（0 = 使用时暂停）
@@ -242,9 +247,10 @@ fn adopt_session(c: &mut Config, session: String) -> Result<()> {
     Ok(())
 }
 
-fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<()> {
+fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<bool> {
     sys::set_priority(&cfg.priority);
-    let max = sys::cores();
+    let placement = placement::init(&cfg)?;
+    let max = placement::capacity().unwrap_or_else(sys::cores);
     let ctl = Arc::new(Ctl {
         paused: AtomicBool::new(false),
         quit: AtomicBool::new(false),
@@ -268,9 +274,11 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<(
         &cfg.verifier[..6],
         paths.config.display()
     ));
-    if let Some(l) = affinity::init(affinity::Prefer::parse(&cfg.core_type), &cfg.priority) {
+    let prefer = if cfg.placement == "system" { affinity::Prefer::Windows } else { affinity::Prefer::parse(&cfg.core_type) };
+    if let Some(l) = affinity::init(prefer, &cfg.priority) {
         ui.log(format!("{C_INFO}[CPU]{C_END} {l}"));
     }
+    if let Some(l) = placement { ui.log(format!("{C_INFO}[CPU]{C_END} {l}")); }
     if watch::is_client() {
         watch::note_crashes();
     }
@@ -299,9 +307,11 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<(
         Ok(fleet::Fleet::new(net.clone(), cfg.clone(), paths.clone(), ctl.clone(), ui.clone(), rel, code))
     })();
     let mut summary = None;
+    let mut recycle = false;
     match result {
         Ok(mut fleet) => {
             fleet.run();
+            recycle = fleet.recycle;
             if let Some(u) = fleet.utilisation_summary() {
                 ui.log(u);
             }
@@ -339,7 +349,7 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<(
             println!("本次核心利用率 {:.0}%（引擎实际计算时间 ÷ 预算允许的核心时间）。", u * 100.0);
         }
     }
-    Ok(())
+    Ok(recycle)
 }
 
 fn status(cfg: &Config) -> Result<()> {
@@ -367,41 +377,75 @@ fn status(cfg: &Config) -> Result<()> {
 }
 
 /// THE ENGINES, timed on one real board row, without asking the server for work.
-fn bench(paths: &Paths, cfg: &Config, lanes_arg: Option<usize>) -> Result<()> {
+fn bench(paths: &Paths, cfg: &Config, lanes_arg: Option<usize>, repeats: usize, only: Option<String>, order_file: Option<String>) -> Result<()> {
+    if let Some(line) = placement::init(cfg)? { println!("{line}"); }
     let net = net::Net::new(&cfg.server, None);
     let ui = Ui::new();
     let rel = work::fetch_release(&net)?;
     println!("网站引擎 {} · wasm {}", rel.engine, rel.wasm);
     let code = work::load_code(&net, paths, cfg, &Ui::new(), &rel)?;
+    if let Some(n) = &code.native {
+        n.wait_riven();
+    }
     drop(ui);
-    let o = work::sample_order();
+    let o = match order_file { Some(path) => jsnum::parse(&std::fs::read_to_string(path)?)?, None => work::sample_order() };
+    let ruler = o["ruler"].as_str().context("benchmark ruler")?;
     let mut backends = vec![Backend::Wasm];
     if code.native.is_some() {
         backends.push(Backend::Native);
     }
-    let all = lanes_arg.unwrap_or_else(sys::cores);
+    match only.as_deref() {
+        None | Some("both") => {}
+        Some("wasm") => backends.retain(|b| *b == Backend::Wasm),
+        Some("native") if code.native.is_some() => backends.retain(|b| *b == Backend::Native),
+        Some("native") => bail!("没有可用的原生引擎"),
+        Some(_) => bail!("--backend 必须是 wasm、native 或 both"),
+    }
+    let cap = placement::capacity().unwrap_or_else(sys::cores);
+    let all = lanes_arg.unwrap_or(cap).clamp(1, cap);
+    let mut sizes = vec![1, all];
+    sizes.dedup();
+    let mut expected = None;
     for b in backends {
-        for lanes in [1, all] {
+        for &lanes in &sizes {
             let mut pool = Pool::new(code.clone());
             let mut exec = Exec::new(code.clone());
             let order = exec.api(b, "/api/board/order", o.to_string())?;
             let order = jsnum::parse(&order)?;
             let req = order["request"].clone();
             pool.ensure(lanes);
-            let t = Instant::now();
-            let s = work::measure_row(&mut pool, &mut exec, b, &req, "demolisher", &|_| lanes, &|| true, &mut |_, _| {})?
-                .context("row did not finish")?;
-            let secs = t.elapsed().as_secs_f64();
-            println!(
-                "  {:?} × {lanes:>2} 核: {:.2}s ({} 次模拟, {:.1} 次/秒)  分数 {} {}  work {}",
-                b,
-                secs,
-                req["runs"],
-                req["runs"].as_f64().unwrap_or(0.0) / secs,
-                s.score,
-                s.metric,
-                s.work
-            );
+            let mut times = Vec::new();
+            for iteration in 1..=repeats.max(1) {
+                let t = Instant::now();
+                let s = work::measure_row(&mut pool, &mut exec, b, &req, ruler, &|_| lanes, &|| true, &mut |_, _| {})?
+                    .context("row did not finish")?;
+                let secs = t.elapsed().as_secs_f64();
+                let answer = (s.score.to_bits(), s.metric.clone(), s.work, s.counts.clone());
+                if expected.as_ref().is_some_and(|e| *e != answer) {
+                    bail!("测速结果不一致：{b:?} × {lanes} 第 {iteration} 次");
+                }
+                expected = Some(answer);
+                times.push(secs);
+                println!(
+                    "  {:?} × {lanes:>2} 核: {:.2}s ({} 次模拟, {:.1} 次/秒)  分数 {} {}  work {}",
+                    b,
+                    secs,
+                    req["runs"],
+                    req["runs"].as_f64().unwrap_or(0.0) / secs,
+                    s.score,
+                    s.metric,
+                    s.work
+                );
+                if repeats > 1 {
+                    println!("BENCH backend={b:?} lanes={lanes} iteration={iteration} seconds={secs:.6} memory_bytes={}", sys::process_memory().unwrap_or(0));
+                }
+            }
+            if repeats > 1 {
+                times.sort_by(f64::total_cmp);
+                let mid = times.len() / 2;
+                let median = if times.len() % 2 == 0 { (times[mid - 1] + times[mid]) / 2.0 } else { times[mid] };
+                println!("BENCH-SUMMARY backend={b:?} lanes={lanes} repeats={repeats} median_seconds={median:.6}");
+            }
         }
     }
     Ok(())
@@ -509,7 +553,7 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, dat
             }
             let s = work::measure_row(&mut pool, &mut exec, b, &o["request"], ruler, &|_| lanes, &|| true, &mut |_, _| {})?;
             // THE ANSWER'S BITS: score, work, metric, and the gas the work was priced from.
-            answers.push(s.map(|s| (s.score.to_bits(), s.work, s.metric, s.counts["gas"].as_u64())));
+            answers.push(s.map(|s| (s.score.to_bits(), s.work, s.metric, s.counts)));
         }
         match (&answers[0], &answers[1]) {
             (None, None) => skipped += 1,
@@ -605,6 +649,8 @@ fn main() {
                 }
                 let lanes = flag("--lanes").and_then(|x| x.parse().ok()).unwrap_or_else(sys::cores);
                 let mut cfg = Config::fresh(lanes);
+                if let Some(p) = flag("--placement") { cfg.placement = p; }
+                placement::init(&cfg)?;
                 cfg.native_engine = flag("--wasm").is_none() && !args.iter().any(|a| a == "--wasm");
                 let net = net::Net::new(&cfg.server, None);
                 let ui = Ui::new();
@@ -623,16 +669,20 @@ fn main() {
                     max_slots: AtomicUsize::new(0),
                 });
                 let mut f = fleet::Fleet::new(net, cfg, paths.clone(), ctl, ui, rel, code);
+                let started = Instant::now();
                 f.replay(&tasks)?;
+                println!("REPLAY tasks={} lanes={lanes} seconds={:.6}", tasks.len(), started.elapsed().as_secs_f64());
             }
             "cpu" => {
                 let c = paths.load()?.unwrap_or_else(|| Config::fresh(sys::cores()));
                 print!("{}", affinity::report(affinity::Prefer::parse(&c.core_type), c.idle_cores.max(c.active_cores), &c.priority));
+                print!("{}", placement::report(&c)?);
             }
             "check-native" => check_native(&paths, flag("--engine"), flag("--wasm"), flag("--data"), flag("--boards"), flag("--rows"), flag("--lanes").and_then(|x| x.parse().ok()), flag("--weapons").and_then(|x| x.parse().ok()).unwrap_or(4))?,
             "bench" => {
-                let c = paths.load()?.unwrap_or_else(|| Config::fresh(1));
-                bench(&paths, &c, flag("--lanes").and_then(|x| x.parse().ok()))?;
+                let mut c = paths.load()?.unwrap_or_else(|| Config::fresh(1));
+                if let Some(p) = flag("--placement") { c.placement = p; }
+                bench(&paths, &c, flag("--lanes").and_then(|x| x.parse().ok()), flag("--repeat").and_then(|x| x.parse().ok()).unwrap_or(1), flag("--backend"), flag("--order"))?;
             }
             "run" => {
                 let cfg = match paths.load()? {
@@ -649,7 +699,9 @@ fn main() {
                         std::process::exit(code);
                     }
                 }
-                run(paths, cfg, flag("--cores").and_then(|x| x.parse().ok()))?;
+                if run(paths, cfg, flag("--cores").and_then(|x| x.parse().ok()))? {
+                    watch::replace_process()?;
+                }
             }
             other => {
                 print!("不认识的命令 {other}\n\n{HELP}");

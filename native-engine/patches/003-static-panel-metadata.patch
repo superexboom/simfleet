@@ -1,0 +1,51 @@
+diff --git a/engine/src/build/rivens/spec.rs b/engine/src/build/rivens/spec.rs
+index 8166861464..6cd52f827a 100644
+--- a/engine/src/build/rivens/spec.rs
++++ b/engine/src/build/rivens/spec.rs
+@@ -373,5 +373,5 @@ pub fn class_for_weapon(weapon: &str) -> Option<&'static str> {
+         .iter()
+         .rev()
+         .find(|c| !pool(c).is_empty())
+-        .map(|c| &*Box::leak(c.clone().into_boxed_str()))
++        .map(String::as_str)
+ }
+diff --git a/engine/src/data/weapons/panel.rs b/engine/src/data/weapons/panel.rs
+index 5b5f1e1f60..10d7154a74 100644
+--- a/engine/src/data/weapons/panel.rs
++++ b/engine/src/data/weapons/panel.rs
+@@ -452,25 +452,25 @@ pub fn base_panel_assembled(
+         melee_incarnon: None,
+         // LEAKED ONCE so the panel can answer "what is this" and "what does it
+         // draw" without a lookup — the two questions the Amp auras ask.
+-        class: Box::leak(s.class.clone().into_boxed_str()),
+-        slot: Box::leak(s.rules_slot().to_string().into_boxed_str()),
++        class: raw.class.as_str(),
++        slot: raw.rules_slot(),
+         // Filled in by `apply_valence`; zero until then, and zero forever on a
+         // weapon that never came out of a Lich.
+         valence_bonus: 0.0,
+         exalted: s.exalted,
+-        summoned_by: s.summoned_by.as_ref().map(|a| &*Box::leak(a.clone().into_boxed_str())),
++        summoned_by: raw.summoned_by.as_deref(),
+         // Zero until an evolution's flat add writes into it
+         // (`add_flat_base_damage`), which is the only thing that does.
+         unswung_base: 0.0,
+         recharge_per_second: s.recharge_per_second,
+         echo_multiplier: s.echo_multiplier,
+-        mod_pools: Box::leak(
+-            s.mod_pools
+-                .iter()
+-                .map(|p| &*Box::leak(p.clone().into_boxed_str()))
+-                .collect::<Vec<&'static str>>()
+-                .into_boxed_slice(),
+-        ),
++        mod_pools: {
++            static POOLS: OnceLock<Mutex<BTreeMap<&'static str, &'static [&'static str]>>> = OnceLock::new();
++            let mut pools = POOLS.get_or_init(Default::default).lock().expect("panel pools");
++            *pools.entry(raw.id.as_str()).or_insert_with(|| {
++                Box::leak(raw.mod_pools.iter().map(String::as_str).collect::<Vec<_>>().into_boxed_slice())
++            })
++        },
+         form: FormKind::parse(&s.form),
+         // Empty until an evolution writes into it (data::evolutions::apply).
+         indirect: Vec::new(),

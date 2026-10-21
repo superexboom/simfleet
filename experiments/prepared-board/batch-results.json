@@ -1,0 +1,344 @@
+{
+  "engines": {
+    "baseline": "872e90ffaf0d",
+    "candidate": "experimental-prepared"
+  },
+  "count": 100,
+  "repeats": 3,
+  "rows": [
+    {
+      "label": "braton_prime/standard_multi_target/cycle",
+      "times": {
+        "baseline": [
+          1.043528600006539,
+          1.0277538000009372,
+          0.9976262999989558
+        ],
+        "candidate": [
+          0.9131130999958259,
+          0.9872376999992412,
+          0.96312449999823
+        ]
+      },
+      "median_seconds": {
+        "baseline": 1.0277538000009372,
+        "candidate": 0.96312449999823
+      },
+      "speedup": 1.067103785650584,
+      "same": true,
+      "output_bytes": 476944
+    },
+    {
+      "label": "braton_prime/demolisher/cycle",
+      "times": {
+        "baseline": [
+          0.34423119999701157,
+          0.34937129999889294,
+          0.4514619999972638
+        ],
+        "candidate": [
+          0.28131199999916134,
+          0.32132129999808967,
+          0.30766510000103153
+        ]
+      },
+      "median_seconds": {
+        "baseline": 0.34937129999889294,
+        "candidate": 0.30766510000103153
+      },
+      "speedup": 1.1355571366324018,
+      "same": true,
+      "output_bytes": 464775
+    },
+    {
+      "label": "torid/standard_multi_target/cycle",
+      "times": {
+        "baseline": [
+          1.6598401999945054,
+          1.6244055999995908,
+          1.5926765000040177
+        ],
+        "candidate": [
+          1.8775707000022521,
+          1.5813005000018165,
+          1.5662826000043424
+        ]
+      },
+      "median_seconds": {
+        "baseline": 1.6244055999995908,
+        "candidate": 1.5813005000018165
+      },
+      "speedup": 1.0272592717182627,
+      "same": true,
+      "output_bytes": 482361
+    },
+    {
+      "label": "torid/demolisher/cycle",
+      "times": {
+        "baseline": [
+          0.23917660000006435,
+          0.2404102000000421,
+          0.23624610000115354
+        ],
+        "candidate": [
+          0.1980282000004081,
+          0.23627500000293367,
+          0.200208999995084
+        ]
+      },
+      "median_seconds": {
+        "baseline": 0.23917660000006435,
+        "candidate": 0.200208999995084
+      },
+      "speedup": 1.1946346068655114,
+      "same": true,
+      "output_bytes": 460461
+    },
+    {
+      "label": "dual_toxocyst/standard_multi_target/cycle",
+      "times": {
+        "baseline": [
+          3.717633399995975,
+          4.463602300005732,
+          3.608392100002675
+        ],
+        "candidate": [
+          3.616068899995298,
+          3.802208699999028,
+          3.5337736000001314
+        ]
+      },
+      "median_seconds": {
+        "baseline": 3.717633399995975,
+        "candidate": 3.616068899995298
+      },
+      "speedup": 1.0280869924798195,
+      "same": true,
+      "output_bytes": 480707
+    },
+    {
+      "label": "dual_toxocyst/demolisher/cycle",
+      "times": {
+        "baseline": [
+          1.1055105999985244,
+          1.1013046000007307,
+          1.139524899997923
+        ],
+        "candidate": [
+          1.0471189000018057,
+          1.0659427999999025,
+          1.1019928000023356
+        ]
+      },
+      "median_seconds": {
+        "baseline": 1.1055105999985244,
+        "candidate": 1.0659427999999025
+      },
+      "speedup": 1.0371200030607886,
+      "same": true,
+      "output_bytes": 464894
+    },
+    {
+      "label": "acceltra/demolisher/base",
+      "times": {
+        "baseline": [
+          0.20584650000091642,
+          0.2068844999957946,
+          0.22182700000121258
+        ],
+        "candidate": [
+          0.19862819999980275,
+          0.1852696999994805,
+          0.17963809999491787
+        ]
+      },
+      "median_seconds": {
+        "baseline": 0.2068844999957946,
+        "candidate": 0.1852696999994805
+      },
+      "speedup": 1.1166666756429935,
+      "same": true,
+      "output_bytes": 458235
+    },
+    {
+      "label": "braton_prime/demolisher/base",
+      "times": {
+        "baseline": [
+          0.3499184000029345,
+          0.3273598000014317,
+          0.3415411000023596
+        ],
+        "candidate": [
+          0.28240289999666857,
+          0.2809475999965798,
+          0.30784139999741456
+        ]
+      },
+      "median_seconds": {
+        "baseline": 0.3415411000023596,
+        "candidate": 0.28240289999666857
+      },
+      "speedup": 1.2094107390766478,
+      "same": true,
+      "output_bytes": 459991
+    },
+    {
+      "label": "burston_prime/standard_single_target/base",
+      "times": {
+        "baseline": [
+          0.6972421999962535,
+          0.700570200002403,
+          0.6951332999960869
+        ],
+        "candidate": [
+          0.6574225000003935,
+          0.64105230000132,
+          0.6327418000000762
+        ]
+      },
+      "median_seconds": {
+        "baseline": 0.6972421999962535,
+        "candidate": 0.64105230000132
+      },
+      "speedup": 1.0876525986956411,
+      "same": true,
+      "output_bytes": 463881
+    },
+    {
+      "label": "fulmin_prime/heavy_gunner/semi_auto",
+      "times": {
+        "baseline": [
+          0.1083336000010604,
+          0.10909959999844432,
+          0.10337109999818495
+        ],
+        "candidate": [
+          0.06775610000477172,
+          0.0529575999971712,
+          0.06839600000239443
+        ]
+      },
+      "median_seconds": {
+        "baseline": 0.1083336000010604,
+        "candidate": 0.06775610000477172
+      },
+      "speedup": 1.5988759682660456,
+      "same": true,
+      "output_bytes": 456066
+    },
+    {
+      "label": "kuva_hind/standard_multi_target/semi_auto",
+      "times": {
+        "baseline": [
+          0.17775869999604765,
+          0.16622739999729674,
+          0.17809180000040215
+        ],
+        "candidate": [
+          0.1398297999985516,
+          0.12165269999968586,
+          0.13565299999754643
+        ]
+      },
+      "median_seconds": {
+        "baseline": 0.17775869999604765,
+        "candidate": 0.13565299999754643
+      },
+      "speedup": 1.3103926931159855,
+      "same": true,
+      "output_bytes": 461805
+    },
+    {
+      "label": "larkspur_prime/standard_single_target/base",
+      "times": {
+        "baseline": [
+          0.18723089999548392,
+          0.19152459999895655,
+          0.18093460000091
+        ],
+        "candidate": [
+          0.15954680000140797,
+          0.15754789999482455,
+          0.174877599994943
+        ]
+      },
+      "median_seconds": {
+        "baseline": 0.18723089999548392,
+        "candidate": 0.15954680000140797
+      },
+      "speedup": 1.1735171121817025,
+      "same": true,
+      "output_bytes": 457998
+    },
+    {
+      "label": "phenmor/standard_single_target/cycle",
+      "times": {
+        "baseline": [
+          0.6693519000036758,
+          0.7207868000041344,
+          0.7244540000028792
+        ],
+        "candidate": [
+          0.6273053999975673,
+          0.6629753999950481,
+          0.6799863999985973
+        ]
+      },
+      "median_seconds": {
+        "baseline": 0.7207868000041344,
+        "candidate": 0.6629753999950481
+      },
+      "speedup": 1.0871999172360214,
+      "same": true,
+      "output_bytes": 466928
+    },
+    {
+      "label": "torid/demolisher/cycle",
+      "times": {
+        "baseline": [
+          0.25381670000206213,
+          0.23955290000594687,
+          0.2377725999976974
+        ],
+        "candidate": [
+          0.201096900003904,
+          0.20258470000408124,
+          0.20107970000390196
+        ]
+      },
+      "median_seconds": {
+        "baseline": 0.23955290000594687,
+        "candidate": 0.201096900003904
+      },
+      "speedup": 1.1912311925310448,
+      "same": true,
+      "output_bytes": 461322
+    },
+    {
+      "label": "zenith/demolisher/base",
+      "times": {
+        "baseline": [
+          0.10379870000178926,
+          0.10488539999641944,
+          0.10389320000103908
+        ],
+        "candidate": [
+          0.07799949999753153,
+          0.08158549999643583,
+          0.07675629999721423
+        ]
+      },
+      "median_seconds": {
+        "baseline": 0.10389320000103908,
+        "candidate": 0.07799949999753153
+      },
+      "speedup": 1.3319726409057366,
+      "same": true,
+      "output_bytes": 457032
+    }
+  ],
+  "sha256": {
+    "baseline": "058d3eed2bf0f56862f1024dd8a227bee7eaa7113a9c38f61374b4e9b0846be0",
+    "candidate": "6290ce746b79adcd9813a94678f70a8f9768938379a3d0e58606afe462dc194f"
+  }
+}

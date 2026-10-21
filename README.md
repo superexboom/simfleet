@@ -30,6 +30,8 @@
 
 ## 上手
 
+0.8.1 的本地原生库优化了紫卡 lead 的重复元数据处理和中间报告；固定请求对照与适用范围见 [紫卡 lead 优化](docs/riven-lead-0.8.1.md)。`-native` 包包含这份原生库，普通包也会优先下载带 `-sfe1` 修订号的新库，避免沿用同一引擎 ID 的旧构建。旧库保持可回退。
+
 **下载**：在 [Releases](https://github.com/superexboom/simfleet/releases) 下载 `simfleet-<版本>-windows-x64.zip` 并解压。只需要 Windows 10/11 x64，不需要装 Rust 或任何运行库。
 
 **Linux x64**：下载 `simfleet-<版本>-linux-x64.tar.gz`，`tar xzf` 后运行 `./simfleet/simfleet`（需要 glibc 2.35 及以上，如 Ubuntu 22.04+、Debian 12+）。Linux 上没有键鼠空闲检测，始终按「离开电脑时」的核心数计算；`priority = "idle"` 用的是 `SCHED_IDLE` 加 nice 19，只吃没人要的 CPU。放进 systemd 或 tmux 都行，收到 SIGTERM/SIGHUP 会先交还任务再退出；用 systemd 的 `Restart=` 管重启时可以加 `--no-watch`。
@@ -54,6 +56,8 @@ simfleet login --cookie <值>   用 Google/Discord/GitHub 登录的账号（见�
 simfleet logout          退出登录
 simfleet status          查看本机和账号的贡献
 simfleet bench           本机测速（不领任务）
+simfleet bench --lanes 6 --repeat 5 --backend native   重复测速、核对结果并记录内存
+simfleet bench --lanes 16 --repeat 5 --backend native --placement cache   对照缓存拓扑放置
 simfleet cpu             看 CPU 识别结果：是否 Intel 大小核、计算线程会放在哪种核心上
 ```
 
@@ -69,12 +73,16 @@ simfleet cpu             看 CPU 识别结果：是否 Intel 大小核、计算�
 | `pause_on_battery` | true | 用电池时暂停 |
 | `priority` | `idle` | 进程优先级：`idle` 只吃没人要的 CPU，`below_normal`，`normal` |
 | `core_type` | `auto` | 只对 **Intel 大小核**有效：`auto` 先 P 核、再 E 核、最后 P 核超线程，`p` 优先性能核，`e` 优先能效核，`windows` 交给系统（见下）；AMD 等其他 CPU 一律不生效 |
+| `placement` | `auto` | 自动按 NUMA/末级缓存拓扑放置计算线程；`system` 交给系统，`numa` 优先节点内任务，`cache` 优先缓存域内任务 |
+| `numa_nodes` | `[]` | 允许的 NUMA 节点列表，空表示全部；例如 `[0]` 将此进程放在节点 0 |
+| `cpu_offset` | `0` | 按物理核心优先的处理器顺序轮转起点；多进程可设置不同起点，核心预算仍由 `idle_cores`/`active_cores` 决定 |
 | `native_engine` | true | 有匹配的原生引擎时，榜单任务用原生（见下） |
 | `slots` | 0（自动） | 同时开几路（几个计算者 id），见下文「调度」；填数字就固定开几路（仍不超过上限） |
 | `max_slots` | 0（自动） | 最多同时开几路；0 = 逻辑处理器数的 1/4（2～16 路）。运行中按 `[`/`]` 调整，退出时写回 |
 | `native_riven` | true | 原生引擎带紫卡搜索、并且启动校验与 wasm 一致时，紫卡增益也用原生（见「原生引擎」） |
 | `official_engine` | true | 自己的原生版还没发布时，用 WFSim 官方的原生库算榜单（见「原生引擎」） |
 | `watch` | true | 意外退出后自动重启（见「上手」） |
+| `memory_limit_mb` | 2048 | 进程内存回收线，单位 MiB；持续超线一分钟后停止领新活，做完手头任务、保存结果，再自动换新进程；`0` 关闭 |
 | `protocol` | 8 | 和服务器说话用的协议：8（一次同步交结果、续租、领活，见「调度」），或 7（旧的分开领、交、续租）。服务器要求时会在本次运行内自动改用 7 |
 
 跟网页一样的规矩：没有你的同意不算；用电时算多少由你定；每份结果都要另一个**不同主人、不同网络**的电脑算出一模一样的数才算数，服务器还会抽查 5%。
@@ -183,7 +191,24 @@ simfleet 因此有两个引擎：
 - **空闲的核心**：一分钟没活的核心整个线程退出（预算变小、暂停、活不多时），连同 wasm 实例和分配器替它留着的内存；有活时再新建线程，开销可以忽略。
 - 实测 4 个紫卡增益同时算：旧版算完后仍占 1.5 GB，以后越积越多；现在算完回到约 500 MB，一分钟后回到 150 MB 左右。同时算的时候还是要 1.5 GB 上下，这是 4 份搜索状态本身的大小，内存紧张时少开几路（上文「调度」）。
 
+**长期运行的内存回收（0.7.4 起）**：`memory_limit_mb = 2048` 是回收触发线，单位 MiB。Windows 看进程的私有提交量，Linux 看驻留量加交换量，macOS 看驻留量。持续超过一分钟才开始回收，达到两倍时立即开始。回收时停止领新活，已有任务继续计算、续租和交结果；手头清空后自动换新进程。最多等 15 分钟，仍未完成的任务交还，已完成的结果保存在 `kept/` 中，下次启动补交。落盘失败会重试，保存成功前不会因内存维护退出。配置中的 id、登录信息和核心预算会保留。
+
+这是**软触发线**，排空任务期间可以超过它。`0` 关闭。默认守护进程在旧进程退出后立即启动新进程，不算崩溃；`--no-watch` 下也会主动换进程，外部进程管理器需要保持 PID 时可设为 `0`。每次换进程，面板的「本次」计数重新开始，账号贡献和待交结果继续保留。
+
+结束计算线程只能释放线程自己的搜索状态。原生引擎还有全局缓存、请求路径中永久保留的分配，以及 DLL 卸载后分配器没有归还的页面；WASM 的线性内存也不会缩小。换进程由系统收回整个地址空间，因此这些内存都能回收。上游引擎保持原样，客户端继续逐位验算。
+
+`tools/check-maintenance.py` 可以在本机模拟协议 8，连续检查排空、交结果和自动换进程。它使用虚构 id 和本地服务器，不领取真实任务；需要 Python 和 `psutil`，参数见脚本帮助。初始内存调查见 [审查报告](docs/performance-2026-10-21.md)，0.8 的性能数据与 NUMA 配置见 [吞吐报告](docs/throughput-0.8.md)。
+
+
 ## 原生引擎（自动）
+
+**0.8 原生快速路径**：新版 DLL 有 `sfe_board_abi=1` 时，一行榜单在计算线程准备一次不可变战斗参数，局与局之间复用；每局仍调用原来的模拟函数，保留原来的 seed、index 和顺序合并。分片与累加器留在 DLL 内，客户端只接收进度和最后分数。普通浮点值直接保留其位模式，超出 JS 整数精度范围、负零或非有限值通过原规范化逻辑处理。启动时先以 1 局、7 局和逆序切片对照 WASM，一致才启用。旧 DLL 或官方库没有这个入口时继续走普通接口；环境变量 `SIMFLEET_NATIVE_FAST=0` 可临时关闭，便于同条件对比。紫卡评分同时复用线程上最近一个冻结请求的解析计划，请求形状改变或开始新搜索时替换，线程结束时释放；缓存不保存完整搜索结果。
+
+**多插槽 Xeon、AMD 多 CCD/X3D**：`simfleet cpu` 显示 NUMA 节点、处理器组、末级缓存容量和计算线程顺序。`placement=auto` 在多节点、多缓存域或 Intel 大小核上启用拓扑放置，单节点单缓存的普通 CPU 保持系统调度。先分配物理核心，再用 SMT；同一 NUMA 节点内优先较大缓存的 CCD，但不会为了大缓存提前使用 SMT、放着另一 CCD 的物理核心不用。多个节点按物理核心轮流分配预算，每个任务优先留在起始节点/缓存域，空闲线程可跨域接活。计算线程绑定完成后才初始化战斗参数，尽量让内存首次分配发生在使用它的节点。Windows 支持超过 64 逻辑处理器的处理器组，Linux 尊重进程允许的 CPU 集；macOS 继续使用现有 QoS 机制。
+
+同机多开 10 线程进程时，可分别设置 `cpu_offset=0/10/20`；若要按插槽分开，先用 `simfleet cpu` 查实际节点，再设置各自的 `numa_nodes=[0]`、`[1]`。这是固定划分，不会自动感知其他进程的预算；配置要避免重叠。`placement=system` 与节点/偏移选择不能同时使用。X3D 和多插槽 Xeon 的实际收益要在对应机器上测量，单 CCD 9700X 的测试不能替代。
+
+复测示例：`simfleet bench --lanes 16 --repeat 5 --backend native --placement cache`；`--placement system` 对照系统调度；`--order order.json` 指定固定榜单输入。计算多个已保存任务可用 `simfleet replay task1.json task2.json --lanes 16 --placement numa`，结束会打印总时间，不提交结果。
 
 不用自己编译，也不用自己选。对网站正在用的引擎号，simfleet 依次找：
 
@@ -200,13 +225,13 @@ simfleet 因此有两个引擎：
 本仓库的 [native-engine](.github/workflows/native-engine.yml) Action 每 10 分钟计算一次 WFSim `main` 分支的引擎号（避开整点和半点：GitHub 负载高时会丢掉定时任务，整点最严重，原来的「每 30 分钟」曾连续 5 个小时一次都没跑；一次构建结束时 `main` 又换了引擎就马上再跑一次；同一个引擎编失败了，定时任务 3 小时内不再重试，手动触发随时重编）（wfsim.app 对 GitHub 的服务器会弹出人机验证，所以 Action 完全不访问网站；网站发布的引擎号就是它所用源码的哈希）。遇到还没发布过的引擎号，它会在那次提交上，用 WFSim 自己锁定的 Rust 和 wasm-bindgen 版本：
 
 1. 照 WFSim 的做法编译出 wasm，作为比对的参照；
-2. **把 Digital Extremes 的卡牌文本清空**（`tools/strip_card_text.py`），然后用这次提交原样的代码编译原生引擎（WFSim 的 [客户端约定](https://github.com/magenie33/wfsim/blob/main/docs/CLIENTS.md)：原生版必须是网站那次提交、未经修改）。每个平台编两份：一份任何 x86-64 都能跑，一份是 x86-64-v3（即 AVX2、FMA、BMI2 这一代指令，2013 年以后的 CPU 基本都有）。Windows 是 `<引擎号>.dll` / `<引擎号>-v3.dll`，Linux 是 `lib<引擎号>.so` / `lib<引擎号>-v3.so`；macOS（Apple 芯片）只编一份 `lib<引擎号>.dylib`，这个目标的基线就是 M1 的指令集，所有 M 系列都能跑。WFSim 对卡牌文本没有授权（见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)），所以发布的版本里不含它；引擎只拿这些文本做显示，不影响任何分数；
+2. **把 Digital Extremes 的卡牌文本清空**（`tools/strip_card_text.py`），然后从对应提交编译原生引擎。0.8 起在本地应用 `native-engine/patches/` 中适配成功的补丁：批次预处理入口、单线程直接评分、固定元数据复用；战斗模拟和 gas 计数代码保持原样，补丁清单随构建保存。每个平台编两份：一份任何 x86-64 都能跑，一份是 x86-64-v3（即 AVX2、FMA、BMI2 这一代指令，2013 年以后的 CPU 基本都有）。Windows 是 `<引擎号>.dll` / `<引擎号>-v3.dll`，Linux 是 `lib<引擎号>.so` / `lib<引擎号>-v3.so`；macOS（Apple 芯片）只编一份 `lib<引擎号>.dylib`，这个目标的基线就是 M1 的指令集，所有 M 系列都能跑。WFSim 对卡牌文本没有授权（见其 [LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)），所以发布的版本里不含它；引擎只拿这些文本做显示，不影响任何分数；
 3. 在 WFSim 仓库里提交的榜单快照上取一把武器（Braton Prime）的 8 条真实榜单（4 把尺子 × 2 种模式），每一份都和参照 wasm **逐位比对**（`simfleet check-native`：分数、work 和 gas），全部一致才发布。某个平台没通过就不发布它，那个平台继续用 wasm；
 4. 发布为 Release `engine-<引擎号>`，附 sha256，说明里写明对应的 WFSim 提交、simfleet 提交和构建记录。已经发布的文件从不替换，只补缺的。
 
 **本地发布更快**：Action 因为访问不了网站，每次都得先自己编一份参照 wasm，很慢。维护者在自己电脑上运行 `tools\publish-native-engine.ps1`：编两份 Windows 版，每份都直接和**网站正在用的 wasm** 比对 32 条榜单、WFSim 客户端约定里的 gas 测试向量（`tests/gas/rows.json`）和紫卡校验，全部通过才上传缺的文件。Linux 版仍由 Action 补上——它发现 Windows 版已经在了，就只编 Linux。
 
-**紫卡增益走原生**：WFSim 的优化器本来就保证原生与 wasm 算出同一个结果——随机种子与线程数无关，紫卡搜索的状态是每个线程自己的（就像浏览器里每个 worker 一个实例）。唯一的差别是每批评估的候选数：wasm 固定 16 个，原生是「工作线程数 × 4，至少 16」，而原生默认用「核心数 − 2」个线程，所以 6 个线程以上的机器上原生的搜索路径会和浏览器不同。WFSim 的请求本身就有 `threads` 字段，原生入口（`sfe_optimize`）给每个请求写上 `threads: 1`，每批就正好 16 个；这个字段只会出现在结果行的回放请求里，不进紫卡增益的答案（构筑、分数、work）。**WFSim 的代码原样使用，一行不改。**
+**紫卡增益走原生**：WFSim 的优化器本来就保证原生与 wasm 算出同一个结果——随机种子与线程数无关，紫卡搜索的状态是每个线程自己的（就像浏览器里每个 worker 一个实例）。唯一的差别是每批评估的候选数：wasm 固定 16 个，原生是「工作线程数 × 4，至少 16」，而原生默认用「核心数 − 2」个线程，所以 6 个线程以上的机器上原生的搜索路径会和浏览器不同。WFSim 的请求本身就有 `threads` 字段，原生入口（`sfe_optimize`）给每个请求写上 `threads: 1`，每批就正好 16 个；这个字段只会出现在结果行的回放请求里，不进紫卡增益的答案（构筑、分数、work）。本地优化不改变每批候选数、搜索路径或随机种子；单工作线程时直接在现有计算线程执行，不再另建线程等待。
 
 每次启动，simfleet 在后台线程上用一个小的紫卡搜索把原生和网站的 wasm 各跑一遍（领头、两片打分，和真实任务的流程一样，十来秒），**结果完全相同才让紫卡增益走原生**；这十来秒里领到的紫卡增益先等它的结论再开始（一个紫卡任务从开始到结束只在一边算，中途不换。以前是直接用 wasm 开始，结果整个任务都在 wasm 上算完，每个参与打分的核心各建一个 wasm 实例，16 核一下就多出 800 MB）。不一致就只用于榜单，`native_riven = false` 可以关掉。实测一个真实的紫卡任务（dual_toxocyst，180 秒战斗、4 个起点，2 核）：wasm 417 s，原生 **240 s**（快 1.74 倍），最佳构筑、分数 274.4998410739098、work 205,792,130,138、41,084 场战斗、6,761 个构筑全部相同，和浏览器 V8 的参照结果也一致。
 

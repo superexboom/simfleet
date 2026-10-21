@@ -1,0 +1,14 @@
+diff --git a/optimizer/src/descent.rs b/optimizer/src/descent.rs
+index 2ecde89f99..0f6538ad17 100644
+--- a/optimizer/src/descent.rs
++++ b/optimizer/src/descent.rs
+@@ -509,6 +509,9 @@ fn eval_point(
+ #[cfg(not(target_arch = "wasm32"))]
+ fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+     let threads = crate::worker_threads().min(items.len()).max(1);
++    if threads == 1 {
++        return items.iter().map(f).collect();
++    }
+     let chunk = items.len().div_ceil(threads).max(1);
+     let mut parts: Vec<Vec<R>> = Vec::new();
+     std::thread::scope(|scope| {

@@ -1,0 +1,103 @@
+{
+  "engines": {
+    "baseline": "872e90ffaf0d",
+    "candidate": "experimental-prepared"
+  },
+  "count": 100,
+  "full_row": true,
+  "repeats": 3,
+  "rows": [
+    {
+      "label": "braton_prime/demolisher/cycle",
+      "times": {
+        "baseline": [
+          3.686767000006512,
+          3.5427956999992603,
+          3.4734123000016552
+        ],
+        "candidate": [
+          3.098818599995866,
+          3.0438114999997197,
+          3.072254700004123
+        ]
+      },
+      "median_seconds": {
+        "baseline": 3.5427956999992603,
+        "candidate": 3.072254700004123
+      },
+      "speedup": 1.153158200065413,
+      "same": true,
+      "output_bytes": 246
+    },
+    {
+      "label": "torid/demolisher/cycle",
+      "times": {
+        "baseline": [
+          3.084453899995424,
+          2.635554000000411,
+          2.624265899998136
+        ],
+        "candidate": [
+          2.677646800002549,
+          2.1360184000004665,
+          2.1469520999962697
+        ]
+      },
+      "median_seconds": {
+        "baseline": 2.635554000000411,
+        "candidate": 2.1469520999962697
+      },
+      "speedup": 1.2275793204724923,
+      "same": true,
+      "output_bytes": 247
+    },
+    {
+      "label": "fulmin_prime/heavy_gunner/semi_auto",
+      "times": {
+        "baseline": [
+          0.9453562999988208,
+          0.9432187999991584,
+          0.9580649999988964
+        ],
+        "candidate": [
+          0.661549999997078,
+          0.6923482999991393,
+          0.6660555999987992
+        ]
+      },
+      "median_seconds": {
+        "baseline": 0.9453562999988208,
+        "candidate": 0.6660555999987992
+      },
+      "speedup": 1.4193354128401972,
+      "same": true,
+      "output_bytes": 238
+    },
+    {
+      "label": "kuva_hind/standard_multi_target/semi_auto",
+      "times": {
+        "baseline": [
+          1.4860782999967341,
+          1.5141932999977143,
+          1.9431812000038917
+        ],
+        "candidate": [
+          1.2271872999990592,
+          1.417586300005496,
+          1.4190645999988192
+        ]
+      },
+      "median_seconds": {
+        "baseline": 1.5141932999977143,
+        "candidate": 1.417586300005496
+      },
+      "speedup": 1.0681489373816915,
+      "same": true,
+      "output_bytes": 246
+    }
+  ],
+  "sha256": {
+    "baseline": "058d3eed2bf0f56862f1024dd8a227bee7eaa7113a9c38f61374b4e9b0846be0",
+    "candidate": "6290ce746b79adcd9813a94678f70a8f9768938379a3d0e58606afe462dc194f"
+  }
+}

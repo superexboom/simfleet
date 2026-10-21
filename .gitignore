@@ -8,3 +8,5 @@ simfleet.toml
 /dist
 /native-engine/Cargo.lock
 /reference
+__pycache__/
+*.pyc

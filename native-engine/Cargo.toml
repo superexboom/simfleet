@@ -10,7 +10,14 @@ license = "AGPL-3.0-or-later"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+fast-board = []
+cached-optimize = []
+
 [dependencies]
+anyhow = "1"
+serde = "1"
+wfsim-engine = { path = "../.wfsim-src/engine" }
 wfsim-webapi = { path = "../.wfsim-src/webapi" }
 wfsim-optimizer = { path = "../.wfsim-src/optimizer" }
 serde_json = { version = "1", features = ["raw_value", "float_roundtrip"] }

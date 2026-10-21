@@ -447,6 +447,10 @@ pub struct Fleet {
     starved_said: Option<Instant>,
     pub session_dropped: bool,
     pub offline: bool,
+    memory_guard: crate::maintenance::MemoryGuard,
+    memory_checked: Instant,
+    /// The drain finished and main may replace this process after saving config.
+    pub recycle: bool,
 }
 
 impl Fleet {
@@ -457,6 +461,7 @@ impl Fleet {
             s.backend = backend.into();
         });
         let proto = if cfg.protocol == 7 { 7 } else { sync::PROTOCOL };
+        let memory_guard = crate::maintenance::MemoryGuard::new(cfg.memory_limit_mb);
         let ids: Vec<String> = std::iter::once(cfg.verifier.clone()).chain(cfg.extra_verifiers.iter().cloned()).collect();
         let mut f = Fleet {
             net,
@@ -511,6 +516,9 @@ impl Fleet {
             mem_tight_at: None,
             row_cost_ms: 0.0,
             riven_seen: 0,
+            memory_guard,
+            memory_checked: Instant::now(),
+            recycle: false,
             meter: Meter::new(),
             yield_seen: (Instant::now(), sys::process_cpu_us(), crate::affinity::lane_totals().1),
             starved_since: None,
@@ -846,7 +854,7 @@ impl Fleet {
                     self.take_reply(gi, ahead, at, reply);
                 }
             }
-            if self.groups[gi].asking.is_some() || self.offline || self.stale || self.switch_to.is_some() || self.banned_until.is_some() || self.refused.is_some() {
+            if self.groups[gi].asking.is_some() || self.offline || self.stale || self.switch_to.is_some() || self.memory_guard.draining() || self.banned_until.is_some() || self.refused.is_some() {
                 continue;
             }
             // WHAT THE GROUP HOLDS: its packs and the riven gains it computes.
@@ -1030,7 +1038,9 @@ impl Fleet {
                 Ok(o) if o["ok"] != json!(false) => {
                     let runs = o["request"]["runs"].as_u64().unwrap_or(0);
                     self.ui.glog(gi, format!("{C_GO}[开始]{C_END} 榜单  {label}  {runs} 次模拟"));
-                    (Runner::Board(BoardRun::new(&o["request"], &ruler)), label, None)
+                    let mut row = BoardRun::new(&o["request"], &ruler);
+                    if backend == Backend::Native { row.enable_native(self.pool.code().clone(), &o["request"]); }
+                    (Runner::Board(row), label, None)
                 }
                 // A ROW THIS ENGINE REFUSES (protocol 8): said so in the next
                 // sync, given back, and never handed here again on this engine.
@@ -1122,6 +1132,7 @@ impl Fleet {
         for g in &mut self.groups {
             if std::mem::take(&mut g.journal_dirty) {
                 if let Err(e) = g.journal.save(&self.paths.dir) {
+                    g.journal_dirty = true;
                     if !self.journal_failed {
                         self.ui.log(format!("{C_BAD}[结果]{C_END} 无法把结果写进 {}：{e}", self.paths.dir.join("kept").display()));
                     }
@@ -1129,6 +1140,7 @@ impl Fleet {
                 }
             }
         }
+        self.journal_failed = self.groups.iter().any(|g| g.journal_dirty);
     }
 
     /// A PROTOCOL NEWER than this client's: it keeps working, and says so once.
@@ -1160,7 +1172,7 @@ impl Fleet {
         if wanted && self.signal_job.is_none() && now >= self.signal_next {
             self.signal_next = now + sync::jittered(self.dials.poll_ms);
             let net = self.net.clone();
-            self.signal_job = Some(std::thread::spawn(move || net.get(sync::SIGNAL_URL).ok().filter(|r| r.status == 200).map(|r| r.body)));
+            self.signal_job = Some(std::thread::spawn(move || net.get(&net.public_file(sync::SIGNAL_PATH)).ok().filter(|r| r.status == 200).map(|r| r.body)));
         }
     }
 
@@ -1229,7 +1241,7 @@ impl Fleet {
                 }
                 continue;
             }
-            let open = gi < self.open && !held_back && self.switch_to.is_none();
+            let open = gi < self.open && !held_back && self.switch_to.is_none() && !self.memory_guard.draining();
             let go = match (idle && open && now >= self.groups[gi].not_before).then(|| self.idle_go(gi, now)) {
                 Some(None) => continue,
                 // THE SIGNAL SHOWS WORK and its jitter runs: the sync for work
@@ -1560,14 +1572,17 @@ impl Fleet {
     /// leaders; lanes still free start a pack's next row.
     fn dispatch(&mut self) {
         for _ in 0..16 {
-            if self.fill_lanes() == 0 || !self.start_row() {
+            if self.fill_lanes(false) == 0 || !self.start_row() {
                 break;
             }
         }
+        // Local work first, then steal across nodes/cache domains when they
+        // would otherwise idle. A single task can still use the full budget.
+        if crate::placement::active() { self.fill_lanes(true); }
     }
 
     /// …one pass; the lanes it left free that a board row could use.
-    fn fill_lanes(&mut self) -> usize {
+    fn fill_lanes(&mut self, remote: bool) -> usize {
         let lanes = self.lanes();
         self.pool.ensure(lanes);
         crate::affinity::process_default(lanes);
@@ -1604,8 +1619,9 @@ impl Fleet {
                 let tag = self.pool.next_tag();
                 let job = match &mut t.runner {
                     // Never on a leader's lane: its next lead step must not wait.
-                    Runner::Board(b) if owner.is_none() => b.job(tag, lanes).map(|c| (backend, c)),
-                    Runner::Riven(r) if owner.is_none() || mine => r.job(lane, tag).map(|c| (r.backend, c)),
+                    Runner::Board(b) if owner.is_none() => b.job_on(tag, lanes, lane, remote).map(|c| (backend, c)),
+                    Runner::Riven(r) if (owner.is_none() || mine)
+                        && (remote || r.leader.is_none_or(|l| crate::placement::same_domain(l,lane))) => r.job(lane, tag).map(|c| (r.backend, c)),
                     _ => None,
                 };
                 if let Some((backend, call)) = job {
@@ -1635,11 +1651,10 @@ impl Fleet {
         let Some(id) = self.tag_task.remove(&d.tag) else { return };
         let Some(ti) = self.tasks.iter().position(|t| t.id == id) else { return };
         let lanes = self.lanes();
-        let backend = self.backend();
         let t = &mut self.tasks[ti];
         t.last_ran = Instant::now();
         let outcome = match &mut t.runner {
-            Runner::Board(b) => b.done(d, &mut self.exec, backend).map(|s| s.map(Finished::Board)),
+            Runner::Board(b) => b.done(d).map(|s| s.map(Finished::Board)),
             Runner::Riven(r) => r.done(d, lanes).map(|s| s.map(Finished::Riven)),
         };
         match outcome {
@@ -1970,6 +1985,9 @@ impl Fleet {
     /// kept, under the cap.
     fn control(&mut self) {
         self.watch_memory();
+        if self.memory_guard.draining() {
+            return;
+        }
         let cap = self.max_groups();
         let now = Instant::now();
         if self.cfg.slots > 0 {
@@ -2183,6 +2201,20 @@ impl Fleet {
         self.refresh_stats();
         let mut shown = Instant::now();
         while !self.quit() {
+            if self.maintain_memory() {
+                self.shutdown();
+                while !self.quit() && self.groups.iter().any(|g| g.journal_dirty) {
+                    // Never replace the process while its only copy of an
+                    // answer is in RAM. Retry persistence without taking work.
+                    std::thread::sleep(Duration::from_secs(1));
+                    self.save_journals();
+                }
+                if !self.quit() && self.ctl.paused.load(Ordering::Relaxed) {
+                    continue;
+                }
+                self.recycle = !self.quit();
+                return;
+            }
             self.cool_down_over();
             if let Some(why) = self.held_why() {
                 if !self.tasks.is_empty() || !self.packs.is_empty() {
@@ -2248,6 +2280,30 @@ impl Fleet {
             }
         }
         self.shutdown();
+    }
+
+    /// Stop asking first, finish what is held, then let the OS reclaim the
+    /// native libraries' global allocations as well as their thread heaps.
+    fn maintain_memory(&mut self) -> bool {
+        // A manual pause must survive until the user resumes it. A new
+        // process starts unpaused, so defer maintenance while P is active.
+        if self.ctl.paused.load(Ordering::Relaxed) {
+            return false;
+        }
+        let now = Instant::now();
+        if self.memory_checked.elapsed() >= Duration::from_secs(5) {
+            self.memory_checked = now;
+            let bytes = sys::process_memory();
+            if self.memory_guard.observe(bytes, now) {
+                self.ui.log(format!(
+                    "{C_GO}[内存]{C_END} 本进程 {:.0} MiB，超过回收线 {} MiB；停止领新活，做完手上的任务后自动换新进程（最多等待 15 分钟）",
+                    bytes.unwrap_or(0) as f64 / 1048576.0, self.cfg.memory_limit_mb
+                ));
+            }
+        }
+        let empty = self.tasks.is_empty() && self.packs.is_empty() && self.sending.is_empty()
+            && self.groups.iter().all(|g| g.asking.is_none() && g.syncing.is_none());
+        self.memory_guard.ready(empty, now)
     }
 
     /// Compute saved tasks (`work` as `/api/board/work` handed them out), all
@@ -2324,6 +2380,9 @@ impl Fleet {
     /// WFSim's own) — while the lanes go on with the old one.
     /// `until`: when the site stops taking ours ("" already; `None` not said).
     fn served_moved(&mut self, engine: String, until: Option<String>) {
+        if self.memory_guard.draining() {
+            return;
+        }
         let busy = self.engine_load.as_ref().is_some_and(|(e, _)| *e == engine) || self.switch_to.as_ref().is_some_and(|(r, _)| r.engine == engine);
         if busy || Instant::now() < self.engine_retry {
             return;
@@ -2441,7 +2500,7 @@ impl Fleet {
                 }
             }
         }
-        if self.native_load.is_some() || self.engine_load.is_some() || self.switch_to.is_some() || have == Some(false) || !self.cfg.native_engine
+        if self.memory_guard.draining() || self.native_load.is_some() || self.engine_load.is_some() || self.switch_to.is_some() || have == Some(false) || !self.cfg.native_engine
             || self.native_checked.elapsed() < Duration::from_secs(600)
         {
             return;
@@ -2500,7 +2559,7 @@ impl Fleet {
             // read as the page reads it: files on the CDN, the worker's endpoint
             // where a file is not reached (docs/BOARD.md §"The public stats").
             let demand = net
-                .get(DEMAND_FILE)
+                .get(&net.public_file(DEMAND_FILE))
                 .ok()
                 .map(|r| r.body)
                 .filter(|b| b["ok"] == json!(true) && b["v"] == json!(1))
@@ -2602,14 +2661,14 @@ impl Fleet {
 /// THE PUBLIC FILES the page reads before the worker (docs/BOARD.md §"The
 /// public stats", §"Demand"): what is owed and who is computing, and the
 /// rankings, each period's, written by the worker's cron.
-const DEMAND_FILE: &str = "https://cdn.wfsim.app/demand.json";
-const RANKING_FILE: &str = "https://cdn.wfsim.app/stats/contributors.json";
+const DEMAND_FILE: &str = "/demand.json";
+const RANKING_FILE: &str = "/stats/contributors.json";
 /// …the ranking passed over once older than this by the server's clock, or of another day (its keys are that day's).
 const RANKING_STALE_MS: u64 = 30 * 60_000;
 
 /// The week's ranking from the file, in the shape `/api/contributors` answers.
 fn ranking_file(net: &Net) -> Option<Value> {
-    let f = net.get(RANKING_FILE).ok().filter(|r| r.status == 200)?.body;
+    let f = net.get(&net.public_file(RANKING_FILE)).ok().filter(|r| r.status == 200)?.body;
     let now = net.server_now_ms();
     let at = f["at"].as_str().and_then(sys::parse_iso)?;
     let fresh = f["v"] == json!(1) && now.saturating_sub(at) <= RANKING_STALE_MS && f["day"].as_str() == Some(&sys::iso(now)[..10]);

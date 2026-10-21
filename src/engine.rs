@@ -235,6 +235,53 @@ type InstallFn = unsafe extern "C" fn(*const u8, usize, *mut usize) -> *mut u8;
 type FreeFn = unsafe extern "C" fn(*mut u8, usize);
 type IdFn = unsafe extern "C" fn() -> *const std::ffi::c_char;
 
+type BoardNew = unsafe extern "C" fn(*const u8, usize) -> *mut std::ffi::c_void;
+type BoardRuns = unsafe extern "C" fn(*mut std::ffi::c_void, u32, u32) -> i64;
+type BoardScore = unsafe extern "C" fn(*mut std::ffi::c_void, *mut usize) -> *mut u8;
+type BoardDrop = unsafe extern "C" fn(*mut std::ffi::c_void);
+#[derive(Clone, Copy)]
+struct BoardApi { new: BoardNew, runs: BoardRuns, score: BoardScore, drop: BoardDrop }
+
+/// A DLL-owned context, held until every job ends even when its task is
+/// cancelled or its engine is replaced. The originating DLL frees it.
+pub struct NativeBoard {
+    ptr: *mut std::ffi::c_void,
+    api: BoardApi,
+    code: Arc<Code>,
+}
+// SAFETY: ABI 1 accepts concurrent disjoint runs; the DLL synchronizes its
+// accumulator. Arc keeps the context and its DLL alive until all jobs end.
+unsafe impl Send for NativeBoard {}
+unsafe impl Sync for NativeBoard {}
+impl NativeBoard {
+    pub fn new(code: Arc<Code>, request: &serde_json::Value, ruler: &str, checking: bool) -> Option<Arc<Self>> {
+        let n = code.native.as_ref()?;
+        if !checking && (!n.board_checked.load(std::sync::atomic::Ordering::Acquire)
+            || std::env::var("SIMFLEET_NATIVE_FAST").as_deref() == Ok("0")) { return None; }
+        let api = n.board?;
+        let body = serde_json::json!({"request":request,"ruler":ruler}).to_string();
+        // SAFETY: input bytes live through the call; context owns its copy.
+        let ptr = unsafe { (api.new)(body.as_ptr(), body.len()) };
+        (!ptr.is_null()).then(|| Arc::new(Self { ptr, api, code }))
+    }
+    fn runs(&self, from: u32, count: u32) -> Result<String> {
+        let n = unsafe { (self.api.runs)(self.ptr, from, count) };
+        if n < 0 { bail!("原生批次执行失败"); }
+        Ok(n.to_string())
+    }
+    fn score(&self) -> Result<String> {
+        let n = self.code.native.as_ref().expect("context holds its library");
+        unsafe {
+            let mut len = 0;
+            let ptr = (self.api.score)(self.ptr, &mut len);
+            n.take(ptr, len, "board score")
+        }
+    }
+}
+impl Drop for NativeBoard {
+    fn drop(&mut self) { unsafe { (self.api.drop)(self.ptr) }; }
+}
+
 type LibJob = Box<dyn FnOnce() + Send>;
 
 /// THE LIBRARY THREAD: every native library is loaded, and let go, on this
@@ -311,6 +358,9 @@ pub struct NativeLib {
     _lib: LibHandle,
     api: ApiFn,
     optimize: Option<OptimizeFn>,
+    board: Option<BoardApi>,
+    pub board_checked: std::sync::atomic::AtomicBool,
+    inline_optimizer: bool,
     free: FreeFn,
     pub engine_id: String,
     /// The CPU level it was built for: "" or "-v3" (`work::native_variants`).
@@ -333,11 +383,25 @@ impl NativeLib {
             let free: FreeFn = *lib.lib().get::<FreeFn>(b"sfe_free\0")?;
             let id: IdFn = *lib.lib().get::<IdFn>(b"sfe_engine_id\0")?;
             let optimize = lib.lib().get::<OptimizeFn>(b"sfe_optimize\0").ok().map(|f| *f);
+            let capabilities = lib.lib().get::<unsafe extern "C" fn() -> u32>(b"sfe_capabilities\0").ok().map(|f| f()).unwrap_or(0);
+            let board = (|| -> Option<BoardApi> {
+                let abi = lib.lib().get::<unsafe extern "C" fn() -> u32>(b"sfe_board_abi\0").ok()?;
+                if abi() != 1 { return None; }
+                Some(BoardApi {
+                    new: *lib.lib().get::<BoardNew>(b"sfe_board_new\0").ok()?,
+                    runs: *lib.lib().get::<BoardRuns>(b"sfe_board_runs\0").ok()?,
+                    score: *lib.lib().get::<BoardScore>(b"sfe_board_score\0").ok()?,
+                    drop: *lib.lib().get::<BoardDrop>(b"sfe_board_drop\0").ok()?,
+                })
+            })();
             let engine_id = std::ffi::CStr::from_ptr(id()).to_string_lossy().to_string();
             Ok(NativeLib {
                 _lib: lib,
                 api,
                 optimize,
+                board,
+                board_checked: Default::default(),
+                inline_optimizer: capabilities & 2 != 0,
                 free,
                 engine_id,
                 variant: "",
@@ -378,6 +442,9 @@ impl NativeLib {
                 _lib: lib,
                 api,
                 optimize: None,
+                board: None,
+                board_checked: Default::default(),
+                inline_optimizer: false,
                 free,
                 engine_id: engine.to_string(),
                 variant: "",
@@ -476,6 +543,8 @@ pub enum Call {
     /// A board row's fold (`/api/board/fold`): the answer is its `acc`, read
     /// on the lane as the page reads it (work.rs `acc_text`).
     Fold(String),
+    NativeRuns(Arc<NativeBoard>, u32, u32),
+    NativeScore(Arc<NativeBoard>),
 }
 
 /// A wasm instance its thread has not computed on for this long, while the
@@ -496,11 +565,18 @@ impl Exec {
         Exec { code, wasm: None, wasm_at: Instant::now() }
     }
     pub fn run(&mut self, backend: Backend, call: &Call) -> Result<String> {
+        // Opaque calls bypass door(), but must still retire a WASM instance
+        // left behind when this lane adopted the native engine.
+        if matches!(call,Call::NativeRuns(..)|Call::NativeScore(..)) && self.wasm.is_some() && self.wasm_at.elapsed()>=WASM_IDLE {
+            self.wasm=None;
+        }
         match call {
             Call::Api(path, body) => self.door(backend, Some(path), body),
             Call::Optimize(body) => self.door(backend, None, body),
             Call::Runs(body, count) => crate::work::shards_text(&self.door(backend, Some("/api/board/runs"), body)?, *count),
             Call::Fold(body) => crate::work::acc_text(&self.door(backend, Some("/api/board/fold"), body)?),
+            Call::NativeRuns(row, from, count) => row.runs(*from, *count),
+            Call::NativeScore(row) => row.score(),
         }
     }
     /// `api(path, body)`, or `optimize(body)` with no path.
@@ -572,7 +648,11 @@ pub struct Pool {
     /// What each lane runs its next job with (`adopt`).
     latest: Arc<std::sync::Mutex<Arc<Code>>>,
     /// Each lane's thread; `None` while it has none.
-    lanes: Vec<Option<mpsc::Sender<Job>>>,
+    lanes: Vec<Option<Worker>>,
+    retired: Vec<std::thread::JoinHandle<()>>,
+    // Native TLS destructors run after the worker closure returns. Libraries
+    // must survive thread exit, not merely the last API call or Exec drop.
+    keep: Vec<Arc<Code>>,
     pending: Vec<usize>,
     /// When each lane was last given work or gave an answer.
     active: Vec<Instant>,
@@ -583,11 +663,39 @@ pub struct Pool {
     pub busy_ms: f64,
 }
 
+struct Worker { tx: mpsc::Sender<Job>, handle: std::thread::JoinHandle<()> }
+
+impl Drop for Pool {
+    fn drop(&mut self) {
+        for worker in self.lanes.iter_mut().filter_map(Option::take) {
+            drop(worker.tx);
+            self.retired.push(worker.handle);
+        }
+        let handles=std::mem::take(&mut self.retired);
+        let libraries=std::mem::take(&mut self.keep);
+        // Engine replacement and cancellation never block on a long call.
+        // The reaper, and therefore the DLLs, outlive all native TLS cleanup.
+        if handles.is_empty() { return; }
+        let (tx,rx)=mpsc::sync_channel::<(Vec<std::thread::JoinHandle<()>>,Vec<Arc<Code>>)>(1);
+        let join=|(handles,libraries):(Vec<std::thread::JoinHandle<()>>,Vec<Arc<Code>>)| {
+            for handle in handles { let _=handle.join(); }
+            drop(libraries);
+        };
+        match std::thread::Builder::new().name("lane-reaper".into()).spawn(move || {
+            if let Ok(resources)=rx.recv() { join(resources); }
+        }) {
+            Ok(_) => { if let Err(e)=tx.send((handles,libraries)) { join(e.0); } }
+            // Resource exhaustion must not unload code underneath TLS cleanup.
+            Err(_) => join((handles,libraries)),
+        }
+    }
+}
+
 impl Pool {
     pub fn new(code: Arc<Code>) -> Pool {
         let (done_tx, done_rx) = mpsc::channel();
         let latest = Arc::new(std::sync::Mutex::new(code.clone()));
-        Pool { code, latest, lanes: Vec::new(), pending: Vec::new(), active: Vec::new(), done_tx, done_rx, tag: 0, busy_ms: 0.0 }
+        Pool { keep:vec![code.clone()],retired:Vec::new(),code, latest, lanes: Vec::new(), pending: Vec::new(), active: Vec::new(), done_tx, done_rx, tag: 0, busy_ms: 0.0 }
     }
     pub fn code(&self) -> &Arc<Code> {
         &self.code
@@ -595,6 +703,7 @@ impl Pool {
     /// A native build of the same engine, found while the lanes work: each lane
     /// takes it up at its next job, keeping its instance and what lives there.
     pub fn adopt(&mut self, code: Arc<Code>) {
+        self.keep.push(code.clone());
         *self.latest.lock().unwrap_or_else(|e| e.into_inner()) = code.clone();
         self.code = code;
     }
@@ -609,7 +718,7 @@ impl Pool {
     /// and the lane's next job starts a new one.
     pub fn retire(&mut self, lane: usize) {
         if let Some(l) = self.lanes.get_mut(lane) {
-            *l = None;
+            if let Some(worker)=l.take() { drop(worker.tx);self.retired.push(worker.handle); }
         }
     }
     /// EVERY LANE IDLE FOR `after` let go (`retire`), but those `keep` names —
@@ -618,16 +727,16 @@ impl Pool {
     pub fn retire_idle(&mut self, after: Duration, keep: &dyn Fn(usize) -> bool) {
         for lane in 0..self.lanes.len() {
             if self.lanes[lane].is_some() && self.pending[lane] == 0 && self.active[lane].elapsed() >= after && !keep(lane) {
-                self.lanes[lane] = None;
+                self.retire(lane);
             }
         }
     }
-    fn spawn(&self, lane: usize) -> mpsc::Sender<Job> {
+    fn spawn(&self, lane: usize) -> Worker {
         let (tx, rx) = mpsc::channel::<Job>();
         let done = self.done_tx.clone();
         let code = self.code.clone();
         let latest = self.latest.clone();
-        std::thread::Builder::new()
+        let handle=std::thread::Builder::new()
             .name(format!("lane-{lane}"))
             .stack_size(8 << 20)
             .spawn(move || {
@@ -646,7 +755,8 @@ impl Pool {
                     // WHAT THE LANE WAS GIVEN: CPU time against wall time — but
                     // not for a native search, which computes on a worker
                     // thread of the optimizer's own while this one waits.
-                    let away = matches!((job.backend, &job.call), (Backend::Native, Call::Optimize(_)));
+                    let away = matches!((job.backend, &job.call), (Backend::Native, Call::Optimize(_)))
+                        && !exec.code.native.as_ref().is_some_and(|n| n.inline_optimizer);
                     let (c, w) = if away { (0, 0) } else { (crate::sys::thread_cpu_us().saturating_sub(cpu), (ms * 1000.0) as u64) };
                     crate::affinity::note_job(lane, c, w);
                     if done.send(Done { tag: job.tag, lane, ms, out }).is_err() {
@@ -655,7 +765,7 @@ impl Pool {
                 }
             })
             .expect("spawn lane");
-        tx
+        Worker { tx,handle }
     }
     pub fn next_tag(&mut self) -> u64 {
         self.tag += 1;
@@ -665,6 +775,10 @@ impl Pool {
         self.pending.get(lane).copied().unwrap_or(0)
     }
     pub fn send(&mut self, lane: usize, job: Job) {
+        let mut i=0;
+        while i<self.retired.len() {
+            if self.retired[i].is_finished() { let _=self.retired.swap_remove(i).join(); } else { i+=1; }
+        }
         self.ensure(lane + 1);
         if self.lanes[lane].is_none() {
             self.lanes[lane] = Some(self.spawn(lane));
@@ -672,7 +786,7 @@ impl Pool {
         self.pending[lane] += 1;
         self.active[lane] = Instant::now();
         if let Some(tx) = &self.lanes[lane] {
-            let _ = tx.send(job);
+            let _ = tx.tx.send(job);
         }
     }
     pub fn recv(&mut self, wait: Duration) -> Option<Done> {
@@ -706,6 +820,38 @@ mod tests {
             std::arch::asm!("mov {}, fs:[0]", out(reg) t)
         };
         t
+    }
+
+    #[test]
+    #[ignore]
+    fn row_and_library_survive_pool_cancellation() {
+        let path=std::path::PathBuf::from(std::env::var("SIMFLEET_TEST_LIB").expect("library"));
+        let wasm=std::fs::read(std::env::var("SIMFLEET_TEST_WASM").expect("wasm")).unwrap();
+        let cache=std::env::temp_dir().join(format!("simfleet-cancel-{}.cwasm",std::process::id()));
+        let code=Arc::new(Code{wasm:WasmCode::load(&wasm,&cache).unwrap(),native:Some(NativeLib::open(&path).unwrap())});
+        let req=serde_json::json!({"weapon":"braton_prime","mods":["serration","split_chamber"],"enemy":"corrupted_heavy_gunner","level":100,"duration":1.0,"runs":64,"seed":42});
+        {
+            let mut exec=Exec::new(code.clone());
+            exec.api(Backend::Wasm,"/api/board/nothing","{}".into()).unwrap();
+            assert!(exec.wasm.is_some());
+            exec.wasm_at=Instant::now()-WASM_IDLE;
+            let r=NativeBoard::new(code.clone(),&req,"demolisher",true).unwrap();
+            exec.run(Backend::Native,&Call::NativeRuns(r,0,1)).unwrap();
+            assert!(exec.wasm.is_none(),"fast calls retained an obsolete WASM instance");
+        }
+        let row=NativeBoard::new(code.clone(),&req,"demolisher",true).expect("opaque ABI");
+        let weak=Arc::downgrade(&row);
+        let mut pool=Pool::new(code.clone());
+        for lane in 0..4 {
+            pool.send(lane,Job{tag:lane as u64,backend:Backend::Native,call:Call::NativeRuns(row.clone(),lane as u32*16,16)});
+        }
+        drop(row);drop(code);drop(pool);
+        let until=Instant::now()+Duration::from_secs(15);
+        while weak.upgrade().is_some() && Instant::now()<until {std::thread::sleep(Duration::from_millis(10));}
+        assert!(weak.upgrade().is_none(),"cancelled row remained held");
+        // Drain unloads already queued to the loader thread.
+        on_lib_thread(||());
+        let _=std::fs::remove_file(cache);
     }
 
     /// A LIBRARY OPENED FROM A THREAD THAT ENDS (a background engine fetch),
