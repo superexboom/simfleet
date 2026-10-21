@@ -6,6 +6,12 @@ uses its dirty worktree files. Optional local patches are in `patches/`; a patch
 that no longer applies is skipped, and its associated feature is not enabled.
 Each library records the upstream commit, local patches and SHA-256 beside it.
 
+Install the engine-identity helper dependencies with
+`python -m pip install -r tools/requirements-native.txt`. The identity helper
+loads only the upstream `engine_id` dependency definitions and checkout-local
+modules (including `rust_tokens`), without running the site build. Its unit
+tests run before native CI discovery and on the client CI matrix.
+
 `revision` versions the local implementation separately from WFSim's engine
 identity. Revision 1 is published as `<engine>-sfe1[-v3].dll` (or the platform's
 library spelling). simfleet 0.8.1 tries this revision before legacy libraries,

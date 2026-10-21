@@ -1,0 +1,2 @@
+# Upstream's engine_id now reads data/prose.yaml through PyYAML.
+PyYAML>=6,<7

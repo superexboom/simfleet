@@ -18,28 +18,47 @@ one first: WFSim's site is built on its CI's Linux runner since 532015dd
 """
 import ast
 import builtins
-import hashlib
-import json
-import os
+import importlib
 import pathlib
-import re
 import sys
-
-NAMES = ("ENGINE_SOURCES", "ENGINE_SOURCES_NOT")
 
 
 def definitions(root: pathlib.Path):
-    """The checkout's top-level constants the id reads and every function its
-    script defines, compiled - defined only, nothing called."""
+    """Only engine_id's reachable definitions, constants and imports.
+
+    Imports such as rust_tokens and derived constants such as PROSE_QUOTED
+    belong to the checkout's hash algorithm too. Never execute the packager's
+    top-level build, file-copy or publishing statements.
+    """
     text = (root / "scripts" / "build_site_app.py").read_text(encoding="utf-8")
     tree = ast.parse(text)
-    keep = []
+    bindings = {}
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             node.decorator_list = []
-            keep.append(node)
-        elif isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in NAMES for t in node.targets):
-            keep.append(node)
+            bindings[node.name] = node
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                for name in ast.walk(target):
+                    if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Store):
+                        bindings[name.id] = node
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for name in node.names:
+                bound = name.asname or (name.name.split('.')[0] if isinstance(node, ast.Import) else name.name)
+                bindings[bound] = node
+    needed, pending = set(), ['engine_id']
+    while pending:
+        name = pending.pop()
+        if name in needed or name in {'ROOT', 'sorted'} or name not in bindings:
+            continue
+        needed.add(name)
+        pending.extend(n.id for n in ast.walk(bindings[name]) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load))
+    if 'engine_id' not in needed:
+        raise ValueError('upstream build script does not define engine_id')
+    selected = {id(bindings[name]) for name in needed}
+    keep = [node for node in tree.body if id(node) in selected or
+            (isinstance(node, ast.ImportFrom) and node.module == '__future__')]
     return compile(ast.Module(body=keep, type_ignores=[]), "build_site_app.py", "exec")
 
 
@@ -50,10 +69,27 @@ def engine_id(root: pathlib.Path, code, fold_case: bool) -> str:
             # Python sorts paths by their parts, folded on Windows only.
             return builtins.sorted(items, key=lambda p: [x.lower() if fold_case else x for x in p.as_posix().split("/")])
         return builtins.sorted(items, *args, **kw)
-    ns = {"__name__": "wfsim_build_site_app", "ROOT": root, "Path": pathlib.Path, "hashlib": hashlib,
-          "json": json, "os": os, "re": re, "sys": sys, "sorted": ordered}
-    exec(code, ns)
-    return ns["engine_id"]()
+    ns = {"__name__": "wfsim_build_site_app", "__file__": str(root / 'scripts' / 'build_site_app.py'),
+          "ROOT": root, "sorted": ordered}
+    scripts = root / 'scripts'
+    # Build scripts may examine several commits in one process. A helper from
+    # another checkout must not silently determine this checkout's identity.
+    local_names = {p.stem for p in scripts.glob('*.py')}
+    previous = {name: sys.modules.pop(name) for name in local_names if name in sys.modules}
+    old_path = sys.path[:]
+    sys.path.insert(0, str(scripts))
+    importlib.invalidate_caches()
+    try:
+        exec(code, ns)
+        result = ns['engine_id']()
+        if not isinstance(result, str) or len(result) != 12 or any(c not in '0123456789abcdef' for c in result):
+            raise ValueError(f'invalid upstream engine id: {result!r}')
+        return result
+    finally:
+        sys.path[:] = old_path
+        for name in local_names:
+            sys.modules.pop(name, None)
+        sys.modules.update(previous)
 
 
 if __name__ == "__main__":

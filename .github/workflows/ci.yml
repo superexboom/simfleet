@@ -13,6 +13,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
+      - run: python -m unittest discover -s tools -p test_engine_id.py
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --release --locked -- --nocapture
