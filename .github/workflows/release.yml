@@ -32,7 +32,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.os }}
-          path: dist/simfleet-*
+          path: |
+            dist/simfleet-*-windows-x64.zip
+            dist/simfleet-*-linux-x64.tar.gz
+            dist/simfleet-*-macos-arm64.tar.gz
 
   publish:
     needs: build
@@ -49,7 +52,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${GITHUB_REF_NAME}"
-          sums=$(cd in && cat *.sha256 | awk '{print "- `"$2"`: `"$1"`"}')
+          shopt -s nullglob
+          files=(in/simfleet-*-windows-x64.zip in/simfleet-*-linux-x64.tar.gz in/simfleet-*-macos-arm64.tar.gz)
+          [ "${#files[@]}" -eq 3 ]
+          sums=$(sha256sum "${files[@]}" | awk '{sub(/^in\//, "", $2); print "- `"$2"`: `"$1"`"}')
           {
             echo "simfleet ${tag} — WFSim 志愿计算客户端，单文件，无需安装 Rust 或运行库。"
             echo
@@ -66,4 +72,4 @@ jobs:
             echo
             echo "$sums"
           } > notes.md
-          gh release create "$tag" in/simfleet-* -R "$GITHUB_REPOSITORY" --title "simfleet $tag" --notes-file notes.md
+          gh release create "$tag" "${files[@]}" -R "$GITHUB_REPOSITORY" --title "simfleet $tag" --notes-file notes.md

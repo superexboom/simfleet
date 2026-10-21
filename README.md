@@ -30,7 +30,7 @@
 
 ## 上手
 
-0.8.1 的本地原生库优化了紫卡 lead 的重复元数据处理和中间报告；固定请求对照与适用范围见 [紫卡 lead 优化](docs/riven-lead-0.8.1.md)。`-native` 包包含这份原生库，普通包也会优先下载带 `-sfe1` 修订号的新库，避免沿用同一引擎 ID 的旧构建。旧库保持可回退。
+0.8.1 优化了紫卡 lead 的重复元数据处理和中间报告。客户端会自动下载带 `-sfe1` 修订号的原生库，避免沿用同一引擎 ID 的旧构建。引擎在 [独立 Release](https://github.com/superexboom/simfleet/releases/tag/engine-872e90ffaf0d) 发布，客户端压缩包只包含程序、README 和许可说明。旧库保持可回退；技术细节见 [紫卡 lead 优化](https://github.com/superexboom/simfleet/blob/v0.8.1/docs/riven-lead-0.8.1.md)。
 
 **下载**：在 [Releases](https://github.com/superexboom/simfleet/releases) 下载 `simfleet-<版本>-windows-x64.zip` 并解压。只需要 Windows 10/11 x64，不需要装 Rust 或任何运行库。
 
@@ -197,8 +197,7 @@ simfleet 因此有两个引擎：
 
 结束计算线程只能释放线程自己的搜索状态。原生引擎还有全局缓存、请求路径中永久保留的分配，以及 DLL 卸载后分配器没有归还的页面；WASM 的线性内存也不会缩小。换进程由系统收回整个地址空间，因此这些内存都能回收。上游引擎保持原样，客户端继续逐位验算。
 
-`tools/check-maintenance.py` 可以在本机模拟协议 8，连续检查排空、交结果和自动换进程。它使用虚构 id 和本地服务器，不领取真实任务；需要 Python 和 `psutil`，参数见脚本帮助。初始内存调查见 [审查报告](docs/performance-2026-10-21.md)，0.8 的性能数据与 NUMA 配置见 [吞吐报告](docs/throughput-0.8.md)。
-
+`tools/check-maintenance.py` 可以在本机模拟协议 8，连续检查排空、交结果和自动换进程。它使用虚构 id 和本地服务器，不领取真实任务；需要 Python 和 `psutil`，参数见脚本帮助。初始内存调查见 [审查报告](https://github.com/superexboom/simfleet/blob/v0.8.1/docs/performance-2026-10-21.md)，0.8 的性能数据与 NUMA 配置见 [吞吐报告](https://github.com/superexboom/simfleet/blob/v0.8.1/docs/throughput-0.8.md)。
 
 ## 原生引擎（自动）
 
