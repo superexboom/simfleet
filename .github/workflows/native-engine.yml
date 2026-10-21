@@ -261,6 +261,7 @@ jobs:
           tree="https://github.com/$GITHUB_REPOSITORY/tree/$GITHUB_SHA"
           sums=""
           for f in "${files[@]}"; do
+            grep -qx "$(basename "$f")" <<< "$have" && continue
             sums+="- \`$(basename "$f")\`: \`$(cut -d' ' -f1 "$f.sha256")\`"$'\n'
           done
           via="native-engine/ at simfleet [\`$GITHUB_SHA\`]($tree) (mimalloc as the allocator, as WFSim's own library has it)"

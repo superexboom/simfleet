@@ -33,6 +33,16 @@ if ($WithNativeEngine) {
     $engineStage = Join-Path $stage 'engines'
     New-Item -ItemType Directory -Force -Path $engineStage | Out-Null
     foreach ($lib in $libraries) {
+        $manifest = Get-Content -Raw -LiteralPath ($lib.FullName + '.build.json') | ConvertFrom-Json
+        if ((Get-FileHash -LiteralPath $lib.FullName).Hash.ToLower() -ne $manifest.sha256) { throw "Library hash mismatch: $($lib.Name)" }
+        foreach ($entry in $manifest.wrapper_files.PSObject.Properties) {
+            $sourcePath = Join-Path $root ($entry.Name.Replace('\','/'))
+            if ((Get-FileHash -LiteralPath $sourcePath).Hash.ToLower() -ne $entry.Value) { throw "Rebuild $($lib.Name): wrapper source changed ($($entry.Name))" }
+        }
+        foreach ($entry in $manifest.patch_files.PSObject.Properties) {
+            $sourcePath = Join-Path $root "native-engine/patches/$($entry.Name)"
+            if ((Get-FileHash -LiteralPath $sourcePath).Hash.ToLower() -ne $entry.Value) { throw "Rebuild $($lib.Name): patch changed ($($entry.Name))" }
+        }
         foreach ($path in @($lib.FullName, ($lib.FullName + '.sha256'), ($lib.FullName + '.build.json'))) {
             Copy-Item -LiteralPath $path -Destination $engineStage
         }
