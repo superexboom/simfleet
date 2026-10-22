@@ -40,6 +40,11 @@ on:
   schedule:
     - cron: "7-59/10 * * * *"
   workflow_dispatch:
+    inputs:
+      verify_existing:
+        description: 'Rebuild and validate the current engine even when its assets already exist (never replaces published files)'
+        type: boolean
+        default: false
 permissions:
   contents: write
   actions: write
@@ -68,6 +73,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          VERIFY_EXISTING: ${{ inputs.verify_existing }}
         run: |
           git clone -q --depth 1 https://github.com/magenie33/wfsim.git wfsim
           commit=$(git -C wfsim rev-parse HEAD)
@@ -83,6 +89,7 @@ jobs:
           missing "$stem.dll" "$stem.dll.sha256" "$stem.dll.build.json" "$stem-v3.dll" "$stem-v3.dll.sha256" "$stem-v3.dll.build.json" && win=true
           missing "lib$stem.so" "lib$stem.so.sha256" "lib$stem.so.build.json" "lib$stem-v3.so" "lib$stem-v3.so.sha256" "lib$stem-v3.so.build.json" && lin=true
           missing "lib$stem.dylib" "lib$stem.dylib.sha256" "lib$stem.dylib.build.json" && mac=true
+          if [ "$VERIFY_EXISTING" = true ]; then win=true; lin=true; mac=true; fi
           echo "windows needed: $win, linux needed: $lin, macos needed: $mac"
           echo "windows=$win" >> "$GITHUB_OUTPUT"
           echo "linux=$lin" >> "$GITHUB_OUTPUT"
@@ -181,6 +188,17 @@ jobs:
         if: env.GO == 'true'
         with:
           tool: wasm-bindgen@${{ steps.w.outputs.bindgen }}
+      - name: Reuse native and reference compilation dependencies
+        if: env.GO == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/wfsim
+            target/native-engine
+            target/native-engine-x86-64-v3
+          key: engine-build-${{ runner.os }}-${{ steps.w.outputs.rust }}-${{ needs.check.outputs.commit }}-${{ hashFiles('native-engine/**', 'tools/build-native-engine.ps1', 'src/json_numbers.rs') }}
+          restore-keys: |
+            engine-build-${{ runner.os }}-${{ steps.w.outputs.rust }}-
       - name: The reference wasm, built as WFSim builds it
         if: env.GO == 'true'
         shell: bash
@@ -198,7 +216,8 @@ jobs:
           RUSTUP_TOOLCHAIN: ${{ steps.w.outputs.rust }}
         run: |
           foreach ($cpu in ($env:CPUS -split ' ' | ForEach-Object { if ($_ -eq 'v3') { 'x86-64-v3' } else { '' } })) {
-            ./tools/build-native-engine.ps1 -Strip -Commit $env:COMMIT -Engine $env:ENGINE -Cpu $cpu
+            $label = if ($cpu) { $cpu } else { 'baseline' }
+            ./tools/build-native-engine.ps1 -Strip -Commit $env:COMMIT -Engine $env:ENGINE -Cpu $cpu -BuildRoot (Join-Path $env:GITHUB_WORKSPACE "target/native-source-$label")
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Hold both to the reference wasm on WFSim's committed board
@@ -207,7 +226,7 @@ jobs:
         run: |
           for cpu in $CPUS; do
             echo "== $cpu"
-            SIMFLEET_CPU=$cpu ${{ matrix.exe }} check-native --engine "$ENGINE" --wasm reference/wfsim_wasm_bg.wasm --boards .wfsim-src/site/board --weapons 1 | tee "check-$cpu.log"
+            SIMFLEET_CPU=$cpu ${{ matrix.exe }} check-native --engine "$ENGINE" --wasm reference/wfsim_wasm_bg.wasm --boards .wfsim-src/site/board --weapons 1 --reference-cache reference/checked-wasm.json | tee "check-$cpu.log"
             grep -Eq '^CHECK-NATIVE rows=[1-9][0-9]* skipped=0 riven=same' "check-$cpu.log"
           done
       - name: The files

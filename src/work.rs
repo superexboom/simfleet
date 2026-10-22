@@ -31,7 +31,7 @@ pub const STATS_EVERY: Duration = Duration::from_secs(300);
 /// Jobs queued on a lane at once, so a lane never waits on the dispatcher.
 const LANE_DEPTH: usize = 2;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Release {
     pub engine: String,
     pub wasm: String,
@@ -42,7 +42,12 @@ pub struct Release {
     /// SHA-256: `/pkg/pack.data.<data>.json`); empty from a release that names
     /// none, whose engine carries its data.
     pub data: String,
+    #[serde(default)]
+    pub accepted: Vec<Accepted>,
 }
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Accepted { pub engine: String, pub until: String }
 
 const ID_OK: fn(&str) -> bool = |s| !s.is_empty() && s.len() <= 40 && s.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
 
@@ -53,10 +58,14 @@ pub fn protocols_of(v: &Value) -> Vec<u32> {
 
 pub fn fetch_release(net: &Net) -> Result<Release> {
     let r = net.get("/release.json")?;
-    let s = |k: &str| r.body[k].as_str().unwrap_or("").to_string();
-    let rel = Release { engine: s("engine"), wasm: s("wasm"), protocols: protocols_of(&r.body), data: s("data") };
+    parse_release(&r.body)
+}
+pub fn parse_release(body: &Value) -> Result<Release> {
+    let s = |k: &str| body[k].as_str().unwrap_or("").to_string();
+    let rel = Release { engine: s("engine"), wasm: s("wasm"), protocols: protocols_of(body), data: s("data"),
+        accepted:body["accepted"].as_array().into_iter().flatten().filter_map(|v|serde_json::from_value(v.clone()).ok()).collect() };
     if !ID_OK(&rel.engine) || !ID_OK(&rel.wasm) || !(rel.data.is_empty() || ID_OK(&rel.data)) {
-        bail!("release.json 无法识别：{}", r.body);
+        bail!("release.json 无法识别：{}", body);
     }
     Ok(rel)
 }
@@ -199,11 +208,14 @@ pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release
     if t.elapsed() > Duration::from_secs(1) {
         ui.log(format!("{C_INFO}[引擎]{C_END} 编译完成，用时 {:.1}s（已缓存）", t.elapsed().as_secs_f64()));
     }
-    // Only the current release is kept: its module and its data pack.
+    // Keep the selected old release while a candidate is being checked. A
+    // restart must be able to continue it during its accepted grace window.
+    let previous = crate::engine_update::State::read(paths).current;
     if let Ok(rd) = std::fs::read_dir(&paths.cache) {
         for e in rd.flatten() {
             let n = e.file_name().to_string_lossy().to_string();
-            if !n.contains(&rel.wasm) && (rel.data.is_empty() || !n.contains(&rel.data)) {
+            let keep_old=previous.as_ref().is_some_and(|r|n.contains(&r.wasm)||(!r.data.is_empty()&&n.contains(&r.data)));
+            if !keep_old && !n.contains(&rel.wasm) && (rel.data.is_empty() || !n.contains(&rel.data)) {
                 let _ = std::fs::remove_file(e.path());
             }
         }
@@ -524,7 +536,8 @@ fn riven_canary(code: &Arc<Code>) -> Result<()> {
         }
         bail!("the search never settled")
     };
-    let (a, mut b) = (search(false)?, search(true)?);
+    let a=crate::reference_cache::compute(&json!({"riven_canary":req}),||search(false))?;
+    let mut b=search(true)?;
     if a["results"].as_array().is_none_or(|r| r.is_empty()) {
         bail!("the wasm found nothing");
     }

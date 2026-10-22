@@ -31,6 +31,20 @@ pub struct Ctl {
     pub max_cores: usize,
     /// The cap on groups; 0 is by the machine's size.
     pub max_slots: AtomicUsize,
+    pub settings: Mutex<crate::settings::Channel>,
+}
+
+impl Ctl {
+    pub fn new(cfg: &crate::config::Config, max: usize) -> Self {
+        Self {paused:AtomicBool::new(false),quit:AtomicBool::new(false),idle_cores:AtomicUsize::new(cfg.idle_cores.clamp(1,max)),
+            active_cores:AtomicUsize::new(cfg.active_cores.min(max)),max_cores:max,max_slots:AtomicUsize::new(cfg.max_slots),
+            settings:Mutex::new(crate::settings::Channel {desired:crate::settings::Settings::from_config(cfg),message:String::new(),
+                topology:crate::placement::report(cfg).unwrap_or_else(|e|e.to_string())})}
+    }
+    pub fn desired_settings(&self) -> crate::settings::Settings {
+        let mut s=self.settings.lock().unwrap().desired.clone();
+        s.idle_cores=self.idle_cores.load(Ordering::Relaxed);s.active_cores=self.active_cores.load(Ordering::Relaxed);s.max_slots=self.max_slots.load(Ordering::Relaxed);s
+    }
 }
 
 /// One held task.
@@ -335,6 +349,7 @@ impl Ui {
             let (c2, u2) = (ctl.clone(), self.clone());
             std::thread::spawn(move || {
                 let mut line = String::new();
+                let mut view=View::default();
                 while std::io::stdin().read_line(&mut line).unwrap_or(0) > 0 {
                     match line.trim() {
                         "q" | "Q" => c2.quit.store(true, Ordering::Relaxed),
@@ -343,6 +358,13 @@ impl Ui {
                             c2.paused.store(p, Ordering::Relaxed);
                             u2.log(if p { "[暂停]" } else { "[继续]" });
                         }
+                        "up"=>u2.key(KeyCode::Up,KeyModifiers::NONE,&c2,&mut view,24),
+                        "down"=>u2.key(KeyCode::Down,KeyModifiers::NONE,&c2,&mut view,24),
+                        "left"=>u2.key(KeyCode::Left,KeyModifiers::NONE,&c2,&mut view,24),
+                        "right"=>u2.key(KeyCode::Right,KeyModifiers::NONE,&c2,&mut view,24),
+                        "enter"=>u2.key(KeyCode::Enter,KeyModifiers::NONE,&c2,&mut view,24),
+                        "esc"=>u2.key(KeyCode::Esc,KeyModifiers::NONE,&c2,&mut view,24),
+                        key if key.chars().count()==1 => u2.key(KeyCode::Char(key.chars().next().unwrap()),KeyModifiers::NONE,&c2,&mut view,24),
                         _ => {}
                     }
                     line.clear();
@@ -439,6 +461,10 @@ impl Ui {
     }
 
     fn key(&self, code: KeyCode, mods: KeyModifiers, ctl: &Ctl, v: &mut View, h: usize) {
+        if v.settings_open && !(code==KeyCode::Char('c') && mods.contains(KeyModifiers::CONTROL)) {
+            self.settings_key(code,ctl,v);
+            return;
+        }
         let page = h.saturating_sub(4).max(1);
         match code {
             KeyCode::Char('c') if mods.contains(KeyModifiers::CONTROL) => ctl.quit.store(true, Ordering::Relaxed),
@@ -477,11 +503,60 @@ impl Ui {
                 v.full_log = !v.full_log;
                 v.scroll = 0;
             }
+            KeyCode::Char('s') | KeyCode::Char('S') => {v.settings_open=true;v.settings_row=0;v.edit=None;}
             KeyCode::PageUp | KeyCode::Up => v.scroll += if code == KeyCode::Up { 1 } else { page },
             KeyCode::PageDown | KeyCode::Down => v.scroll = v.scroll.saturating_sub(if code == KeyCode::Down { 1 } else { page }),
             KeyCode::End => v.scroll = 0,
             KeyCode::Home => v.scroll = usize::MAX,
             _ => {}
+        }
+    }
+
+    fn settings_key(&self, code: KeyCode, ctl: &Ctl, v: &mut View) {
+        if let Some(input)=v.edit.as_mut() {
+            match code {
+                KeyCode::Esc=>v.edit=None,
+                KeyCode::Backspace=>{input.pop();},
+                KeyCode::Char(c)=>input.push(c),
+                KeyCode::Enter=>{
+                    let value=input.clone();
+                    let mut desired=ctl.desired_settings();
+                    let answer=desired.apply_value(v.settings_row,&value,crate::sys::cores()).and_then(|_| {
+                        let mut probe=crate::config::Config::fresh(desired.idle_cores);desired.write(&mut probe);
+                        crate::placement::validate(&probe)
+                    });
+                    match answer {
+                        Ok(())=>{
+                            ctl.idle_cores.store(desired.idle_cores,Ordering::Relaxed);ctl.active_cores.store(desired.active_cores,Ordering::Relaxed);
+                            ctl.max_slots.store(desired.max_slots,Ordering::Relaxed);
+                            let mut state=ctl.settings.lock().unwrap();state.desired=desired;state.message="正在保存设置…".into();v.edit=None;
+                        }
+                        Err(e)=>ctl.settings.lock().unwrap().message=e.to_string(),
+                    }
+                }
+                _=>{}
+            }
+            return;
+        }
+        let count=ctl.desired_settings().rows().len();
+        match code {
+            KeyCode::Esc|KeyCode::Char('s')|KeyCode::Char('S')=>v.settings_open=false,
+            KeyCode::Up=>v.settings_row=v.settings_row.saturating_sub(1),
+            KeyCode::Down|KeyCode::Tab=>v.settings_row=(v.settings_row+1)%count,
+            KeyCode::Home=>v.settings_row=0,
+            KeyCode::End=>v.settings_row=count-1,
+            KeyCode::Enter=>v.edit=Some(ctl.desired_settings().rows()[v.settings_row].1.clone()),
+            KeyCode::Left|KeyCode::Right=>{
+                let choices=crate::settings::Settings::choices(v.settings_row);
+                if !choices.is_empty() {
+                    let old=ctl.desired_settings().rows()[v.settings_row].1.clone();
+                    let i=choices.iter().position(|x|*x==old).unwrap_or(0);
+                    let next=if code==KeyCode::Right {(i+1)%choices.len()}else{(i+choices.len()-1)%choices.len()};
+                    v.edit=Some(choices[next].to_string());
+                    self.settings_key(KeyCode::Enter,ctl,v);
+                }
+            }
+            _=>{}
         }
     }
 }
@@ -739,6 +814,9 @@ struct View {
     full_log: bool,
     /// Lines paged back from the newest.
     scroll: usize,
+    settings_open: bool,
+    settings_row: usize,
+    edit: Option<String>,
 }
 
 struct Frame<'a> {
@@ -764,6 +842,7 @@ fn draw(c: &mut Canvas, f: &Frame, v: &mut View) {
     }
     title(c, f);
     footer(c, f, v);
+    if v.settings_open {draw_settings(c,f,v);return;}
     let (y, bh) = (1, h - 2);
     if v.full_log {
         header(c, 0, y, w, " 全部日志 ", "PgUp/PgDn 翻页  End 最新  L 回到面板", HDR);
@@ -777,6 +856,31 @@ fn draw(c: &mut Canvas, f: &Frame, v: &mut View) {
         left(c, 0, y, lw, bh, f, v);
     } else {
         compact(c, 0, y, w, bh, f, v);
+    }
+}
+
+fn draw_settings(c: &mut Canvas, f: &Frame, v: &View) {
+    let settings=f.ctl.desired_settings();
+    let state=f.ctl.settings.lock().unwrap();
+    let rows=settings.rows();let w=c.w;let h=c.h;
+    header(c,0,1,w," 设置 ","确认后立即写入 TOML",HDR);
+    if h<8 {c.text(1,2,w.saturating_sub(2),"窗口太小，请增大窗口后编辑设置。",DIM);return;}
+    let visible=(h.saturating_sub(9)).min(rows.len()).max(1);
+    let start=v.settings_row.saturating_sub(visible-1);
+    for (i,(name,value,_)) in rows.iter().enumerate().skip(start).take(visible) {
+        let y=3+i-start;let selected=i==v.settings_row;
+        let style=if selected {HDR}else{PLAIN};
+        if selected {c.fill(0,y,w,1,style);}
+        let value=if selected {v.edit.as_ref().map(|x|format!("{x}_")).unwrap_or_else(||value.clone())}else{value.clone()};
+        c.text(1,y,w.saturating_sub(2),&format!("{} {}: {}",if selected{">"}else{" "},name,if value.is_empty(){"全部"}else{&value}),style);
+    }
+    let y=3+visible;
+    c.text(1,y,w.saturating_sub(2),rows[v.settings_row].2,DIM);
+    c.text(1,y+1,w.saturating_sub(2),"调度/NUMA/核心类型改动：保存后排空手头任务，自动换进程生效。",DIM);
+    c.text(1,y+2,w.saturating_sub(2),&state.message,Sty {fg:Some(80),..PLAIN});
+    for (i,line) in state.topology.lines().skip(1).enumerate() {
+        if y+3+i>=h-1 {break;}
+        c.text(1,y+3+i,w.saturating_sub(2),line,DIM);
     }
 }
 
@@ -816,9 +920,14 @@ fn title(c: &mut Canvas, f: &Frame) {
 fn footer(c: &mut Canvas, f: &Frame, v: &View) {
     let (y, w) = (c.h - 1, c.w);
     c.fill(0, y, w, 1, BAR);
+    if v.settings_open {
+        c.text(0,y,w,if v.edit.is_some(){" Enter 保存  Esc 取消编辑  Ctrl+C 退出程序"}else{" ↑↓ 选择  Enter 编辑  ←→ 切换选项  Esc 返回面板"},BAR);
+        return;
+    }
     let paused = f.ctl.paused.load(Ordering::Relaxed);
     let keys = [
         ("P", if paused { "继续" } else { "暂停" }),
+        ("S", "设置"),
         ("+/-", "空闲核心"),
         ("Shift +/-", "使用时核心"),
         ("[ ]", "并发上限"),
@@ -1271,6 +1380,37 @@ mod tests {
     }
 
     #[test]
+    fn settings_menu_navigation_validation_and_escape() {
+        let cfg=crate::config::Config::fresh(2);let ctl=Ctl::new(&cfg,crate::sys::cores());let ui=Ui::new();let mut v=View::default();
+        ui.key(KeyCode::Char('s'),KeyModifiers::NONE,&ctl,&mut v,24);assert!(v.settings_open);
+        v.settings_row=9;ui.key(KeyCode::Enter,KeyModifiers::NONE,&ctl,&mut v,24);
+        ui.key(KeyCode::Backspace,KeyModifiers::NONE,&ctl,&mut v,24);ui.key(KeyCode::Backspace,KeyModifiers::NONE,&ctl,&mut v,24);
+        ui.key(KeyCode::Char('0'),KeyModifiers::NONE,&ctl,&mut v,24);ui.key(KeyCode::Enter,KeyModifiers::NONE,&ctl,&mut v,24);
+        assert_eq!(ctl.desired_settings().native_wait_hours,0);
+        v.settings_row=0;v.edit=Some("0".into());ui.key(KeyCode::Enter,KeyModifiers::NONE,&ctl,&mut v,24);
+        assert!(v.edit.is_some());assert_eq!(ctl.desired_settings().idle_cores,2);
+        ui.key(KeyCode::Esc,KeyModifiers::NONE,&ctl,&mut v,24);assert!(v.settings_open);
+        ui.key(KeyCode::Esc,KeyModifiers::NONE,&ctl,&mut v,24);assert!(!v.settings_open);assert!(!ctl.quit.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn settings_screen_fits_narrow_and_wide_consoles() {
+        let ctl=Ctl::new(&crate::config::Config::fresh(2),16);let status=Status::default();let lines=VecDeque::new();
+        let f=Frame{s:&status,lines:&lines,ctl:&ctl,m:SysView::default(),up:Duration::ZERO,multi:false};
+        for (w,h) in [(39,12),(69,24),(109,32)] {
+            for wide in [false,true] {
+                for selected in [0,4,9,11] {
+                    let mut v=View{settings_open:true,settings_row:selected,..Default::default()};let mut c=Canvas::new(w,h,wide);draw(&mut c,&f,&mut v);
+                    for y in 0..h {assert_eq!(text_of(&c,y).chars().map(|ch|c.cw(ch)).sum::<usize>(),w);}
+                    if w==109 && selected==4 && !wide {
+                        if let Ok(path)=std::env::var("SIMFLEET_SETTINGS_PREVIEW") {std::fs::write(path,(0..h).map(|y|text_of(&c,y)).collect::<Vec<_>>().join("\n")).unwrap();}
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn rows_never_pass_the_width() {
         for wide in [false, true] {
             let mut c = Canvas::new(10, 1, wide);
@@ -1301,14 +1441,8 @@ mod tests {
     #[test]
     #[ignore]
     fn preview() {
-        let ctl = Ctl {
-            paused: AtomicBool::new(false),
-            quit: AtomicBool::new(false),
-            idle_cores: AtomicUsize::new(10),
-            active_cores: AtomicUsize::new(10),
-            max_cores: 16,
-            max_slots: AtomicUsize::new(0),
-        };
+        let mut config=crate::config::Config::fresh(10);config.active_cores=10;
+        let ctl = Ctl::new(&config,16);
         let now = Instant::now();
         let s = Status {
             state: "计算中".into(),

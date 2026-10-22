@@ -127,6 +127,7 @@ pub fn init(cfg: &Config) -> Result<Option<String>> {
     let _ = PLAN.set(p);
     Ok(msg)
 }
+pub fn validate(cfg: &Config) -> Result<()> { plan(&Topology::read(),cfg).map(|_|()) }
 pub fn capacity() -> Option<usize> {
     PLAN.get()?.as_ref().map(|p| p.cpus.len())
 }

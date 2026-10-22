@@ -42,7 +42,7 @@ pub struct Config {
     #[serde(default = "default_core_type")]
     pub core_type: String,
     /// Compute placement: auto, system, numa, cache. Does not change budget.
-    #[serde(default = "default_core_type")]
+    #[serde(default = "default_core_type", deserialize_with = "read_placement")]
     pub placement: String,
     /// Empty means every NUMA node. Useful for independent process partitions.
     #[serde(default)]
@@ -82,6 +82,10 @@ pub struct Config {
     /// then start a fresh process. Zero disables this maintenance.
     #[serde(default = "default_memory_limit_mb")]
     pub memory_limit_mb: u64,
+    /// Wait for simfleet's native build while the current engine remains accepted.
+    /// Zero follows the served engine immediately. Server expiry always wins.
+    #[serde(default = "default_native_wait_hours")]
+    pub native_wait_hours: u64,
     /// The board's protocol: 8 (one sync for everything, fleet.rs) or 7 (packs
     /// asked, answered and renewed apart). The server may say 7 for a session.
     #[serde(default = "default_protocol")]
@@ -114,6 +118,10 @@ fn default_native_url() -> String {
 fn default_core_type() -> String {
     "auto".into()
 }
+fn read_placement<'de,D:serde::Deserializer<'de>>(d:D)->std::result::Result<String,D::Error> {
+    let value=String::deserialize(d)?;
+    Ok(if value.trim().is_empty(){"auto".into()}else{value})
+}
 fn yes() -> bool {
     true
 }
@@ -121,6 +129,7 @@ fn yes() -> bool {
 fn default_memory_limit_mb() -> u64 {
     2048
 }
+fn default_native_wait_hours() -> u64 { 48 }
 fn default_protocol() -> u32 {
     8
 }
@@ -156,6 +165,7 @@ impl Config {
             official_engine: true,
             watch: true,
             memory_limit_mb: default_memory_limit_mb(),
+            native_wait_hours: default_native_wait_hours(),
             protocol: default_protocol(),
             extra_verifiers: Vec::new(),
             account: Account::default(),
@@ -225,7 +235,8 @@ impl Paths {
         std::fs::create_dir_all(&self.dir)?;
         let body = toml::to_string_pretty(c)?;
         let text = format!(
-            "# simfleet — WFSim 志愿计算客户端的配置。可以直接编辑；运行中按键调整的核心数会在退出时写回。\n\
+            "# simfleet — WFSim 志愿计算客户端的配置。运行中按 S 打开设置，确认的改动会立即保存；手工编辑请先退出程序。\n\
+             # native_wait_hours：新引擎缺少优化原生库时最多等待的小时数，默认 48；0 立即更新，服务器的旧引擎接受期限优先。\n\
              # core_type（只对 Intel 大小核和 Apple 芯片有效）：auto 先 P 核、再 E 核、最后 P 核超线程（Apple 芯片：性能核优先、能效核也用）；p 优先性能核；e 优先能效核（Apple 芯片：只用能效核）；windows 交给系统。\n\
              # verifier 是本机的计算者 id，account.session 是登录凭据：都请勿发给别人。\n\n{body}"
         );
@@ -233,5 +244,20 @@ impl Paths {
         std::fs::write(&tmp, text)?;
         std::fs::rename(&tmp, &self.config)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn older_config_gets_wait_default_and_current_options_roundtrip() {
+        let mut cfg=Config::fresh(6);cfg.placement=String::new();cfg.account.name="test user".into();cfg.extra_verifiers=vec!["another".into()];
+        let text=toml::to_string(&cfg).unwrap().lines().filter(|l|!l.starts_with("native_wait_hours")).collect::<Vec<_>>().join("\n");
+        let decoded:Config=toml::from_str(&text).unwrap();assert_eq!(decoded.native_wait_hours,48);
+        assert_eq!(decoded.placement,"auto");
+        assert_eq!(decoded.extra_verifiers,cfg.extra_verifiers);assert_eq!(decoded.account.name,cfg.account.name);
+        let mut settings=crate::settings::Settings::from_config(&decoded);settings.native_wait_hours=0;settings.write(&mut cfg);
+        let decoded:Config=toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();assert_eq!(decoded.native_wait_hours,0);
     }
 }

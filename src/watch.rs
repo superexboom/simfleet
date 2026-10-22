@@ -119,7 +119,7 @@ pub fn watch(paths: &Paths) -> Option<i32> {
             quick = 0;
             restarts = 0;
             last.clear();
-            eprintln!("{C_INFO}[内存] 旧进程已退出，内存已交还系统，继续计算。{C_END}");
+            eprintln!("{C_INFO}[维护] 旧进程已退出，已回收内存并重新读取配置，继续计算。{C_END}");
             continue;
         }
         let Some(why) = died(&status) else { return Some(status.code().unwrap_or(1)) };

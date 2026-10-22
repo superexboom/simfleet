@@ -11,6 +11,8 @@ param(
     [string]$Engine = "",
     [string]$Cpu = "",
     [string]$Source = "",
+    # Dedicated empty CI location keeps Rust source paths stable across runs.
+    [string]$BuildRoot = "",
     [int]$Jobs = 0
 )
 $ErrorActionPreference = "Stop"
@@ -32,7 +34,8 @@ if (-not (Test-Path -LiteralPath $repo)) {
     if ($LASTEXITCODE -ne 0) { throw "Fetch failed" }
 }
 $start = if ($Commit) { $Commit } else { "origin/main" }
-$buildRoot = Join-Path $root ("target/native-build/" + [guid]::NewGuid().ToString('N'))
+$buildRoot = if ($BuildRoot) { [IO.Path]::GetFullPath($BuildRoot) } else { Join-Path $root ("target/native-build/" + [guid]::NewGuid().ToString('N')) }
+if (Test-Path -LiteralPath $buildRoot) { throw 'BuildRoot must be a new dedicated directory' }
 New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
 $src = Join-Path $buildRoot "wfsim"
 $crate = Join-Path $buildRoot "wrapper"

@@ -4,6 +4,8 @@
 /cache
 /engines
 simfleet.toml
+engine-state.json
+engine-state.json.tmp
 /.devrun
 /dist
 /native-engine/Cargo.lock

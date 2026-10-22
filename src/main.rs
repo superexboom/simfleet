@@ -23,6 +23,9 @@ mod jsnum;
 mod json_numbers;
 mod maintenance;
 mod placement;
+mod settings;
+mod engine_update;
+mod reference_cache;
 #[cfg(target_os = "macos")]
 mod macos;
 mod net;
@@ -36,7 +39,7 @@ use anyhow::{bail, Context, Result};
 use config::{Config, Paths};
 use engine::{Backend, Exec, Pool};
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use ui::{Ctl, Ui, C_END, C_INFO, C_OK};
@@ -59,7 +62,7 @@ simfleet — WFSim 志愿计算客户端（非官方，基于 WFSim 引擎）
     --order <json>         固定榜单输入；SIMFLEET_NATIVE_FAST=0 对照普通接口
   simfleet cpu             看 CPU 识别结果：是否 Intel 大小核、计算线程会放在哪种核心上
 
-运行时按键: P 暂停/继续 · + / - 空闲时的核心数 · Shift 加 + / - 使用电脑时的核心数（0 = 使用时暂停）
+运行时按键: S 设置菜单 · P 暂停/继续 · + / - 空闲时的核心数 · Shift 加 + / - 使用电脑时的核心数（0 = 使用时暂停）
           [ / ] 并发上限 · L 全屏日志 · PgUp/PgDn 翻页 · Q 退出（会先把手头任务交还）
 
 源码与许可: https://github.com/superexboom/simfleet （AGPL-3.0-or-later）
@@ -248,17 +251,15 @@ fn adopt_session(c: &mut Config, session: String) -> Result<()> {
 }
 
 fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<bool> {
+    if cfg.placement.is_empty() {cfg.placement="auto".into();}
     sys::set_priority(&cfg.priority);
     let placement = placement::init(&cfg)?;
     let max = placement::capacity().unwrap_or_else(sys::cores);
-    let ctl = Arc::new(Ctl {
-        paused: AtomicBool::new(false),
-        quit: AtomicBool::new(false),
-        idle_cores: AtomicUsize::new(cores_override.unwrap_or(cfg.idle_cores).clamp(1, max)),
-        active_cores: AtomicUsize::new(cfg.active_cores.min(max)),
-        max_cores: max,
-        max_slots: AtomicUsize::new(cfg.max_slots),
-    });
+    cfg.idle_cores=cores_override.unwrap_or(cfg.idle_cores).clamp(1,max);
+    cfg.active_cores=cfg.active_cores.min(max);
+    paths.merge_extras(&mut cfg);
+    paths.save(&cfg)?;
+    let ctl = Arc::new(Ctl::new(&cfg, max));
     let _ = CTL.set(ctl.clone());
     on_console_close();
     let ui = Ui::new();
@@ -303,7 +304,7 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<b
             }
         };
         ui.log(format!("{C_INFO}[引擎]{C_END} 网站引擎 {} · wasm {}", rel.engine, rel.wasm));
-        let code = work::load_code(&net, &paths, &cfg, &ui, &rel)?;
+        let (rel,code) = engine_update::startup(&net,&paths,&cfg,&ui,rel)?;
         Ok(fleet::Fleet::new(net.clone(), cfg.clone(), paths.clone(), ctl.clone(), ui.clone(), rel, code))
     })();
     let mut summary = None;
@@ -315,11 +316,9 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<b
             if let Some(u) = fleet.utilisation_summary() {
                 ui.log(u);
             }
-            if fleet.session_dropped {
-                cfg.account = Default::default();
-            }
             // The ids groups were opened with, so the next run keeps them.
-            cfg.extra_verifiers = fleet.cfg.extra_verifiers.clone();
+            cfg = fleet.cfg.clone();
+            if fleet.session_dropped {cfg.account=Default::default();}
             summary = Some(ui.snapshot());
         }
         Err(e) if e.to_string() == "quit" => {}
@@ -329,6 +328,7 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<b
     ctl.quit.store(true, Ordering::Relaxed);
     let _ = painter.join();
     ui.flush_plain();
+    ctl.desired_settings().write(&mut cfg);
     cfg.idle_cores = ctl.idle_cores.load(Ordering::Relaxed);
     cfg.active_cores = ctl.active_cores.load(Ordering::Relaxed);
     cfg.max_slots = ctl.max_slots.load(Ordering::Relaxed);
@@ -458,7 +458,7 @@ fn bench(paths: &Paths, cfg: &Config, lanes_arg: Option<usize>, repeats: usize, 
 /// Offline (the release workflow, which cannot reach wfsim.app): `--engine <id>
 /// --wasm <file> --boards <dir>` take the engine id, the reference wasm built
 /// from the same commit, and a WFSim checkout's `site/board/`.
-fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, data: Option<String>, boards: Option<String>, rows: Option<String>, lanes: Option<usize>, weapons: usize) -> Result<()> {
+fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, data: Option<String>, boards: Option<String>, rows: Option<String>, lanes: Option<usize>, weapons: usize, reference:Option<String>) -> Result<()> {
     let mut cfg = Config::fresh(sys::cores());
     cfg.native_engine = true;
     cfg.native_engine_url = String::new();
@@ -478,8 +478,9 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, dat
                 Some(f) => Some(std::sync::Arc::new(std::fs::read(f).with_context(|| f.clone())?)),
                 None => None,
             };
+            if let Some(ref file)=reference {reference_cache::init(std::path::Path::new(file),&bytes,pack.as_ref().map(|p|p.as_slice()),&engine)?;}
             let data_id: String = pack.as_ref().map(|p| Sha256::digest(p.as_slice()).iter().take(6).map(|x| format!("{x:02x}")).collect()).unwrap_or_default();
-            let rel = work::Release { engine, wasm: digest, protocols: Vec::new(), data: data_id };
+            let rel = work::Release { engine, wasm: digest, protocols: Vec::new(), data: data_id, accepted:Vec::new() };
             println!("引擎 {} · 参照 wasm {} ({})", rel.engine, rel.wasm, file);
             if pack.is_some() {
                 println!("数据包 {} ({})", rel.data, data.as_deref().unwrap_or(""));
@@ -487,6 +488,7 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, dat
             work::build_code(&net, paths, &cfg, &ui, &rel, &bytes, pack)?
         }
         (None, None) => {
+            if reference.is_some(){bail!("--reference-cache 只用于指定 --engine 和 --wasm 的离线校验");}
             let rel = work::fetch_release(&net)?;
             work::load_code(&net, paths, &cfg, &ui, &rel)?
         }
@@ -544,16 +546,20 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, dat
     for (label, order, ruler) in &orders {
         let mut answers = Vec::new();
         for b in [Backend::Wasm, Backend::Native] {
+            let evaluate=||->Result<serde_json::Value> {
             let mut exec = Exec::new(code.clone());
             let mut pool = Pool::new(code.clone());
             let o = jsnum::parse(&exec.api(b, "/api/board/order", order.clone())?)?;
             if o["ok"] != serde_json::json!(true) {
-                answers.push(None);
-                continue;
+                return Ok(serde_json::Value::Null);
             }
             let s = work::measure_row(&mut pool, &mut exec, b, &o["request"], ruler, &|_| lanes, &|| true, &mut |_, _| {})?;
             // THE ANSWER'S BITS: score, work, metric, and the gas the work was priced from.
-            answers.push(s.map(|s| (s.score.to_bits(), s.work, s.metric, s.counts)));
+            Ok(serde_json::to_value(s.map(|s| (s.score.to_bits(), s.work, s.metric, s.counts)))?)
+            };
+            let answer=if b==Backend::Wasm {reference_cache::compute(&serde_json::json!({"board":order,"ruler":ruler}),evaluate)?}else{evaluate()?};
+            let answer:Option<(u64,u64,String,serde_json::Value)>=serde_json::from_value(answer)?;
+            answers.push(answer);
         }
         match (&answers[0], &answers[1]) {
             (None, None) => skipped += 1,
@@ -660,14 +666,8 @@ fn main() {
                 if let Some(n) = &code.native {
                     eprintln!("riven canary: {}", ["not asked", "checking", "same answer", "differs"][n.wait_riven() as usize]);
                 }
-                let ctl = Arc::new(Ctl {
-                    paused: AtomicBool::new(false),
-                    quit: AtomicBool::new(false),
-                    idle_cores: AtomicUsize::new(lanes),
-                    active_cores: AtomicUsize::new(lanes),
-                    max_cores: lanes,
-                    max_slots: AtomicUsize::new(0),
-                });
+                cfg.idle_cores=lanes;cfg.active_cores=lanes;
+                let ctl = Arc::new(Ctl::new(&cfg,lanes));
                 let mut f = fleet::Fleet::new(net, cfg, paths.clone(), ctl, ui, rel, code);
                 let started = Instant::now();
                 f.replay(&tasks)?;
@@ -678,7 +678,7 @@ fn main() {
                 print!("{}", affinity::report(affinity::Prefer::parse(&c.core_type), c.idle_cores.max(c.active_cores), &c.priority));
                 print!("{}", placement::report(&c)?);
             }
-            "check-native" => check_native(&paths, flag("--engine"), flag("--wasm"), flag("--data"), flag("--boards"), flag("--rows"), flag("--lanes").and_then(|x| x.parse().ok()), flag("--weapons").and_then(|x| x.parse().ok()).unwrap_or(4))?,
+            "check-native" => check_native(&paths, flag("--engine"), flag("--wasm"), flag("--data"), flag("--boards"), flag("--rows"), flag("--lanes").and_then(|x| x.parse().ok()), flag("--weapons").and_then(|x| x.parse().ok()).unwrap_or(4),flag("--reference-cache"))?,
             "bench" => {
                 let mut c = paths.load()?.unwrap_or_else(|| Config::fresh(1));
                 if let Some(p) = flag("--placement") { c.placement = p; }

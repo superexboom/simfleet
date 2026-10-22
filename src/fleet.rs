@@ -420,7 +420,7 @@ pub struct Fleet {
     /// When "the site is busy" was last said.
     busy_said: Option<Instant>,
     /// THE ENGINE THE SITE SERVES NOW, being made ready off the dispatcher…
-    engine_load: Option<(String, JoinHandle<Option<(Release, Arc<Code>)>>)>,
+    engine_load: Option<(String, JoinHandle<Result<crate::engine_update::Prepared>>)>,
     /// …ready: no more work is asked, and once what is held is done, it runs.
     switch_to: Option<(Release, Arc<Code>)>,
     /// When a failed preparation may be tried again.
@@ -451,6 +451,12 @@ pub struct Fleet {
     memory_checked: Instant,
     /// The drain finished and main may replace this process after saving config.
     pub recycle: bool,
+    settings_dirty: bool,
+    settings_save_at: Instant,
+    settings_restart: Option<Instant>,
+    settings_original: crate::settings::Settings,
+    accepted_until: Option<u64>,
+    waiting_said: Option<String>,
 }
 
 impl Fleet {
@@ -462,6 +468,7 @@ impl Fleet {
         });
         let proto = if cfg.protocol == 7 { 7 } else { sync::PROTOCOL };
         let memory_guard = crate::maintenance::MemoryGuard::new(cfg.memory_limit_mb);
+        let settings_original=crate::settings::Settings::from_config(&cfg);
         let ids: Vec<String> = std::iter::once(cfg.verifier.clone()).chain(cfg.extra_verifiers.iter().cloned()).collect();
         let mut f = Fleet {
             net,
@@ -517,6 +524,12 @@ impl Fleet {
             row_cost_ms: 0.0,
             riven_seen: 0,
             memory_guard,
+            settings_dirty:false,
+            settings_save_at:Instant::now()-Duration::from_secs(2),
+            settings_restart:None,
+            settings_original,
+            accepted_until:None,
+            waiting_said:None,
             memory_checked: Instant::now(),
             recycle: false,
             meter: Meter::new(),
@@ -637,11 +650,11 @@ impl Fleet {
     }
     /// The lanes the budget allows now.
     fn lanes(&self) -> usize {
-        if self.idle() {
+        (if self.idle() {
             self.ctl.idle_cores.load(Ordering::Relaxed).max(1)
         } else {
             self.ctl.active_cores.load(Ordering::Relaxed).max(1)
-        }
+        }).min(self.ctl.max_cores)
     }
     /// THE CAP on groups: `max_slots` (0: by the machine's size), and no more
     /// than half the lanes the budget allows now — one group's pack starts
@@ -854,7 +867,7 @@ impl Fleet {
                     self.take_reply(gi, ahead, at, reply);
                 }
             }
-            if self.groups[gi].asking.is_some() || self.offline || self.stale || self.switch_to.is_some() || self.memory_guard.draining() || self.banned_until.is_some() || self.refused.is_some() {
+            if self.groups[gi].asking.is_some() || self.offline || self.stale || self.switch_to.is_some() || self.memory_guard.draining() || self.settings_restart.is_some() || self.banned_until.is_some() || self.refused.is_some() {
                 continue;
             }
             // WHAT THE GROUP HOLDS: its packs and the riven gains it computes.
@@ -1241,7 +1254,7 @@ impl Fleet {
                 }
                 continue;
             }
-            let open = gi < self.open && !held_back && self.switch_to.is_none() && !self.memory_guard.draining();
+            let open = gi < self.open && !held_back && self.switch_to.is_none() && !self.memory_guard.draining() && self.settings_restart.is_none();
             let go = match (idle && open && now >= self.groups[gi].not_before).then(|| self.idle_go(gi, now)) {
                 Some(None) => continue,
                 // THE SIGNAL SHOWS WORK and its jitter runs: the sync for work
@@ -1985,7 +1998,7 @@ impl Fleet {
     /// kept, under the cap.
     fn control(&mut self) {
         self.watch_memory();
-        if self.memory_guard.draining() {
+        if self.memory_guard.draining() || self.settings_restart.is_some() {
             return;
         }
         let cap = self.max_groups();
@@ -2201,7 +2214,8 @@ impl Fleet {
         self.refresh_stats();
         let mut shown = Instant::now();
         while !self.quit() {
-            if self.maintain_memory() {
+            self.apply_settings();
+            if self.maintain_memory() || self.settings_restart_ready() {
                 self.shutdown();
                 while !self.quit() && self.groups.iter().any(|g| g.journal_dirty) {
                     // Never replace the process while its only copy of an
@@ -2282,6 +2296,36 @@ impl Fleet {
         self.shutdown();
     }
 
+    fn apply_settings(&mut self) {
+        let desired=self.ctl.desired_settings();let old=crate::settings::Settings::from_config(&self.cfg);
+        if desired!=old {
+            if desired.memory_limit_mb!=old.memory_limit_mb {self.memory_guard=crate::maintenance::MemoryGuard::new(desired.memory_limit_mb);}
+            if desired.priority!=old.priority {sys::set_priority(&desired.priority);}
+            if desired.native_wait_hours!=old.native_wait_hours {self.engine_retry=Instant::now();self.release_at=Instant::now()-RELEASE_EVERY;}
+            desired.write(&mut self.cfg);
+            self.settings_dirty=true;self.settings_save_at=Instant::now()-Duration::from_secs(2);
+        }
+        if self.settings_dirty && self.settings_save_at.elapsed()>=Duration::from_secs(1) {
+            self.settings_save_at=Instant::now();self.paths.merge_extras(&mut self.cfg);
+            match self.paths.save(&self.cfg) {
+                Ok(())=>{
+                    self.settings_dirty=false;
+                    let topology=desired.topology_changed(&self.settings_original);
+                    self.settings_restart=if topology {Some(self.settings_restart.unwrap_or_else(Instant::now))}else{None};
+                    let mut panel=self.ctl.settings.lock().unwrap();
+                    panel.message=if topology {"已保存；正在排空任务，随后自动重启应用调度设置。".into()}else{"已保存到 simfleet.toml，设置已生效。".into()};
+                    panel.topology=crate::placement::report(&self.cfg).unwrap_or_else(|e|e.to_string());
+                }
+                Err(e)=>{self.ctl.settings.lock().unwrap().message=format!("保存失败，1 秒后重试：{e}");}
+            }
+        }
+    }
+    fn settings_restart_ready(&self)->bool {
+        !self.settings_dirty && !self.ctl.paused.load(Ordering::Relaxed) && self.settings_restart.is_some_and(|at|
+            at.elapsed()>=Duration::from_secs(15*60) || (self.tasks.is_empty() && self.packs.is_empty() && self.sending.is_empty()
+                && self.groups.iter().all(|g|g.asking.is_none()&&g.syncing.is_none())))
+    }
+
     /// Stop asking first, finish what is held, then let the OS reclaim the
     /// native libraries' global allocations as well as their thread heaps.
     fn maintain_memory(&mut self) -> bool {
@@ -2350,10 +2394,10 @@ impl Fleet {
             return Ok(());
         }
         let rel = fetch_release(&self.net)?;
-        self.stale = false;
         if rel.engine == self.rel.engine {
             // NOT THE ENGINE BUT THE PROTOCOL: protocol 7 while the server takes it.
             if self.proto == 8 && !rel.protocols.is_empty() && !rel.protocols.contains(&8) && rel.protocols.contains(&7) {
+                self.stale=false;
                 self.fall_back("服务器不再接受协议 8");
                 return Ok(());
             }
@@ -2369,9 +2413,8 @@ impl Fleet {
         }
         self.ui.log(format!("{C_INFO}[引擎]{C_END} 网站引擎已更新 {} → {}", self.rel.engine, rel.engine));
         let code = load_code(&self.net, &self.paths, &self.cfg, &self.ui, &rel)?;
-        self.swap_code(code);
-        self.ui.status(|s| s.engine = rel.engine.clone());
-        self.rel = rel;
+        self.stale=false;
+        self.take_engine(rel,code);
         Ok(())
     }
 
@@ -2380,24 +2423,24 @@ impl Fleet {
     /// WFSim's own) — while the lanes go on with the old one.
     /// `until`: when the site stops taking ours ("" already; `None` not said).
     fn served_moved(&mut self, engine: String, until: Option<String>) {
-        if self.memory_guard.draining() {
+        if self.memory_guard.draining() || self.settings_restart.is_some() {
             return;
         }
+        if let Some(until)=until.as_deref() {self.accepted_until=Some(sys::parse_iso(until).unwrap_or(0));}
         let busy = self.engine_load.as_ref().is_some_and(|(e, _)| *e == engine) || self.switch_to.as_ref().is_some_and(|(r, _)| r.engine == engine);
         if busy || Instant::now() < self.engine_retry {
             return;
         }
-        let kept = match until.as_deref() {
-            Some("") => "；本机的引擎不再被接受".to_string(),
-            Some(u) => format!("；本机的引擎在 {u} 前仍被接受"),
-            None => String::new(),
-        };
-        self.ui.log(format!("{C_INFO}[引擎]{C_END} 网站引擎已更新 {} → {engine}{kept}，新引擎在后台准备，准备好后接着用", self.rel.engine));
+        if self.waiting_said.as_deref()!=Some(&engine) {
+            self.ui.log(format!("{C_INFO}[引擎]{C_END} 网站引擎已更新 {} → {engine}；后台检查原生构建与旧引擎接受期限", self.rel.engine));
+            self.waiting_said=Some(engine.clone());
+        }
         let (net, paths, cfg, ui) = (self.net.clone(), self.paths.clone(), self.cfg.clone(), self.ui.clone());
+        let current=self.rel.clone();
+        let old_optimized=self.pool.code().native.as_ref().is_some_and(|n|!n.official);
+        let force=self.stale || self.accepted_until.is_some_and(|t|t<=sys::now_ms());
         let h = std::thread::spawn(move || {
-            let rel = fetch_release(&net).ok()?;
-            let code = load_code(&net, &paths, &cfg, &ui, &rel).ok()?;
-            Some((rel, code))
+            crate::engine_update::prepare(&net,&paths,&cfg,&ui,&current,old_optimized,force)
         });
         self.engine_load = Some((engine, h));
     }
@@ -2405,6 +2448,7 @@ impl Fleet {
     /// A prepared engine is taken up once nothing is held on the old one: no
     /// more is asked meanwhile, and what is held is finished (and answered) first.
     fn follow_engine(&mut self) {
+        if self.accepted_until.is_some_and(|until|sys::now_ms()>=until) {self.stale=true;}
         // THE SITE'S OWN WORD, read every minute: what it serves, and until when
         // it still takes ours (`accepted`).
         if self.release_read.as_ref().is_some_and(|h| h.is_finished()) {
@@ -2430,14 +2474,20 @@ impl Fleet {
         }
         if self.engine_load.as_ref().is_some_and(|(_, h)| h.is_finished()) {
             let (engine, h) = self.engine_load.take().expect("checked above");
-            match h.join().ok().flatten() {
-                Some((rel, code)) if rel.engine != self.rel.engine => {
+            match h.join().ok().and_then(|r|r.ok()) {
+                Some(crate::engine_update::Prepared {release:rel,code:Some(code),..}) if rel.engine != self.rel.engine => {
                     self.ui.log(format!(
                         "{C_INFO}[引擎]{C_END} 新引擎 {}（{}）已准备好：手上的活做完就换上",
                         rel.engine,
                         crate::work::backend_label(&code)
                     ));
                     self.switch_to = Some((rel, code));
+                }
+                Some(crate::engine_update::Prepared {release,code:None,waiting_since_ms})=>{
+                    self.engine_retry=Instant::now()+Duration::from_secs(60);
+                    let elapsed=sys::now_ms().saturating_sub(waiting_since_ms.unwrap_or_else(sys::now_ms));
+                    let remaining=self.cfg.native_wait_hours.saturating_mul(3_600_000).saturating_sub(elapsed);
+                    self.ui.status(|s|s.note=format!("等待 {} 原生库，剩余最多 {:.1} 小时",release.engine,remaining as f64/3_600_000.0));
                 }
                 // The site's page still names ours (a cache): asked again in a minute.
                 Some(_) => self.engine_retry = Instant::now() + Duration::from_secs(60),
@@ -2461,8 +2511,10 @@ impl Fleet {
     fn take_engine(&mut self, rel: Release, code: Arc<Code>) {
         self.ui.log(format!("{C_INFO}[引擎]{C_END} 已换上网站引擎 {} → {}", self.rel.engine, rel.engine));
         self.swap_code(code);
-        self.ui.status(|s| s.engine = rel.engine.clone());
+        self.ui.status(|s| {s.engine = rel.engine.clone();s.note.clear();});
         self.rel = rel;
+        self.accepted_until=None;self.waiting_said=None;
+        if let Err(e)=crate::engine_update::remember(&self.paths,&self.rel) {self.ui.log(format!("{C_GO}[引擎]{C_END} 保存引擎选择失败：{e}"));}
     }
 
     fn swap_code(&mut self, code: Arc<Code>) {
