@@ -178,6 +178,14 @@ impl Policy {
             },
         );
     }
+    pub fn failed_batch(&mut self, inputs: &[Input], reason: &str, now: u64) {
+        let mut families = std::collections::BTreeSet::new();
+        for input in inputs {
+            if families.insert(family(input)) {
+                self.failed(input, reason, now);
+            }
+        }
+    }
     pub fn completed(&mut self, input: &Input, ms: u64, now: u64) {
         let key = family(input);
         let Some(mut entry) = self.saved.entries.get(&key).cloned() else {
@@ -261,6 +269,27 @@ mod tests {
         assert!(!p.allowed(&input, 202));
         let _ = std::fs::remove_file(file);
     }
+    #[test]
+    fn one_failed_batch_defers_each_context_once() {
+        let file = std::env::temp_dir().join(format!(
+            "simfleet-batch-failure-{}.json",
+            crate::sys::random_hex(8)
+        ));
+        let mut p = Policy::open(&file, "test".into());
+        let a = input();
+        let rows = vec![a.clone(); 8];
+        p.failed_batch(&rows, "worker closed", 100);
+        let e = p.classify(&a, 101).unwrap();
+        assert_eq!(
+            (e.failures, e.until, e.private_kib),
+            (1, 100 + BAD_TTL, 768)
+        );
+        p.failed_batch(&rows, "worker closed", 200);
+        let e = p.classify(&a, 201).unwrap();
+        assert_eq!((e.failures, e.until), (2, 200 + 2 * BAD_TTL));
+        let _ = std::fs::remove_file(file);
+    }
+
     #[test]
     fn expensive_cpu_work_can_justify_a_slower_probe() {
         let file = std::env::temp_dir().join(format!(

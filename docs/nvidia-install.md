@@ -1,6 +1,6 @@
 # NVIDIA 测试包安装
 
-客户端：`v0.9.0-preview.7`。CPU 原生引擎：`engine-4296a0964da6`，Windows 为 `4296a0964da6-sfe2-v3.dll`，使用 PGO＋ThinLTO。GPU 引擎：`gpu-4296a0964da6-sfg1`。三个 Release 分开下载，不把引擎二进制塞进客户端压缩包。
+客户端：`v0.9.0-preview.8`。CPU 原生引擎：`engine-4296a0964da6`，Windows 为 `4296a0964da6-sfe2-v3.dll`，使用 PGO＋ThinLTO。GPU 引擎：`gpu-4296a0964da6-sfg1`。三个 Release 分开下载，不把引擎二进制塞进客户端压缩包。
 
 1. 解压 Windows 客户端包到副机独立目录。不要直接复制主机的 `simfleet.toml`、计算身份或任务日志；第一次启动按正常流程配置副机身份、账号和核心数。
 2. GTX 1660 Ti 使用 `simfleet-gpu-4296a0964da6-sfg1-sm75-windows-x64.zip`。RTX 5080 使用 `sm120` 包。把选中的 GPU zip 解压到 `simfleet.exe` 同目录，得到 `engines/gpu/4296a0964da6-sfg1-sm75/` 等目录。包内只有三个二进制、清单、LICENSE 和 NOTICE。

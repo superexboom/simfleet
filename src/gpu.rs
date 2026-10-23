@@ -649,9 +649,7 @@ impl Manager {
     fn transient(&mut self, e: impl std::fmt::Display) -> Event {
         self.retryable = true;
         if let Some(policy) = &mut self.policy {
-            for input in &self.pending_inputs {
-                policy.failed(input, &e.to_string(), crate::sys::now_ms());
-            }
+            policy.failed_batch(&self.pending_inputs, &e.to_string(), crate::sys::now_ms());
         }
         for key in &self.pending_keys {
             if self.excluded.len() >= 512 {
@@ -684,7 +682,7 @@ impl Manager {
                     self.phase = "待机".into();
                     self.device = value["device"].as_str().unwrap_or("NVIDIA").into();
                     let binding = format!(
-                        "adaptive-v2:{}:{}:{}:{}:{}",
+                        "adaptive-v3:{}:{}:{}:{}:{}",
                         self.engine,
                         self.module_binding,
                         self.device,
@@ -747,11 +745,14 @@ impl Manager {
                         }
                         let now = crate::sys::now_ms();
                         if let Some(policy) = &mut self.policy {
+                            let mut failed_families = std::collections::BTreeSet::new();
                             for (row, input) in rows.iter().zip(&self.pending_inputs) {
                                 if let Some(probe) = &row.probe {
                                     policy.observed(input, probe, now);
                                 } else if let Some(code) = row.fallback {
-                                    policy.failed(input, &format!("row status {code}"), now);
+                                    if failed_families.insert(policy::family(input)) {
+                                        policy.failed(input, &format!("row status {code}"), now);
+                                    }
                                 } else {
                                     policy.completed(input, row.compute_ms, now);
                                 }

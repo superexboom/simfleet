@@ -4,7 +4,7 @@
 
 | 层 | Release / 文件示例 | 版本改变的条件 |
 |---|---|---|
-| 客户端 | `v0.9.0-preview.7`；`simfleet-0.9.0-preview.7-windows-x64.zip` | 界面、调度、协议、回退和资源管理改变 |
+| 客户端 | `v0.9.0-preview.8`；`simfleet-0.9.0-preview.8-windows-x64.zip` | 界面、调度、协议、回退和资源管理改变 |
 | CPU 引擎 | `engine-4296a0964da6`；`4296a0964da6-sfe2-v3.dll` | 上游引擎哈希；本地包装和构建修订；CPU 指令级别 |
 | GPU 引擎 | `gpu-4296a0964da6-sfg1`；`simfleet-gpu-4296a0964da6-sfg1-sm75-windows-x64.zip` | 上游引擎哈希；GPU 包格式/实现修订；GPU 架构 |
 

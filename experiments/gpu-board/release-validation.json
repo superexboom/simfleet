@@ -1,0 +1,103 @@
+{
+  "client_preview7_validation": {
+    "engine": "4296a0964da6",
+    "runs": [
+      {
+        "mode": "cpu",
+        "complete_scores": 96,
+        "gpu_rows": 0,
+        "total_work": 164673469920,
+        "gpu_work": 0,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "summary": "REPLAY tasks=96 lanes=4 seconds=28.317907"
+      },
+      {
+        "mode": "gpu",
+        "complete_scores": 96,
+        "gpu_rows": 40,
+        "total_work": 164673469920,
+        "gpu_work": 68613945800,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "summary": "REPLAY tasks=96 lanes=4 seconds=18.891319"
+      },
+      {
+        "mode": "killed-gpu",
+        "complete_scores": 96,
+        "gpu_rows": 0,
+        "total_work": 164673469920,
+        "gpu_work": 0,
+        "worker_killed": true,
+        "fallback_observed": true,
+        "worker_restarted": true,
+        "summary": "REPLAY tasks=96 lanes=4 seconds=32.347566"
+      }
+    ]
+  },
+  "native": {
+    "engine": "4296a0964da6",
+    "rows": 17,
+    "skipped": 0,
+    "riven": "same",
+    "published_sha256": "be941720a7934131193826bcee86b7328ee7434db0fccd66a0417175cfc58d56"
+  },
+  "gpu_packages": [
+    {
+      "sm": 75,
+      "device_validated": false,
+      "cubin_flags": 4916555,
+      "zip_sha256": "663252ab2faa9d91d61bed7aca1f9187b5726a55ddb35de858acc6b1773239e2",
+      "files": [
+        "engines/gpu/4296a0964da6-sfg1-sm75/bridge.wasm",
+        "engines/gpu/4296a0964da6-sfg1-sm75/engine.cubin",
+        "engines/gpu/4296a0964da6-sfg1-sm75/engine.gpu.json",
+        "engines/gpu/4296a0964da6-sfg1-sm75/LICENSE",
+        "engines/gpu/4296a0964da6-sfg1-sm75/NOTICE.txt",
+        "engines/gpu/4296a0964da6-sfg1-sm75/wire.dll"
+      ]
+    },
+    {
+      "sm": 120,
+      "device_validated": true,
+      "cubin_flags": 100694018,
+      "zip_sha256": "ec04cca38687be93ac169da253c966f77cd195a626129ebfc10b5652460df66e",
+      "files": [
+        "engines/gpu/4296a0964da6-sfg1-sm120/bridge.wasm",
+        "engines/gpu/4296a0964da6-sfg1-sm120/engine.cubin",
+        "engines/gpu/4296a0964da6-sfg1-sm120/engine.gpu.json",
+        "engines/gpu/4296a0964da6-sfg1-sm120/LICENSE",
+        "engines/gpu/4296a0964da6-sfg1-sm120/NOTICE.txt",
+        "engines/gpu/4296a0964da6-sfg1-sm120/wire.dll"
+      ]
+    }
+  ],
+  "sm120_exact_shards": 128,
+  "audit": {
+    "version": "0.9.0-preview.6",
+    "events": {
+      "claim_start": 3,
+      "claim_done": 3,
+      "sync_start": 98,
+      "sync_reply": 52,
+      "gpu_ready": 28,
+      "gpu_batch_finished": 246,
+      "gpu_probe": 47,
+      "gpu_failure": 27,
+      "pack_finished": 45,
+      "sync_failed": 46
+    },
+    "gpu_failures": {
+      "GPU probe timed out; context deferred to CPU": 24,
+      "GPU timed out; rows return to CPU": 3
+    },
+    "ready": 28,
+    "last_completed_rows": 907,
+    "policy_entries": 72,
+    "contexts_allowed": 43,
+    "fatal_gpu_errors": 0
+  },
+  "preview7_defect": "One failing batch counted repeated rows as multiple failures for the same context; fixed in preview8"
+}
