@@ -1,5 +1,7 @@
 # simfleet
 
+`0.9.0-preview.12` 增加 GPU 吞吐优化：选择能组成最大批次的同类任务、扩大有界候选窗口、增加 256/512 KiB 私有页档位，并按 GPU worker 的实际基础提交量预留内存。收尾保留更多任务给 CPU，避免所有核心等 GPU 的最后一批。可选 `sfg2` NVIDIA 套件使用对齐整字访问及 96 寄存器上限；客户端优先使用匹配的 `sfg2`，没有时继续使用 `sfg1`。`dispatch.log` 记录准备、计算、下载、合并耗时。该版本先在本机测量与部署；各 GPU 架构的验证边界见 [GPU 吞吐优化](docs/gpu-throughput.md)。
+
 `0.9.0-preview.11` 的可选 NVIDIA GPU 榜单后端不再按武器白名单放行：自动少量探测、校验并学习适合 GPU 的任务上下文，慢任务或资源失败暂缓并到期重评。探测期间 CPU 照常计算，探测结果不作为成绩提交。Windows 默认限制 CPU＋GPU 合计提交在 8 GiB 预算内，可在 **S → CPU+GPU上限 MiB** 修改，显存另计并限制批量。preview.9 按实际可用物理内存动态缩批，取消了必须空闲 8 GiB 的固定门槛；4096 MiB 配置仍受合计提交硬上限保护。preview.10 将配置的总限额同步给 GPU 子进程，并保留资源不足后提高的单局配额。preview.11 在 CUDA 分配失败后缩批，并把 GPU 退出等待移出 CPU 调度线程。GPU 引擎单独安装，客户端包仍为原有五文件。Windows x64-v3 主机按架构选择 sm75（GTX 16 / RTX 20）、sm89（RTX 40）或 sm120（RTX 50）；sm75/sm89 为交叉编译测试包，sm120 已有同架构实机验证；按 **S → NVIDIA GPU 预览** 开启。贡献“速度”包含 CPU＋GPU 最近十分钟完成工作，“其中GPU”显示其 GPU 部分；账号榜单按约半小时入账增长估计。Windows 原生引擎 sfe2 只构建 PGO v3，旧 CPU 使用官方原生或 WASM。详见[自动学习与实测](docs/gpu-adaptive-dispatch.md)、[领取等待](docs/dispatch-and-gpu-recovery.md)、[长期恢复与内存](docs/gpu-long-run-recovery.md)和[预览版说明](docs/releases/v0.9.0-preview.11.md)。
 
 **WFSim 的志愿计算客户端**：把 [wfsim.app](https://wfsim.app) 网页里「帮 WFSim 计算」的那部分单独拿出来，做成一个命令行小程序。开着它，这台电脑就会按你给的预算，替 WFSim 计算排行榜分数和紫卡增益——跟开着网页一样，只是更快、更省、能常驻。

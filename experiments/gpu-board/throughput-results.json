@@ -1,0 +1,697 @@
+{
+  "engine": "5c64c380e5f2",
+  "device": {
+    "multiprocessors": 84,
+    "max_threads_per_sm": 1536,
+    "single_to_double_precision_ratio": 64,
+    "compute_major": 12,
+    "compute_minor": 0
+  },
+  "client": "0.9.0-preview.12",
+  "baseline_client": "0.9.0-preview.11",
+  "corpus": {
+    "rows": 240,
+    "distinct_builds": 6,
+    "weapon": "burston_prime",
+    "rulers": [
+      "standard_single_target",
+      "standard_multi_target"
+    ],
+    "mode": "base",
+    "cpu_lanes": 10,
+    "memory_mib": 8192,
+    "orders_sha256": "65b1264a3393e5323619b4b0bc16cd222db844bb7ff4e564364aa6646956cbde",
+    "orders": [
+      {
+        "record": {
+          "mods": [
+            "primed_cryo_rounds",
+            "malignant_force",
+            "riven",
+            "galvanized_chamber",
+            "galvanized_scope",
+            "vile_acceleration",
+            "vital_sense",
+            "gilded_truth"
+          ],
+          "evolutions": [
+            "burston_prime_evo1_incarnon_form",
+            "burston_prime_forceful_finality",
+            "burston_prime_ready_retaliation",
+            "burston_prime_absolute_valor"
+          ],
+          "arcanes": [
+            "primary_deadhead"
+          ],
+          "weapon": "burston_prime",
+          "exilus": "vigilante_supplies",
+          "riven_pos": [
+            "critical_damage",
+            "heat",
+            "weak_point_damage"
+          ],
+          "riven_rolls": [
+            1.1,
+            1.1,
+            1.1,
+            0.9
+          ],
+          "riven_neg": "status_duration"
+        },
+        "ruler": "standard_single_target",
+        "mode": "base"
+      },
+      {
+        "record": {
+          "mods": [
+            "primed_cryo_rounds",
+            "riven",
+            "primary_acuity",
+            "galvanized_scope",
+            "bladed_rounds",
+            "vile_acceleration",
+            "vital_sense",
+            "gilded_truth"
+          ],
+          "evolutions": [
+            "burston_prime_evo1_incarnon_form",
+            "burston_prime_forceful_finality",
+            "burston_prime_extended_volley",
+            "burston_prime_absolute_valor"
+          ],
+          "arcanes": [
+            "primary_deadhead"
+          ],
+          "weapon": "burston_prime",
+          "exilus": "vigilante_supplies",
+          "riven_pos": [
+            "damage",
+            "puncture",
+            "toxin"
+          ],
+          "riven_rolls": [
+            1.1,
+            1.1,
+            1.1,
+            0.9
+          ],
+          "riven_neg": "zoom"
+        },
+        "ruler": "standard_single_target",
+        "mode": "base"
+      },
+      {
+        "record": {
+          "mods": [
+            "malignant_force",
+            "rime_rounds",
+            "galvanized_chamber",
+            "serration",
+            "critical_delay",
+            "vital_sense",
+            "gilded_truth",
+            "magnetic_capacity"
+          ],
+          "evolutions": [
+            "burston_prime_evo1_incarnon_form",
+            "burston_prime_forceful_finality",
+            "burston_prime_ready_retaliation",
+            "burston_prime_absolute_valor"
+          ],
+          "arcanes": [
+            "primary_merciless"
+          ],
+          "weapon": "burston_prime"
+        },
+        "ruler": "standard_single_target",
+        "mode": "base"
+      },
+      {
+        "record": {
+          "mods": [
+            "primed_cryo_rounds",
+            "malignant_force",
+            "thermite_rounds",
+            "galvanized_chamber",
+            "primed_shred",
+            "galvanized_scope",
+            "vital_sense",
+            "riven"
+          ],
+          "evolutions": [
+            "burston_prime_evo1_incarnon_form",
+            "burston_prime_fortress_salvo",
+            "burston_prime_extended_volley",
+            "burston_prime_absolute_valor"
+          ],
+          "arcanes": [
+            "primary_deadhead"
+          ],
+          "weapon": "burston_prime",
+          "riven_pos": [
+            "critical_damage",
+            "damage",
+            "weak_point_damage"
+          ],
+          "riven_rolls": [
+            1.1,
+            1.1,
+            1.1,
+            0.9
+          ],
+          "riven_neg": "status_duration"
+        },
+        "ruler": "standard_multi_target",
+        "mode": "base"
+      },
+      {
+        "record": {
+          "mods": [
+            "primed_cryo_rounds",
+            "malignant_force",
+            "thermite_rounds",
+            "primary_acuity",
+            "galvanized_scope",
+            "rifle_elementalist",
+            "vital_sense",
+            "gilded_truth"
+          ],
+          "evolutions": [
+            "burston_prime_evo1_incarnon_form",
+            "burston_prime_fortress_salvo",
+            "burston_prime_kinetic_battle",
+            "burston_prime_absolute_valor"
+          ],
+          "arcanes": [
+            "primary_deadhead"
+          ],
+          "weapon": "burston_prime"
+        },
+        "ruler": "standard_multi_target",
+        "mode": "base"
+      },
+      {
+        "record": {
+          "mods": [
+            "primed_cryo_rounds",
+            "infected_clip",
+            "primary_acuity",
+            "serration",
+            "galvanized_aptitude",
+            "galvanized_scope",
+            "vile_acceleration",
+            "vital_sense"
+          ],
+          "evolutions": [
+            "burston_prime_evo1_incarnon_form",
+            "burston_prime_forceful_finality",
+            "burston_prime_ready_retaliation",
+            "burston_prime_absolute_valor"
+          ],
+          "arcanes": [
+            "primary_deadhead"
+          ],
+          "weapon": "burston_prime"
+        },
+        "ruler": "standard_multi_target",
+        "mode": "base"
+      }
+    ]
+  },
+  "fleet": {
+    "baseline": {
+      "seconds": 83.866728,
+      "rows": 240,
+      "gpu_rows": 48,
+      "total_work": 1420481629600,
+      "gpu_work": 276824623276,
+      "total_points_per_min": 1016.2420760709778,
+      "gpu_points_per_min": 198.04608803338556,
+      "peak_commit_bytes": 6654423040
+    },
+    "aligned_register_cap": {
+      "seconds": 74.607402,
+      "rows": 240,
+      "gpu_rows": 60,
+      "total_work": 1420481629600,
+      "gpu_work": 355704973340,
+      "total_points_per_min": 1142.3651741150295,
+      "gpu_points_per_min": 286.06140715635695,
+      "peak_commit_bytes": 6940708864
+    },
+    "wide_window_tail_regression": {
+      "seconds": 79.711652,
+      "rows": 240,
+      "gpu_rows": 70,
+      "total_work": 1420481629600,
+      "gpu_work": 411972933901,
+      "total_points_per_min": 1069.215047456299,
+      "gpu_points_per_min": 310.09739998940177,
+      "peak_commit_bytes": 6886891520
+    },
+    "cold_start_outlier": {
+      "seconds": 96.711874,
+      "rows": 240,
+      "gpu_rows": 60,
+      "total_work": 1420481629600,
+      "gpu_work": 355704973340,
+      "total_points_per_min": 881.2661181190637,
+      "gpu_points_per_min": 220.67919395709362,
+      "peak_commit_bytes": 6925332480
+    },
+    "final": {
+      "seconds": 78.061084,
+      "rows": 240,
+      "gpu_rows": 60,
+      "total_work": 1420481629600,
+      "gpu_work": 355704973340,
+      "total_points_per_min": 1091.8231391201282,
+      "gpu_points_per_min": 273.40509901707236,
+      "peak_commit_bytes": 6782947328
+    },
+    "total_speedup": 1.074373089669111,
+    "bridge_cold_start": {
+      "seconds": 2.2936172999907285,
+      "ready": {
+        "ready": true,
+        "device": "NVIDIA GeForce RTX 5080",
+        "architecture": "compute_120",
+        "memory_free": 13729005568,
+        "memory_limit_bytes": 8522825728,
+        "base_commit_bytes": 2720641024,
+        "engine": "5c64c380e5f2",
+        "revision": 2,
+        "driver": 13040,
+        "probe": true
+      }
+    }
+  },
+  "kernels": {
+    "block32": {
+      "rows": 4,
+      "runs": 4000,
+      "block": 32,
+      "module_sha256": "f7ee70509c8af96b8afe458518fe1bc18cb554741e1920dd3ffbf1edb43ab1e6",
+      "samples": [
+        {
+          "compute_seconds": 10.125623600004474,
+          "merge_seconds": 0.035123700014082715,
+          "total_seconds": 10.16261509998003,
+          "host_cpu_seconds": 0.03125,
+          "max_private_pages": 46
+        }
+      ],
+      "exact_shards": 4000,
+      "exact_scores": 4,
+      "median_seconds": 10.16261509998003
+    },
+    "block128": {
+      "rows": 4,
+      "runs": 4000,
+      "block": 128,
+      "module_sha256": "f7ee70509c8af96b8afe458518fe1bc18cb554741e1920dd3ffbf1edb43ab1e6",
+      "samples": [
+        {
+          "compute_seconds": 10.798491499997908,
+          "merge_seconds": 0.0391644999908749,
+          "total_seconds": 10.839426799997455,
+          "host_cpu_seconds": 0.046875,
+          "max_private_pages": 46
+        }
+      ],
+      "exact_shards": 4000,
+      "exact_scores": 4,
+      "median_seconds": 10.839426799997455
+    },
+    "r96-block32": {
+      "rows": 4,
+      "runs": 4000,
+      "block": 32,
+      "module_sha256": "d5921a62d57d25bf29b5e7b1b5d9026be11f9d588bfb3784f54e10e05ec52031",
+      "samples": [
+        {
+          "compute_seconds": 8.250112400011858,
+          "merge_seconds": 0.034324900014325976,
+          "total_seconds": 8.28609609999694,
+          "host_cpu_seconds": 0.03125,
+          "max_private_pages": 46
+        }
+      ],
+      "exact_shards": 4000,
+      "exact_scores": 4,
+      "median_seconds": 8.28609609999694
+    },
+    "r96-block8": {
+      "rows": 4,
+      "runs": 4000,
+      "block": 8,
+      "module_sha256": "d5921a62d57d25bf29b5e7b1b5d9026be11f9d588bfb3784f54e10e05ec52031",
+      "samples": [
+        {
+          "compute_seconds": 10.139064999995753,
+          "merge_seconds": 0.03318350002518855,
+          "total_seconds": 10.173894899984589,
+          "host_cpu_seconds": 0.03125,
+          "max_private_pages": 46
+        }
+      ],
+      "exact_shards": 4000,
+      "exact_scores": 4,
+      "median_seconds": 10.173894899984589
+    },
+    "r96-batch12": {
+      "rows": 12,
+      "runs": 12000,
+      "block": 32,
+      "module_sha256": "d5921a62d57d25bf29b5e7b1b5d9026be11f9d588bfb3784f54e10e05ec52031",
+      "samples": [
+        {
+          "compute_seconds": 11.212606000015512,
+          "merge_seconds": 0.10733739999704994,
+          "total_seconds": 11.324490300001344,
+          "host_cpu_seconds": 0.109375,
+          "max_private_pages": 46
+        }
+      ],
+      "exact_shards": 12000,
+      "exact_scores": 12,
+      "median_seconds": 11.324490300001344
+    }
+  },
+  "checks": {
+    "unit_cases": [
+      "gpu::tests::selection_and_bounds",
+      "gpu::policy::tests::expensive_cpu_work_can_justify_a_slower_probe",
+      "gpu::tests::gpu_packages_match_the_device_and_small_vram_limits_batches",
+      "gpu::tests::total_budget_sizes_batches_before_the_job_limit_is_hit",
+      "gpu::worker::tests::bridge_cache_reuses_compatible_code_and_recovers_a_broken_file",
+      "gpu::tests::workload_timeouts_do_not_extend_or_reset_fault_backoff"
+    ],
+    "memory": {
+      "cases": 64,
+      "operations_per_case": 1024,
+      "checks": [
+        {
+          "block": 8,
+          "capacity": 32,
+          "all_bytes_equal": true
+        },
+        {
+          "block": 32,
+          "capacity": 32,
+          "all_bytes_equal": true
+        },
+        {
+          "block": 32,
+          "capacity": 4,
+          "overflow_rejected": true
+        }
+      ]
+    }
+  },
+  "limits": [
+    "Fixed offline task corpus, not a prediction of the changing live queue",
+    "Local RTX 5080 only; no measured 1660 Ti/RTX 40 result",
+    "The 12-row isolated batch changes batching as well as kernel configuration; use Fleet comparison for total improvement",
+    "FP64 precision, seeds, simulation counts, work accounting and per-task correctness checks retained"
+  ],
+  "rejected_inline_candidate": {
+    "reason": "Compilation exceeded the bounded 8-GiB research job soft-stop at 7168 MiB",
+    "peak_private_bytes": 7535276032,
+    "retained_candidate": "aligned-r96",
+    "runtime_performance_measured": false
+  },
+  "packages": [
+    {
+      "file": "simfleet-gpu-5c64c380e5f2-sfg2-sm75-windows-x64.zip",
+      "sha256": "f27397a9dba0808d1c1f0e022a9a35d62201918e37e8f0344e1373851730d089",
+      "files": 6,
+      "device_validated": false,
+      "gpu": {
+        "engine": "5c64c380e5f2",
+        "wasm_sha256": "57807fc59b27a18dd20f9bd68e9216af6e0b7f665a60526f6d03eabd46778b09",
+        "wire_format": 1,
+        "gas_address": 6539336,
+        "schema": 1,
+        "revision": 2,
+        "host": "windows-x64-v3",
+        "module_sha256": "31f3af33d377d546957212175530d52589b115bb4c9da9b5d92171965c3f78fa",
+        "architecture": "compute_75",
+        "entrypoints": [
+          "sf_setup",
+          "sf_board",
+          "sf_board_packed"
+        ],
+        "wire_sha256": "175558d54089ee211d008233ee46ffe28c17eff21a64b17f5933ef727e72f684",
+        "device_validated": false,
+        "files": {
+          "engine.cubin": "31f3af33d377d546957212175530d52589b115bb4c9da9b5d92171965c3f78fa",
+          "bridge.wasm": "57807fc59b27a18dd20f9bd68e9216af6e0b7f665a60526f6d03eabd46778b09",
+          "wire.dll": "175558d54089ee211d008233ee46ffe28c17eff21a64b17f5933ef727e72f684"
+        },
+        "block_threads": 32
+      }
+    },
+    {
+      "file": "simfleet-gpu-5c64c380e5f2-sfg2-sm89-windows-x64.zip",
+      "sha256": "a6e8de3a1d68fae33fffe5ab0bf9adb3d8ea6b1b74943d0ca1d917232174cabb",
+      "files": 6,
+      "device_validated": false,
+      "gpu": {
+        "engine": "5c64c380e5f2",
+        "wasm_sha256": "57807fc59b27a18dd20f9bd68e9216af6e0b7f665a60526f6d03eabd46778b09",
+        "wire_format": 1,
+        "gas_address": 6539336,
+        "schema": 1,
+        "revision": 2,
+        "host": "windows-x64-v3",
+        "module_sha256": "c358f122a1994026a7176600734069ae2965da3de78cf4b44a358965dd0e717d",
+        "architecture": "compute_89",
+        "entrypoints": [
+          "sf_setup",
+          "sf_board",
+          "sf_board_packed"
+        ],
+        "wire_sha256": "175558d54089ee211d008233ee46ffe28c17eff21a64b17f5933ef727e72f684",
+        "device_validated": false,
+        "files": {
+          "engine.cubin": "c358f122a1994026a7176600734069ae2965da3de78cf4b44a358965dd0e717d",
+          "bridge.wasm": "57807fc59b27a18dd20f9bd68e9216af6e0b7f665a60526f6d03eabd46778b09",
+          "wire.dll": "175558d54089ee211d008233ee46ffe28c17eff21a64b17f5933ef727e72f684"
+        },
+        "block_threads": 32
+      }
+    },
+    {
+      "file": "simfleet-gpu-5c64c380e5f2-sfg2-sm120-windows-x64.zip",
+      "sha256": "f597b69ecc3c5c19317ed287d5613bf8c9e62e0725a9ff8a63570f6bb64e89d1",
+      "files": 6,
+      "device_validated": true,
+      "gpu": {
+        "engine": "5c64c380e5f2",
+        "wasm_sha256": "57807fc59b27a18dd20f9bd68e9216af6e0b7f665a60526f6d03eabd46778b09",
+        "wire_format": 1,
+        "gas_address": 6539336,
+        "schema": 1,
+        "revision": 2,
+        "host": "windows-x64-v3",
+        "module_sha256": "d5921a62d57d25bf29b5e7b1b5d9026be11f9d588bfb3784f54e10e05ec52031",
+        "architecture": "compute_120",
+        "entrypoints": [
+          "sf_setup",
+          "sf_board",
+          "sf_board_packed"
+        ],
+        "wire_sha256": "175558d54089ee211d008233ee46ffe28c17eff21a64b17f5933ef727e72f684",
+        "device_validated": true,
+        "files": {
+          "engine.cubin": "d5921a62d57d25bf29b5e7b1b5d9026be11f9d588bfb3784f54e10e05ec52031",
+          "bridge.wasm": "57807fc59b27a18dd20f9bd68e9216af6e0b7f665a60526f6d03eabd46778b09",
+          "wire.dll": "175558d54089ee211d008233ee46ffe28c17eff21a64b17f5933ef727e72f684"
+        },
+        "block_threads": 32
+      }
+    },
+    {
+      "file": "simfleet-0.9.0-preview.12-windows-x64.zip",
+      "sha256": "2d96cd653d6e51717f468dc42f5665e4c2b9691f853642f4f0fa331d5c8fbb98",
+      "files": 5
+    }
+  ],
+  "deployment": {
+    "config_unchanged": true,
+    "client_sha256": "b6fe48e1ff5b1605b2161992347f8cde3608827a86381b827328cd481d6786d6",
+    "baseline_seconds": 83.866728,
+    "improved_seconds": 78.061084,
+    "throughput_benchmark_client_sha256": "059cf77ade8aacf7c7469b18ef4c3d9a1449a4d35e4b10f024128a5cc5ef819a",
+    "probe_followup": "Independent sparse sample blocks; 12-second exploration deadline; workload-only recovery; exponential costly-context recheck"
+  },
+  "probe_followup": {
+    "slow": [
+      {
+        "label": "before",
+        "timed_out": true,
+        "seconds": 12.584378800005652,
+        "response": null
+      },
+      {
+        "label": "after",
+        "timed_out": false,
+        "seconds": 9.428053399955388,
+        "response": {
+          "rows": [
+            {
+              "id": 1,
+              "score": null,
+              "compute_ms": 9427,
+              "probe": {
+                "samples": 8,
+                "cpu_ms": 74.4624,
+                "gpu_ms": 8857.3928,
+                "max_pages": 59
+              }
+            }
+          ],
+          "timing": {
+            "prepare_ms": 569,
+            "gpu_ms": 8857,
+            "download_ms": 0,
+            "merge_ms": 0
+          }
+        }
+      }
+    ],
+    "ordinary": [
+      {
+        "label": "before",
+        "timed_out": false,
+        "seconds": 6.475065100006759,
+        "response": {
+          "rows": [
+            {
+              "id": 1,
+              "score": null,
+              "compute_ms": 6474,
+              "probe": {
+                "samples": 8,
+                "cpu_ms": 31.499,
+                "gpu_ms": 6094.006,
+                "max_pages": 36
+              }
+            }
+          ],
+          "timing": {
+            "prepare_ms": 379,
+            "gpu_ms": 6094,
+            "download_ms": 0,
+            "merge_ms": 0
+          }
+        }
+      },
+      {
+        "label": "after",
+        "timed_out": false,
+        "seconds": 5.106967700005043,
+        "response": {
+          "rows": [
+            {
+              "id": 1,
+              "score": null,
+              "compute_ms": 5106,
+              "probe": {
+                "samples": 8,
+                "cpu_ms": 31.7294,
+                "gpu_ms": 4721.7158,
+                "max_pages": 36
+              }
+            }
+          ],
+          "timing": {
+            "prepare_ms": 383,
+            "gpu_ms": 4721,
+            "download_ms": 0,
+            "merge_ms": 1
+          }
+        }
+      }
+    ],
+    "timeout_seconds": 12,
+    "admission_limit_ms": 6000,
+    "full_batch_timeout_seconds": 30,
+    "workload_recovery_seconds": 15,
+    "full_benchmark_rerun": false
+  },
+  "full_benchmark_client_sha256": "059cf77ade8aacf7c7469b18ef4c3d9a1449a4d35e4b10f024128a5cc5ef819a",
+  "initial_deployment_memory": {
+    "pid": 10696,
+    "samples": [
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 7055630336,
+        "private_bytes": 6883930112,
+        "members": [
+          {
+            "pid": 10696,
+            "private_bytes": 306995200,
+            "resident_bytes": 294002688
+          },
+          {
+            "pid": 4132,
+            "private_bytes": 1261568,
+            "resident_bytes": 7823360
+          },
+          {
+            "pid": 29040,
+            "private_bytes": 6575673344,
+            "resident_bytes": 473604096
+          }
+        ]
+      }
+    ]
+  },
+  "deployment_memory": {
+    "pid": 31956,
+    "samples": [
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 6656905216,
+        "private_bytes": 6402424832,
+        "members": [
+          {
+            "pid": 31956,
+            "private_bytes": 123400192,
+            "resident_bytes": 124248064
+          },
+          {
+            "pid": 22536,
+            "private_bytes": 1257472,
+            "resident_bytes": 7823360
+          },
+          {
+            "pid": 31500,
+            "private_bytes": 6277767168,
+            "resident_bytes": 401547264
+          }
+        ]
+      }
+    ]
+  },
+  "live_acceptance": {
+    "version": "0.9.0-preview.12",
+    "running": true,
+    "cpu_lanes": 10,
+    "compute_memory_mib": 8192,
+    "completed_gpu_batches": [
+      {
+        "rows": 4,
+        "gpu_ms": 3112
+      },
+      {
+        "rows": 6,
+        "gpu_ms": 3292
+      }
+    ],
+    "received_next_pack_rows": 200,
+    "probe_samples_verified": true
+  }
+}

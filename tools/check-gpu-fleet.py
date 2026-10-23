@@ -5,6 +5,7 @@
 All tasks are synthetic offline leases. No work is claimed or submitted.
 """
 import argparse
+import collections
 import concurrent.futures
 import ctypes as c
 import importlib.util
@@ -29,6 +30,7 @@ def main():
     parser.add_argument('--expect-evidence',action='store_true')
     parser.add_argument('--release',type=pathlib.Path)
     parser.add_argument('--order-index',type=int)
+    parser.add_argument('--mixed-orders',action='store_true',help='cycle distinct orders and compare the complete multiset of scores/work')
     parser.add_argument('--rows',type=int,default=96)
     parser.add_argument('--expect-no-gpu',action='store_true')
     parser.add_argument('--compute-memory-mib',type=int,default=8192)
@@ -45,12 +47,19 @@ def main():
     kernel.OpenJobObjectW.argtypes=[c.c_uint32,c.c_int,c.c_wchar_p];kernel.OpenJobObjectW.restype=c.c_void_p
     kernel.QueryInformationJobObject.argtypes=[c.c_void_p,c.c_int,c.c_void_p,c.c_uint32,c.c_void_p]
     kernel.CloseHandle.argtypes=[c.c_void_p]
-    orders=json.loads(args.orders.read_text());order=orders[args.order_index] if args.order_index is not None else next(o for o in orders if o['record']['weapon']=='fulmin_prime' and o['mode']=='semi_auto' and o['ruler']=='heavy_gunner')
-    req=json.loads(native.call('/api/board/order',order))['request']
-    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool: expected=json.loads(native.row(req,order['ruler'],pool,8))
+    orders=json.loads(args.orders.read_text());order=orders[0] if args.mixed_orders else orders[args.order_index] if args.order_index is not None else next(o for o in orders if o['record']['weapon']=='fulmin_prime' and o['mode']=='semi_auto' and o['ruler']=='heavy_gunner')
+    selected=orders if args.mixed_orders else [order]
+    expected_rows=[]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.lanes) as pool:
+        for item in selected:
+            req=json.loads(native.call('/api/board/order',item))['request']
+            expected_rows.append(json.loads(native.row(req,item['ruler'],pool,8)))
+    fingerprint=lambda score:tuple(score[k] for k in ('score','metric','work'))
+    expected_scores=collections.Counter(fingerprint(expected_rows[i%len(selected)]) for i in range(args.rows))
+    expected_work=sum(expected_rows[i%len(selected)]['work'] for i in range(args.rows))
     paths=[]
     for i in range(args.rows):
-        file=args.out/f'row-{i:03}.json';file.write_text(json.dumps(dict(order,kind='board',lease=f'offline-{i}',question=f'offline-{i}'))+'\n');paths.append(str(file.resolve()))
+        file=args.out/f'row-{i:03}.json';file.write_text(json.dumps(dict(selected[i%len(selected)],kind='board',lease=f'offline-{i}',question=f'offline-{i}'))+'\n');paths.append(str(file.resolve()))
     reports=[]
     modes=args.modes.split(',')
     if any(mode not in ('cpu','gpu','killed-gpu') for mode in modes):parser.error('invalid mode')
@@ -101,12 +110,17 @@ def main():
                 finally:kernel.CloseHandle(memory_job)
         if not memory_job:raise AssertionError('Replay memory job was not observed')
         if proc.returncode or len(scores)!=args.rows:raise AssertionError(dict(mode=mode,code=proc.returncode,rows=len(scores),tail=records[-10:]))
-        for score in scores:
-            if any(score[k]!=expected[k] for k in ('score','metric','work')):raise AssertionError(dict(mode=mode,score=score,expected=expected))
+        if collections.Counter(map(fingerprint,scores))!=expected_scores:raise AssertionError(dict(mode=mode,reason='complete score/work multiset differs'))
         fallback=any('任务回到 CPU' in line for line in records)
         tally=next((re.fullmatch(r'REPLAY-WORK total=(\d+) gpu=(\d+)\s*',line) for line in records if line.startswith('REPLAY-WORK ')),None)
-        if not tally or int(tally[1])!=expected['work']*args.rows or int(tally[2])!=expected['work']*gpu_rows:
-            raise AssertionError(dict(reason='CPU/GPU contribution accounting mismatch',tally=tally.groups() if tally else None,gpu_rows=gpu_rows,work=expected['work']))
+        gpu_work=0;next_gpu=False
+        for line in records:
+            if '[GPU] 完成' in line:next_gpu=True
+            elif line.startswith('{') and json.loads(line).get('kind')=='board':
+                if next_gpu:gpu_work+=json.loads(line)['work']
+                next_gpu=False
+        if not tally or int(tally[1])!=expected_work or int(tally[2])!=gpu_work:
+            raise AssertionError(dict(reason='CPU/GPU contribution accounting mismatch',tally=tally.groups() if tally else None,gpu_rows=gpu_rows,work=expected_work))
         if mode=='gpu' and not gpu_rows and not args.expect_no_gpu:raise AssertionError('Fleet never used GPU')
         if args.expect_no_gpu and gpu_rows:raise AssertionError('slow probe produced GPU scores')
         if mode=='killed-gpu' and not (killed and fallback):raise AssertionError('failed GPU worker was not recovered')

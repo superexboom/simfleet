@@ -61,9 +61,14 @@ def watch(job):
         if max(private, resident) > STOP_BYTES:
             print(json.dumps(dict(memory_budget_stop=True, private_bytes=private, resident_bytes=resident)), file=sys.stderr, flush=True)
             for pid in members.ids[:members.count]:
+                # Killing this monitor first would leave its compiler children
+                # running after the memory-budget wrapper reports failure.
+                if pid == os.getpid():
+                    continue
                 process = kernel.OpenProcess(1, False, pid)
                 if process:
                     kernel.TerminateProcess(process, 90)
+                    kernel.CloseHandle(process)
             os._exit(90)
         time.sleep(0.1)
 

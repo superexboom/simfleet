@@ -4,6 +4,7 @@ use super::{Input, Manifest, Output, MAX_ROWS, MAX_RUNS};
 use anyhow::{anyhow, ensure, Context, Result};
 use libloading::Library;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     ffi::c_void,
     io::{BufRead, Write},
@@ -197,19 +198,37 @@ struct Job {
 fn parameter<T>(v: &mut T) -> *mut c_void {
     (v as *mut T).cast()
 }
+fn bridge_module(engine: &Engine, bytes: &[u8], dir: &Path) -> Result<(Module, bool)> {
+    let key = format!("{:x}", Sha256::digest(bytes));
+    let cached = dir.join(format!("bridge-{}.wasmtime49.cwasm", &key[..16]));
+    // Own serialized artifact, keyed by the verified WASM. Wasmtime checks
+    // target/config compatibility, as it does for the reference engine cache.
+    if cached.is_file() {
+        if let Ok(module) = unsafe { Module::deserialize_file(engine, &cached) } {
+            return Ok((module, true));
+        }
+    }
+    let module = Module::from_binary(engine, bytes).map_err(we)?;
+    if let Ok(image) = module.serialize() {
+        let tmp = cached.with_extension("tmp");
+        if std::fs::write(&tmp, image).is_ok() { let _ = std::fs::rename(tmp, &cached); }
+    }
+    Ok((module, false))
+}
 
 struct Runtime {
     gpu: Cuda,
     bridge: Bridge,
     wire: Wire,
     native: Option<super::native_probe::Native>,
+    block_threads: u32,
 }
 impl Runtime {
     fn batch(
         &mut self,
         inputs: &[Input],
         progress: &mut dyn FnMut(&str) -> Result<()>,
-    ) -> Result<Vec<Output>> {
+    ) -> Result<(Vec<Output>, super::BatchTiming)> {
         super::validate_inputs(inputs)?;
         let began = Instant::now();
         progress("prepare")?;
@@ -288,17 +307,19 @@ impl Runtime {
         let mut pages = self.gpu.buffer(23, count * 4)?;
         let mut statuses = self.gpu.buffer(24, count * 4)?;
         self.gpu
-            .run("sf_setup", 1, &mut [parameter(&mut statuses)])?;
+            .run("sf_setup", 1, 32, &mut [parameter(&mut statuses)])?;
         let mut cap = capacity as u64;
         let mut private_pages = private_kib / 4;
         let mut vpages = virtual_pages as u32;
         let mut n = count as u32;
         let mut stride = 8192u32;
         progress("compute")?;
+        let prepare_ms = began.elapsed().as_millis() as u64;
         let gpu_began = Instant::now();
         self.gpu.run(
             "sf_board_packed",
             count as u32,
+            if probing { 1 } else { self.block_threads },
             &mut [
                 parameter(&mut djobs),
                 parameter(&mut downers),
@@ -318,6 +339,7 @@ impl Runtime {
         )?;
         progress("merge")?;
         let gpu_ms = gpu_began.elapsed().as_secs_f64() * 1000.0;
+        let download_began = Instant::now();
         let mut status = vec![0u32; count];
         self.gpu.download(&mut status, statuses)?;
         ensure!(
@@ -338,6 +360,8 @@ impl Runtime {
         self.gpu.download(&mut data, outputs)?;
         let mut used = vec![0u32; count];
         self.gpu.download(&mut used, pages)?;
+        let download_ms = download_began.elapsed().as_millis() as u64;
+        let merge_began = Instant::now();
         let mut offset = 0;
         let mut results = Vec::new();
         for (i, input) in inputs.iter().enumerate() {
@@ -397,7 +421,10 @@ impl Runtime {
         for out in &mut results {
             out.compute_ms = each;
         }
-        Ok(results)
+        Ok((results, super::BatchTiming {
+            prepare_ms, gpu_ms: gpu_ms as u64, download_ms,
+            merge_ms: merge_began.elapsed().as_millis() as u64,
+        }))
     }
 }
 
@@ -409,8 +436,8 @@ pub fn run(dir: &Path, engine_id: &str, native_path: Option<&Path>, memory_mib: 
     let mut config = wasmtime::Config::new();
     config.cranelift_opt_level(wasmtime::OptLevel::Speed);
     let engine = Engine::new(&config).map_err(we)?;
-    let module =
-        Module::from_binary(&engine, &std::fs::read(dir.join("bridge.wasm"))?).map_err(we)?;
+    let bytes = std::fs::read(dir.join("bridge.wasm"))?;
+    let (module, _) = bridge_module(&engine, &bytes, dir)?;
     ensure!(module.imports().len() == 0, "unexpected GPU bridge imports");
     let bridge = Bridge::new(&engine, &module, manifest.gas_address)?;
     let wire = Wire::open(dir)?;
@@ -422,7 +449,7 @@ pub fn run(dir: &Path, engine_id: &str, native_path: Option<&Path>, memory_mib: 
     writeln!(
         stdout,
         "{}",
-        json!({"ready":true,"device":gpu.name,"architecture":manifest.architecture,"memory_free":gpu.memory_info()?.0,"memory_limit_bytes":memory_limit_bytes,"engine":engine_id,"revision":manifest.revision,"driver":gpu.driver_version()?,"probe":native.is_some()})
+        json!({"ready":true,"device":gpu.name,"architecture":manifest.architecture,"memory_free":gpu.memory_info()?.0,"memory_limit_bytes":memory_limit_bytes,"base_commit_bytes":crate::sys::process_memory(),"engine":engine_id,"revision":manifest.revision,"driver":gpu.driver_version()?,"probe":native.is_some()})
     )?;
     stdout.flush()?;
     let mut runtime = Runtime {
@@ -430,6 +457,7 @@ pub fn run(dir: &Path, engine_id: &str, native_path: Option<&Path>, memory_mib: 
         bridge,
         wire,
         native,
+        block_threads: manifest.block_threads,
     };
     let mut reader = std::io::stdin().lock();
     let mut line = String::new();
@@ -445,12 +473,12 @@ pub fn run(dir: &Path, engine_id: &str, native_path: Option<&Path>, memory_mib: 
         );
         let inputs: Vec<Input> = serde_json::from_str(&line)?;
         let id = inputs.first().map(|i| i.id);
-        let out = runtime.batch(&inputs, &mut |phase| {
+        let (out, timing) = runtime.batch(&inputs, &mut |phase| {
             writeln!(stdout, "{}", json!({"phase":phase,"id":id}))?;
             stdout.flush()?;
             Ok(())
         })?;
-        writeln!(stdout, "{}", json!({"rows":out}))?;
+        writeln!(stdout, "{}", json!({"rows":out,"timing":timing}))?;
         stdout.flush()?;
         // The linear heap cannot shrink. Periodic recreation releases its high-water mark.
         batches += 1;
@@ -460,4 +488,22 @@ pub fn run(dir: &Path, engine_id: &str, native_path: Option<&Path>, memory_mib: 
         ensure!(inputs.len() <= MAX_ROWS, "GPU row limit");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn bridge_cache_reuses_compatible_code_and_recovers_a_broken_file() {
+        let dir=std::env::temp_dir().join(format!("simfleet-bridge-{}",crate::sys::random_hex(8)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let engine=Engine::default();
+        let wasm=b"\0asm\x01\0\0\0";
+        assert!(!bridge_module(&engine,wasm,&dir).unwrap().1);
+        assert!(bridge_module(&engine,wasm,&dir).unwrap().1);
+        let path=std::fs::read_dir(&dir).unwrap().next().unwrap().unwrap().path();
+        std::fs::write(path,b"incomplete").unwrap();
+        assert!(!bridge_module(&engine,wasm,&dir).unwrap().1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

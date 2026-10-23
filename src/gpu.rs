@@ -22,6 +22,7 @@ use std::{
 
 pub const MAX_ROWS: usize = 16;
 pub const MAX_RUNS: usize = 16_000;
+const PRIVATE_BUDGETS: [u32; 6] = [192, 256, 384, 512, 768, 1536];
 fn architecture_suffix(architecture: &str) -> Option<&str> {
     architecture.strip_prefix("compute_").filter(|suffix| {
         (2..=3).contains(&suffix.len()) && suffix.bytes().all(|b| b.is_ascii_digit())
@@ -35,8 +36,11 @@ fn device_run_limit(available_bytes: u64, private_kib: u32) -> usize {
 /// Reserve driver/module/snapshots and CPU growth before sizing mutable arenas.
 /// The Windows Job remains the actual hard limit if measurements change.
 pub fn memory_run_limit(total_mib: u64, cpu_bytes: u64, private_kib: u32) -> usize {
+    memory_run_limit_reserved(total_mib, cpu_bytes, 3072 << 20, private_kib)
+}
+fn memory_run_limit_reserved(total_mib: u64, cpu_bytes: u64, worker_reserve: u64, private_kib: u32) -> usize {
     let remaining =
-        (total_mib << 20).saturating_sub(cpu_bytes.max(512 << 20).saturating_add(3072 << 20));
+        (total_mib << 20).saturating_sub(cpu_bytes.max(512 << 20).saturating_add(worker_reserve));
     let affordable = (remaining / (u64::from(private_kib) + 64) / 1024) as usize;
     (affordable.min(MAX_RUNS * 192 / private_kib as usize) / 1000) * 1000
 }
@@ -76,10 +80,10 @@ pub struct Recovery {
     healthy_batches: u32,
 }
 impl Recovery {
-    pub fn failure(&mut self, probe_timeout: bool) -> Duration {
-        // An unknown workload exceeding its exploration budget says nothing
-        // about the health of the GPU. Do not penalize other learned contexts.
-        if probe_timeout {
+    pub fn failure(&mut self, workload_timeout: bool) -> Duration {
+        // A workload exceeding its execution budget does not establish a
+        // device failure. Defer that context without penalizing known good work.
+        if workload_timeout {
             return Duration::from_secs(15);
         }
         self.failures = self.failures.saturating_add(1);
@@ -110,14 +114,18 @@ pub struct Manifest {
     pub wire_format: u32,
     pub host: String,
     pub files: BTreeMap<String, String>,
+    #[serde(default = "default_block_threads")]
+    pub block_threads: u32,
 }
+fn default_block_threads() -> u32 { 32 }
 impl Manifest {
     pub fn load(dir: &Path, engine: &str) -> Result<Self> {
         let m: Self = serde_json::from_slice(&std::fs::read(dir.join("engine.gpu.json"))?)?;
         ensure!(
-            m.schema == 1 && m.revision == 1 && m.wire_format == 1,
+            m.schema == 1 && matches!(m.revision, 1 | 2) && m.wire_format == 1,
             "unsupported GPU package ABI"
         );
+        ensure!([8, 16, 32, 64, 128, 256].contains(&m.block_threads), "unsupported GPU block size");
         ensure!(
             m.engine == engine && m.host == "windows-x64-v3",
             "GPU engine or host mismatch"
@@ -158,6 +166,38 @@ pub struct Input {
 fn default_private_kib() -> u32 {
     192
 }
+/// Choose a whole context that can fill the device. A short oldest context
+/// must not hide a ready batch behind it; CPU lanes still take those rows.
+fn fullest_batch<'a>(
+    candidates: impl Iterator<Item = (&'a Input, String, u32)>,
+    run_limit: &impl Fn(u32) -> usize,
+) -> Vec<Input> {
+    let mut groups: Vec<(String, Vec<&Input>, usize, u32)> = Vec::new();
+    for (row, key, budget) in candidates {
+        let index = groups.iter().position(|g| g.0 == key).unwrap_or_else(|| {
+            groups.push((key, Vec::new(), 0, 192));
+            groups.len() - 1
+        });
+        let (_, rows, count, current_budget) = &mut groups[index];
+        let next_budget = (*current_budget).max(budget);
+        let runs = row.request["runs"].as_u64().unwrap_or(0) as usize;
+        if rows.len() < MAX_ROWS && *count + runs <= run_limit(next_budget) {
+            rows.push(row);
+            *count += runs;
+            *current_budget = next_budget;
+        }
+    }
+    // Keep the first context on equal counts, preserving the oldest-first tie.
+    let mut best = (Vec::new(), 0, 192);
+    for (_, rows, count, budget) in groups {
+        if count > best.1 { best = (rows, count, budget); }
+    }
+    best.0.into_iter().map(|row| {
+        let mut row = row.clone();
+        row.private_kib = best.2;
+        row
+    }).collect()
+}
 #[derive(Serialize, Deserialize)]
 pub struct Output {
     pub id: u64,
@@ -167,6 +207,13 @@ pub struct Output {
     pub fallback: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe: Option<Probe>,
+}
+#[derive(Default, Serialize, Deserialize)]
+pub struct BatchTiming {
+    pub prepare_ms: u64,
+    pub gpu_ms: u64,
+    pub download_ms: u64,
+    pub merge_ms: u64,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Probe {
@@ -224,7 +271,7 @@ pub fn validate_inputs(inputs: &[Input]) -> Result<()> {
             input.request["runs"].as_u64().unwrap_or(0) as usize
         };
         ensure!(
-            [192, 384, 768, 1536].contains(&input.private_kib),
+            PRIVATE_BUDGETS.contains(&input.private_kib),
             "invalid GPU private memory budget"
         );
     }
@@ -293,6 +340,8 @@ pub fn directory(engines: &Path, engine: &str) -> PathBuf {
 }
 fn directory_for(engines: &Path, engine: &str, architecture: &str) -> PathBuf {
     let suffix = architecture_suffix(architecture).unwrap_or("unsupported");
+    let tuned = engines.join("gpu").join(format!("{engine}-sfg2-sm{suffix}"));
+    if tuned.join("engine.gpu.json").is_file() { return tuned; }
     engines
         .join("gpu")
         .join(format!("{engine}-sfg1-sm{suffix}"))
@@ -334,6 +383,7 @@ pub struct Manager {
     excluded: std::collections::VecDeque<([u8; 32], u64)>,
     pub retryable: bool,
     pub probe_timeout: bool,
+    pub workload_timeout: bool,
     device_available_bytes: u64,
     fallback_count: u64,
     last_error: String,
@@ -348,6 +398,8 @@ pub struct Manager {
     pub allocation_failure: bool,
     batch_limit: usize,
     driver_error: Value,
+    pub last_timing: Option<BatchTiming>,
+    worker_base_commit: Option<u64>,
 }
 #[derive(Clone, Default)]
 pub struct View {
@@ -447,6 +499,7 @@ impl Manager {
             excluded: std::collections::VecDeque::new(),
             retryable: false,
             probe_timeout: false,
+            workload_timeout: false,
             device_available_bytes: u64::MAX,
             fallback_count: 0,
             last_error: String::new(),
@@ -468,6 +521,8 @@ impl Manager {
             allocation_failure: false,
             batch_limit: MAX_RUNS,
             driver_error: Value::Null,
+            last_timing: None,
+            worker_base_commit: None,
         })
     }
     pub fn available(&self) -> bool {
@@ -522,32 +577,15 @@ impl Manager {
         let Some(policy) = &self.policy else {
             return vec![];
         };
-        let mut full = Vec::new();
-        let mut count = 0;
-        let mut budget = 192;
-        let mut chosen = None;
-        for row in candidates.iter().filter(|i| self.accepts(i)) {
-            let family = policy::family(row);
-            if chosen.as_ref().is_some_and(|key| *key != family) {
-                continue;
-            }
-            chosen = Some(family);
-            let next_budget = budget.max(policy.budget(row, now));
-            let runs = row.request["runs"].as_u64().unwrap_or(0) as usize;
-            if full.len() >= MAX_ROWS
-                || count + runs
-                    > run_limit(next_budget)
-                        .min(MAX_RUNS * 192 / next_budget as usize)
-                        .min(device_run_limit(self.device_available_bytes, next_budget))
-            {
-                break;
-            }
-            let mut row = row.clone();
-            row.private_kib = next_budget;
-            full.push(row);
-            count += runs;
-            budget = next_budget;
-        }
+        let full = fullest_batch(
+            candidates.iter().filter(|i| self.accepts(i))
+                .map(|row| (row, policy::family(row), policy.budget(row, now))),
+            &|budget| run_limit(budget)
+                .min(MAX_RUNS * 192 / budget as usize)
+                .min(device_run_limit(self.device_available_bytes, budget)),
+        );
+        let count: usize = full.iter().map(|row| row.request["runs"].as_u64().unwrap_or(0) as usize).sum();
+        let budget = full.first().map_or(192, |row| row.private_kib);
         // Productive batches take priority over exploring another context.
         // Otherwise a stream of slow probes could keep known work waiting.
         if count
@@ -579,6 +617,15 @@ impl Manager {
         self.policy
             .as_ref()
             .map_or((0, 0), |p| p.summary(crate::sys::now_ms()))
+    }
+    pub fn memory_runs(&self, cpu_bytes: u64, private_kib: u32) -> usize {
+        // Driver stack/module storage scales with the device. Leave a GiB for
+        // snapshots, lazy tables and host output beyond the measured base.
+        match self.worker_base_commit {
+            Some(bytes) => memory_run_limit_reserved(self.memory_mib, cpu_bytes,
+                bytes.saturating_add(1024 << 20).max(2048 << 20), private_kib),
+            None => memory_run_limit(self.memory_mib, cpu_bytes, private_kib),
+        }
     }
     pub fn max_runs_for(&self, private_kib: u32) -> usize {
         (MAX_RUNS * 192 / private_kib as usize)
@@ -695,7 +742,7 @@ impl Manager {
     fn persist_failure(&self, error: &str, exit: Option<&str>) {
         let report = serde_json::json!({"at_ms":crate::sys::now_ms(),"version":env!("CARGO_PKG_VERSION"),"engine":self.engine,
             "error":error.chars().take(4096).collect::<String>(),"retryable":self.retryable,"probe_timeout":self.probe_timeout,"phase":self.phase,"exit":exit,"private_kib":self.pending_inputs.iter().map(|r|r.private_kib).max().unwrap_or(self.private_kib),"compute_limit_mib":self.memory_mib,
-            "completed_rows":self.finished,"fallback_rows":self.fallback_count,"requests":self.pending_inputs,"allocation_failure":self.allocation_failure,"batch_limit":self.batch_limit,"cuda":self.driver_error});
+            "completed_rows":self.finished,"fallback_rows":self.fallback_count,"requests":self.pending_inputs,"allocation_failure":self.allocation_failure,"batch_limit":self.batch_limit,"cuda":self.driver_error,"workload_timeout":self.workload_timeout});
         if let Err(e) = (|| -> Result<()> {
             std::fs::create_dir_all(&self.report_dir)?;
             let path = self.report_dir.join("last-failure.json");
@@ -784,12 +831,13 @@ impl Manager {
                         );
                     }
                     self.probe_supported = value["probe"] == true;
+                    self.worker_base_commit = value["base_commit_bytes"].as_u64().filter(|n| *n > 0);
                     self.device_available_bytes = value["memory_free"].as_u64().unwrap_or(0);
                     self.ready = true;
                     self.phase = "待机".into();
                     self.device = value["device"].as_str().unwrap_or("NVIDIA").into();
                     let binding = format!(
-                        "adaptive-v4:{}:{}:{}:{}:{}:{}",
+                        "adaptive-v6:{}:{}:{}:{}:{}:{}",
                         self.engine,
                         self.module_binding,
                         self.device,
@@ -836,6 +884,7 @@ impl Manager {
                 })();
                 match parsed {
                     Ok(rows) => {
+                        self.last_timing = serde_json::from_value(value["timing"].clone()).ok();
                         if rows
                             .iter()
                             .zip(&self.pending_inputs)
@@ -907,12 +956,13 @@ impl Manager {
             }
             Err(mpsc::TryRecvError::Empty) => {
                 let limit = if self.ready {
-                    Duration::from_secs(if self.probing { 8 } else { 30 })
+                    Duration::from_secs(if self.probing { 12 } else { 30 })
                 } else {
                     Duration::from_secs(180)
                 };
                 if (!self.ready || !self.pending.is_empty()) && self.since.elapsed() > limit {
                     self.probe_timeout = self.ready && self.probing && !self.pending.is_empty();
+                    self.workload_timeout = self.ready && !self.pending.is_empty();
                     Some(self.transient(if self.probe_timeout {
                         "GPU probe timed out; context deferred to CPU"
                     } else {
@@ -1034,7 +1084,7 @@ time.sleep(5)
         assert_eq!(recovery.failure(false), Duration::from_secs(15));
     }
     #[test]
-    fn slow_unknown_contexts_do_not_extend_or_reset_fault_backoff() {
+    fn workload_timeouts_do_not_extend_or_reset_fault_backoff() {
         let mut recovery = Recovery::default();
         assert_eq!(recovery.failure(false), Duration::from_secs(15));
         for _ in 0..20 {
@@ -1044,6 +1094,9 @@ time.sleep(5)
     }
     #[test]
     fn total_budget_sizes_batches_before_the_job_limit_is_hit() {
+        // A small card with <=1 GiB of loaded driver/module storage can use
+        // four 256-KiB rows under the user's 4-GiB ceiling, not just one.
+        assert_eq!(memory_run_limit_reserved(4096, 256 << 20, 2048 << 20, 256), 4000);
         assert_eq!(memory_run_limit(8192, 256 << 20, 192), 16000);
         assert_eq!(memory_run_limit(8192, 256 << 20, 1536), 2000);
         assert_eq!(memory_run_limit(4096, 256 << 20, 192), 2000);
@@ -1092,6 +1145,12 @@ time.sleep(5)
         );
         assert!(architecture_suffix("compute_../../bad").is_none());
         assert!(architecture_suffix("sm75").is_none());
+        let temp = std::env::temp_dir().join(format!("simfleet-gpu-dir-{}", crate::sys::random_hex(8)));
+        let tuned = temp.join("gpu/abc-sfg2-sm120");
+        std::fs::create_dir_all(&tuned).unwrap();
+        std::fs::write(tuned.join("engine.gpu.json"), b"{}").unwrap();
+        assert_eq!(directory_for(&temp, "abc", "compute_120"), tuned);
+        std::fs::remove_dir_all(temp).unwrap();
         assert_eq!(device_run_limit(5 << 30, 384), 7000);
         assert_eq!(device_run_limit(2 << 30, 384), 1000);
         assert_eq!(device_run_limit(1 << 30, 384), 0);
@@ -1129,6 +1188,13 @@ time.sleep(5)
     }
     #[test]
     fn selection_and_bounds() {
+        let candidates: Vec<_> = (0..5).map(row).collect();
+        let select = |limit| fullest_batch(candidates.iter().map(|r|
+            (r, if r.id == 0 { "old-short" } else { "ready" }.into(), 384)), &|_| limit);
+        let batch = select(8000);
+        assert_eq!(batch.iter().map(|r| r.id).collect::<Vec<_>>(), [1, 2, 3, 4]);
+        assert!(batch.iter().all(|r| r.private_kib == 384));
+        assert_eq!(select(2000).len(), 2);
         assert!(validate_inputs(&[row(1)]).is_ok());
         assert!(validate_inputs(&[]).is_err());
         assert!(validate_inputs(&[row(1), row(1)]).is_err());

@@ -178,9 +178,32 @@ __device__ __forceinline__ void sf_write(wasm_rt_memory_t* m, u64 address, const
     }
 }
 template<class T> __device__ __noinline__ T sf_load(wasm_rt_memory_t* m, u64 address) {
+    // WASM permits unaligned accesses. Aligned words can use a single device
+    // load instead of the byte copies required by an unqualified memcpy.
+    if (!(address & (sizeof(T) - 1))
+#ifdef SF_GAS_ADDRESS
+        && !(address < SF_GAS_ADDRESS + 8 && address + sizeof(T) > SF_GAS_ADDRESS)
+#endif
+    ) {
+        u32 mapped = m->page_map[(address >> 12) * 32 + m->lane];
+        if (mapped) return *(const T*)sf_private(m, mapped - 1, address & 4095);
+        if (address < m->snapshot_bytes) return *(const T*)(m->data + address);
+        return T(0);
+    }
     T value; sf_read(m, address, &value, sizeof(T)); return value;
 }
 template<class T> __device__ __noinline__ void sf_store(wasm_rt_memory_t* m, u64 address, T value) {
+    if (!(address & (sizeof(T) - 1))
+#ifdef SF_GAS_ADDRESS
+        && !(address < SF_GAS_ADDRESS + 8 && address + sizeof(T) > SF_GAS_ADDRESS)
+#endif
+    ) {
+        u32 page = address >> 12;
+        u32 mapped = m->page_map[(u64)page * 32 + m->lane];
+        if (!mapped) mapped = sf_make_private(m, page) + 1;
+        *(T*)sf_private(m, mapped - 1, address & 4095) = value;
+        return;
+    }
     sf_write(m, address, &value, sizeof(T));
 }
 __device__ void sf_fill(wasm_rt_memory_t* m, u64 d, u32 val, u64 n) {

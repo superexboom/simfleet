@@ -1689,10 +1689,11 @@ impl Fleet {
                 crate::gpu::Event::Failed(e)=>{
                     let retry=self.gpu.as_ref().is_some_and(|g|g.retryable);
                     let probe_timeout=self.gpu.as_ref().is_some_and(|g|g.probe_timeout);
+                    let workload_timeout=self.gpu.as_ref().is_some_and(|g|g.workload_timeout);
                     let allocation=self.gpu.as_ref().is_some_and(|g|g.allocation_failure);
-                    let delay=if retry {self.gpu_recovery.failure(probe_timeout).as_secs()}else{0};
+                    let delay=if retry {self.gpu_recovery.failure(workload_timeout).as_secs()}else{0};
                     if retry {self.gpu_restart=Some(Instant::now()+Duration::from_secs(delay));}
-                    self.trace.event(json!({"event":"gpu_failure","engine":self.rel.engine,"error":e,"retryable":retry,"probe_timeout":probe_timeout,"allocation_failure":allocation,"batch_limit":self.gpu.as_ref().map(|g|g.batch_limit()),"retry_secs":delay,"restarts":self.gpu_restarts}));
+                    self.trace.event(json!({"event":"gpu_failure","engine":self.rel.engine,"error":e,"retryable":retry,"probe_timeout":probe_timeout,"workload_timeout":workload_timeout,"allocation_failure":allocation,"batch_limit":self.gpu.as_ref().map(|g|g.batch_limit()),"retry_secs":delay,"restarts":self.gpu_restarts}));
                     self.release_gpu_rows();self.ui.log(if probe_timeout {format!("{C_INFO}[GPU探测]{C_END} 场景超时暂缓，任务回到 CPU；{delay} 秒后重建 GPU，其他已学会场景优先")}else{format!("{C_GO}[GPU]{C_END} 任务回到 CPU：{e}{}",if retry{format!("；{delay} 秒后恢复 GPU")}else{"；本次停用 GPU".into()})});
                     if allocation {self.ui.log(format!("{C_INFO}[GPU]{C_END} 驱动分配失败；后续批量上限 {} 局，保留已学会场景，CPU 继续计算",self.gpu.as_ref().map_or(0,|g|g.batch_limit())));}
                     let label=crate::work::backend_label(self.pool.code());self.ui.status(|s|s.backend=label.into());
@@ -1700,7 +1701,7 @@ impl Fleet {
                 crate::gpu::Event::Finished(rows)=>{
                     let fallback=rows.iter().filter(|r|r.fallback.is_some()).count();
                     if rows.len()>fallback {self.gpu_recovery.success(Instant::now());}
-                    self.trace.event(json!({"event":"gpu_batch_finished","rows":rows.len(),"fallback":fallback,"private_kib":self.gpu.as_ref().map(|g|g.budget())}));
+                    self.trace.event(json!({"event":"gpu_batch_finished","rows":rows.len(),"fallback":fallback,"private_kib":self.gpu.as_ref().map(|g|g.budget()),"timing":self.gpu.as_ref().and_then(|g|g.last_timing.as_ref())}));
                     if fallback>0 {
                         let pages=rows.iter().filter(|r|r.fallback==Some(120)).count();
                         let output=rows.iter().filter(|r|r.fallback==Some(2)).count();
@@ -1741,13 +1742,13 @@ impl Fleet {
         // Inspect only a bounded window of already leased work, leaving CPU
         // lanes free to take the rest. Never ask for artificial/duplicate rows.
         for _ in 0..crate::gpu::MAX_ROWS {
-            if self.tasks.len()>=crate::gpu::MAX_ROWS+self.lanes()*2 || !self.start_row(){break;}
+            if self.tasks.len()>=crate::gpu::MAX_ROWS*4+self.lanes()*2 || !self.start_row(){break;}
         }
         let manager=self.gpu.as_ref().expect("available");
         let cpu_bytes=sys::process_memory().unwrap_or(0);
         let system_limit=|budget| memory.map_or(crate::gpu::MAX_RUNS,|(available,total)|crate::gpu::system_run_limit(available,total,budget));
         let run_limit=|budget| manager.max_runs_for(budget)
-            .min(crate::gpu::memory_run_limit(self.cfg.compute_memory_limit_mb,cpu_bytes,budget))
+            .min(manager.memory_runs(cpu_bytes,budget))
             .min(system_limit(budget));
         let blocked=|budget| {
             if system_limit(budget)==0 {
@@ -1762,7 +1763,7 @@ impl Fleet {
         // Keep enough work on the CPU to overlap the GPU batch. The last small
         // tail is faster on the native lanes than waiting for a GPU batch.
         let held=self.tasks.len()+self.packs.iter().map(|p|p.rows.len()).sum::<usize>();
-        if !probing {rows.truncate(held.saturating_sub((self.lanes()*2).clamp(4,32)));}
+        if !probing {rows.truncate(held.saturating_sub((self.lanes()*4).clamp(8,128)));}
         let budget=rows.iter().map(|r|r.private_kib).max().unwrap_or(192);
         let allowed=run_limit(budget);
         if !probing && allowed==0 {self.ui.status(|s|s.gpu.state=blocked(budget));return;}

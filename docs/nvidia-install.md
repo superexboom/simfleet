@@ -1,5 +1,7 @@
 # NVIDIA 测试包安装
 
+本地吞吐测试版 preview.12 可使用独立的 `sfg2` 套件，并兼容下面列出的 `sfg1`。优先选择同引擎、同架构的 `sfg2`；探测上限为 12 秒，完整批次仍为 30 秒。实测范围和本地版变动见 [GPU 吞吐优化](gpu-throughput.md)。
+
 客户端：[v0.9.0-preview.11](https://github.com/superexboom/simfleet/releases/tag/v0.9.0-preview.11) 或更新版本。CPU 原生引擎：[engine-5c64c380e5f2](https://github.com/superexboom/simfleet/releases/tag/engine-5c64c380e5f2)，Windows 为 `5c64c380e5f2-sfe2-v3.dll`，使用 PGO＋ThinLTO。GPU 引擎：[gpu-5c64c380e5f2-sfg1](https://github.com/superexboom/simfleet/releases/tag/gpu-5c64c380e5f2-sfg1)。三个 Release 分开下载，不把引擎二进制塞进客户端压缩包。
 
 1. 解压 Windows 客户端包到副机独立目录。不要直接复制主机的 `simfleet.toml`、计算身份或任务日志；第一次启动按正常流程配置副机身份、账号和核心数。

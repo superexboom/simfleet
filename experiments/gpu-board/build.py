@@ -33,6 +33,9 @@ def main():
     p.add_argument("--out", type=pathlib.Path, required=True)
     p.add_argument("--offline", action="store_true")
     p.add_argument("--architecture", choices=["75", "89", "120"], default="120")
+    p.add_argument("--max-registers", type=int, help="optional register cap for the CUDA linker")
+    p.add_argument("--revision", type=int, choices=[1, 2], default=1)
+    p.add_argument("--block", type=int, choices=[8, 16, 32, 64, 128, 256], default=32)
     p.add_argument("--reuse-from", type=pathlib.Path, help="reuse matching bridge/wire binaries for another GPU architecture")
     p.add_argument("--skip-device-validation", action="store_true", help="build-only package for a GPU not installed here; explicitly unverified")
     p.add_argument("--check", action="store_true", help="validate configuration and generated Cargo manifests")
@@ -112,13 +115,15 @@ codegen-units=1
     execute("packed-entry",[sys.executable,here/"packed_kernel.py","--cuda",generated/"sf.cu","--ptx",generated/"sf.ptx","--out",generated/"packed.cu"])
     execute("packed-cuda",[sys.executable,here/"compile_cuda.py",generated/"packed.cu",out/"units/unit-packed.ptx","--nvrtc-dir",args.nvrtc_dir.resolve(),"--architecture","compute_"+args.architecture])
     module=out/"engine.cubin"
-    execute("link",[sys.executable,here/"link_ptx.py",out/"units",module,"--library",args.link_library.resolve(),"--architecture","sm_"+args.architecture])
+    link=[sys.executable,here/"link_ptx.py",out/"units",module,"--library",args.link_library.resolve(),"--architecture","sm_"+args.architecture]
+    if args.max_registers:link += ["--max-registers",args.max_registers]
+    execute("link",link)
     info={key:proof[key] for key in ["engine","wasm_sha256","wire_format","gas_address"]}
-    info.update(schema=1,revision=1,host="windows-x64-v3",module_sha256=sha(module),architecture="compute_"+args.architecture,entrypoints=["sf_setup","sf_board","sf_board_packed"],wire_sha256=sha(wire),device_validated=not args.skip_device_validation)
+    info.update(schema=1,revision=args.revision,block_threads=args.block,host="windows-x64-v3",module_sha256=sha(module),architecture="compute_"+args.architecture,entrypoints=["sf_setup","sf_board","sf_board_packed"],wire_sha256=sha(wire),device_validated=not args.skip_device_validation)
     module.with_suffix(".gpu.json").write_text(json.dumps(info,indent=2)+"\n")
     if not args.skip_device_validation:
         execute("gpu-proof",[sys.executable,here/"packed.py","--module",module,"--snapshot",out/"proof","--native",args.native.resolve(),
-            "--wire-library",wire,"--copies","2","--private-kib","512","--repeats","1","--out",out/"validation.json"])
+            "--wire-library",wire,"--copies","2","--private-kib","512","--block",args.block,"--repeats","1","--out",out/"validation.json"])
     shutil.copyfile(wasm,out/"bridge.wasm");shutil.copyfile(wire,out/"wire.dll")
     info["files"]={name:sha(out/name) for name in ["engine.cubin","bridge.wasm","wire.dll"]}
     module.with_suffix(".gpu.json").write_text(json.dumps(info,indent=2)+"\n")

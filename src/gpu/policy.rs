@@ -62,7 +62,7 @@ pub fn family(input: &Input) -> String {
     format!("{hash:x}")
 }
 fn valid(e: &Entry) -> bool {
-    [192, 384, 768, 1536].contains(&e.private_kib)
+    super::PRIVATE_BUDGETS.contains(&e.private_kib)
         && e.reason.len() < 256
         && e.cpu_us.is_finite()
         && e.cpu_us >= 0.0
@@ -128,7 +128,7 @@ impl Policy {
     }
     pub fn observed(&mut self, input: &Input, probe: &Probe, now: u64) -> bool {
         self.pending = None;
-        let budget = [192, 384, 768, 1536]
+        let budget = super::PRIVATE_BUDGETS
             .into_iter()
             .find(|k| *k >= probe.max_pages.saturating_add(12) * 4)
             .unwrap_or(1536)
@@ -149,17 +149,20 @@ impl Policy {
         } else {
             "probe too costly"
         };
+        let failures = if allowed { 0 } else {
+            self.saved.entries.get(&family(input)).map_or(1, |e| e.failures.saturating_add(1))
+        };
         self.store(
             family(input),
             Entry {
                 allowed,
-                until: now + if allowed { GOOD_TTL } else { BAD_TTL },
+                until: now + if allowed { GOOD_TTL } else { BAD_TTL * u64::from(failures.min(12)) },
                 updated: now,
                 private_kib: budget,
                 reason: reason.into(),
                 cpu_us,
                 gpu_ms: probe.gpu_ms,
-                failures: 0,
+                failures,
             },
         );
         allowed
@@ -189,7 +192,7 @@ impl Policy {
         let key = family(input);
         let previous = self.saved.entries.get(&key);
         let current = input.private_kib.max(previous.map_or(0, |e| e.private_kib));
-        let budget = (current * 2).min(1536);
+        let budget = super::PRIVATE_BUDGETS.into_iter().find(|k| *k >= (current * 2).min(1536)).unwrap_or(1536);
         let allowed = budget > current && previous.is_some_and(|e| e.allowed);
         let failures = previous.map_or(1, |e| e.failures.saturating_add(1));
         self.store(
@@ -381,6 +384,7 @@ mod tests {
             },
             10
         ));
+        assert_eq!(p.budget(&input, 11), 256);
         assert!(!p.observed(
             &input,
             &Probe {
@@ -401,6 +405,8 @@ mod tests {
             },
             30
         ));
+        assert_eq!(p.classify(&input,31).unwrap().failures,2);
+        assert_eq!(p.classify(&input,31).unwrap().until,30+BAD_TTL*2);
         let _ = std::fs::remove_file(file);
     }
 }

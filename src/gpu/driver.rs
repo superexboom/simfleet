@@ -220,7 +220,7 @@ impl Cuda {
     pub fn clear(&self, ptr: u64, bytes: usize) -> Result<()> {
         unsafe { check_at((self.zero)(ptr, 0, bytes), "cuMemsetD8_v2") }
     }
-    pub fn run(&self, name: &str, count: u32, args: &mut [Handle]) -> Result<()> {
+    pub fn run(&self, name: &str, count: u32, block: u32, args: &mut [Handle]) -> Result<()> {
         let name = CString::new(name)?;
         let mut fun = std::ptr::null_mut();
         unsafe {
@@ -231,10 +231,10 @@ impl Cuda {
             check_at(
                 (self.launch)(
                     fun,
-                    count.div_ceil(32),
+                    count.div_ceil(block),
                     1,
                     1,
-                    32,
+                    block,
                     1,
                     1,
                     0,

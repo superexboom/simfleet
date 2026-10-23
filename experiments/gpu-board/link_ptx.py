@@ -16,6 +16,7 @@ p.add_argument("out", type=pathlib.Path)
 p.add_argument("--library", type=pathlib.Path, required=True)
 p.add_argument("--opt", choices=["0", "3"], default="3")
 p.add_argument("--architecture", choices=["sm_75", "sm_89", "sm_120"], default="sm_120")
+p.add_argument("--max-registers", type=int, help="cap registers per thread to trade spills for resident warps")
 args = p.parse_args()
 lib = c.CDLL(str(args.library.resolve()))
 functions = {}
@@ -53,6 +54,8 @@ def check(code):
 
 
 options = [f"-arch={args.architecture}".encode(), f"-O{args.opt}".encode(), b"-fma=0", b"-prec-div=1", b"-prec-sqrt=1", b"-ftz=0", b"-split-compile=1", b"-time"]
+if args.max_registers:
+    options.append(f"-maxrregcount={args.max_registers}".encode())
 opts = (c.c_char_p * len(options))(*options)
 start = time.perf_counter()
 check(functions["Create"](c.byref(handle), len(options), opts))
