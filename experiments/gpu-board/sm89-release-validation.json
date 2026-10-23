@@ -1,0 +1,41 @@
+{
+  "engine": "4296a0964da6",
+  "architecture": "compute_89",
+  "source": "f028c04b6963006dc5ff4a5e4c73760998599b98",
+  "device_validated": false,
+  "bridge_reference_shards": 4,
+  "binary_sha256": {
+    "engine.cubin": "76b64fb1ee1cf8d4743612be8d79e2843a725037e032f41b71ee82707e33badd",
+    "bridge.wasm": "3357e12bb85c5008c1af5e7e703b46ecd380b99568dfc3af27e59961a54fbe95",
+    "wire.dll": "e356c50618a13e3d098b6799901eeecd842fb12d162ef9614627754490c7070b"
+  },
+  "zip_sha256": "247d1946c5f6cb0a74c3b4aa867d879331657a8e4dd4778bd7cab92c99a9bf9b",
+  "zip_size": 9463439,
+  "files": [
+    "engines/gpu/4296a0964da6-sfg1-sm89/LICENSE",
+    "engines/gpu/4296a0964da6-sfg1-sm89/NOTICE.txt",
+    "engines/gpu/4296a0964da6-sfg1-sm89/bridge.wasm",
+    "engines/gpu/4296a0964da6-sfg1-sm89/engine.cubin",
+    "engines/gpu/4296a0964da6-sfg1-sm89/engine.gpu.json",
+    "engines/gpu/4296a0964da6-sfg1-sm89/wire.dll"
+  ],
+  "link_seconds": 604.8292225999758,
+  "link_options": [
+    "-arch=sm_89",
+    "-O3",
+    "-fma=0",
+    "-prec-div=1",
+    "-prec-sqrt=1",
+    "-ftz=0",
+    "-split-compile=1",
+    "-time"
+  ],
+  "build_memory": {
+    "memory_budget_peak": {
+      "private_bytes": 3245068288,
+      "resident_bytes": 3228221440
+    },
+    "stop_bytes": 3758096384,
+    "job_limit_bytes": 4294967296
+  }
+}
