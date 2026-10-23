@@ -673,6 +673,8 @@ fn main() {
                 }
                 let lanes = flag("--lanes").and_then(|x| x.parse().ok()).unwrap_or_else(sys::cores);
                 let mut cfg = Config::fresh(lanes);
+                if let Some(mib)=flag("--compute-memory-mib") {cfg.compute_memory_limit_mb=mib.parse()?;}
+                let available_memory=flag("--available-memory-mib").map(|v|v.parse::<u64>()).transpose()?.map(|mib|mib.saturating_mul(1<<20));
                 let _compute_budget=maintenance::ComputeBudget::new(cfg.compute_memory_limit_mb)?;
                 if let Some(p) = flag("--placement") { cfg.placement = p; }
                 placement::init(&cfg)?;
@@ -693,7 +695,7 @@ fn main() {
                 let ctl = Arc::new(Ctl::new(&cfg,lanes));
                 let mut f = fleet::Fleet::new(net, cfg, paths.clone(), ctl, ui.clone(), rel, code);
                 let started = Instant::now();
-                f.replay(&tasks)?;
+                f.replay(&tasks,available_memory)?;
                 ui.status(|s| println!("REPLAY-WORK total={} gpu={}",s.computed_work,s.computed_gpu_work));
                 println!("REPLAY tasks={} lanes={lanes} seconds={:.6}", tasks.len(), started.elapsed().as_secs_f64());
             }

@@ -31,11 +31,20 @@ def main():
     parser.add_argument('--order-index',type=int)
     parser.add_argument('--rows',type=int,default=96)
     parser.add_argument('--expect-no-gpu',action='store_true')
+    parser.add_argument('--compute-memory-mib',type=int,default=8192)
+    parser.add_argument('--available-memory-mib',type=int,help='offline ceiling on real available physical memory')
     args=parser.parse_args();args.out.mkdir(parents=True,exist_ok=True)
     if not 1<=args.rows<=1000:parser.error('rows must be 1..1000')
     spec=importlib.util.spec_from_file_location('board',pathlib.Path(__file__).with_name('bench-board.py'))
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     native=module.Native(args.native)
+    # Hold a query handle through exit so the Job's actual peak remains readable.
+    memspec=importlib.util.spec_from_file_location('memory',pathlib.Path(__file__).with_name('inspect-compute-memory.py'))
+    memory=importlib.util.module_from_spec(memspec);memspec.loader.exec_module(memory)
+    kernel=c.WinDLL('kernel32',use_last_error=True)
+    kernel.OpenJobObjectW.argtypes=[c.c_uint32,c.c_int,c.c_wchar_p];kernel.OpenJobObjectW.restype=c.c_void_p
+    kernel.QueryInformationJobObject.argtypes=[c.c_void_p,c.c_int,c.c_void_p,c.c_uint32,c.c_void_p]
+    kernel.CloseHandle.argtypes=[c.c_void_p]
     orders=json.loads(args.orders.read_text());order=orders[args.order_index] if args.order_index is not None else next(o for o in orders if o['record']['weapon']=='fulmin_prime' and o['mode']=='semi_auto' and o['ruler']=='heavy_gunner')
     req=json.loads(native.call('/api/board/order',order))['request']
     with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool: expected=json.loads(native.row(req,order['ruler'],pool,8))
@@ -46,7 +55,8 @@ def main():
     modes=args.modes.split(',')
     if any(mode not in ('cpu','gpu','killed-gpu') for mode in modes):parser.error('invalid mode')
     for mode in modes:
-        command=[str(args.client.resolve()),'replay',*paths,'--lanes',str(args.lanes)]
+        command=[str(args.client.resolve()),'replay',*paths,'--lanes',str(args.lanes),'--compute-memory-mib',str(args.compute_memory_mib)]
+        if args.available_memory_mib is not None:command+=['--available-memory-mib',str(args.available_memory_mib)]
         if mode!='cpu':command+=['--gpu']
         if args.release:command+=['--release',str(args.release.resolve())]
         proc=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf8',creationflags=0x08000000)
@@ -56,10 +66,12 @@ def main():
             q.put(None)
         threading.Thread(target=read_output,daemon=True).start()
         records=[];scores=[];killed=False;gpu_rows=0;deadline=time.monotonic()+240
+        memory_job=None;peak_commit=0;job_limit=0
         try:
             while True:
                 line=q.get(timeout=max(1,deadline-time.monotonic()))
                 if line is None:break
+                if not memory_job:memory_job=kernel.OpenJobObjectW(4,False,f'Local\\simfleet-compute-{proc.pid}')
                 records.append(line)
                 if line.startswith('{'):
                     v=json.loads(line)
@@ -80,6 +92,14 @@ def main():
             if proc.poll() is None:proc.kill()
             proc.wait(timeout=15)
             (args.out/f'{mode}.log').write_text(''.join(records),encoding='utf8')
+            if memory_job:
+                info=memory.Extended()
+                try:
+                    if not kernel.QueryInformationJobObject(memory_job,9,c.byref(info),c.sizeof(info),None):raise c.WinError(c.get_last_error())
+                    peak_commit=info.peak_job;job_limit=info.job_limit
+                    assert job_limit==(args.compute_memory_mib-64)*1024**2 and peak_commit<=job_limit
+                finally:kernel.CloseHandle(memory_job)
+        if not memory_job:raise AssertionError('Replay memory job was not observed')
         if proc.returncode or len(scores)!=args.rows:raise AssertionError(dict(mode=mode,code=proc.returncode,rows=len(scores),tail=records[-10:]))
         for score in scores:
             if any(score[k]!=expected[k] for k in ('score','metric','work')):raise AssertionError(dict(mode=mode,score=score,expected=expected))
@@ -97,7 +117,7 @@ def main():
             assert evidence['retryable'] and evidence['requests'] and evidence['engine']==native.engine
             assert 'GPU worker' in evidence['error']
             assert 'account' not in evidence and 'session' not in evidence
-        report=dict(mode=mode,complete_scores=len(scores),gpu_rows=gpu_rows,total_work=int(tally[1]),gpu_work=int(tally[2]),worker_killed=killed,fallback_observed=fallback,worker_restarted=restarted,summary=next(line.strip() for line in records if line.startswith('REPLAY tasks=')))
+        report=dict(mode=mode,complete_scores=len(scores),gpu_rows=gpu_rows,total_work=int(tally[1]),gpu_work=int(tally[2]),compute_memory_mib=args.compute_memory_mib,available_memory_mib=args.available_memory_mib,job_limit_bytes=job_limit,peak_commit_bytes=peak_commit,worker_killed=killed,fallback_observed=fallback,worker_restarted=restarted,summary=next(line.strip() for line in records if line.startswith('REPLAY tasks=')))
         reports.append(report);print(json.dumps(report),flush=True)
     (args.out/'validation.json').write_text(json.dumps(dict(engine=native.engine,runs=reports),indent=2)+'\n')
 

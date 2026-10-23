@@ -40,6 +40,18 @@ pub fn memory_run_limit(total_mib: u64, cpu_bytes: u64, private_kib: u32) -> usi
     let affordable = (remaining / (u64::from(private_kib) + 64) / 1024) as usize;
     (affordable.min(MAX_RUNS * 192 / private_kib as usize) / 1000) * 1000
 }
+/// Physical availability is separate from the user's process commit ceiling.
+/// CUDA/WASM are already loaded when dispatch samples this value; only reserve
+/// system headroom and additional batch storage, not the whole process again.
+pub fn system_memory_reserve(total_bytes: u64) -> u64 {
+    (total_bytes / 16).clamp(512 << 20, 2 << 30)
+}
+pub fn system_run_limit(available_bytes: u64, total_bytes: u64, private_kib: u32) -> usize {
+    let remaining =
+        available_bytes.saturating_sub(system_memory_reserve(total_bytes) + (256 << 20));
+    let affordable = remaining / ((u64::from(private_kib) + 128) * 1024);
+    ((affordable.min(MAX_RUNS as u64) / 1000) * 1000) as usize
+}
 /// Temporary failures back off without permanently disabling a long run.
 /// Only a minute and eight successful batches reset an accumulated streak.
 #[derive(Default)]
@@ -466,7 +478,7 @@ impl Manager {
                 .as_ref()
                 .is_some_and(|p| p.allowed(input, crate::sys::now_ms()))
     }
-    pub fn select(&self, candidates: &[Input], max_runs: usize) -> Vec<Input> {
+    pub fn select(&self, candidates: &[Input], run_limit: &impl Fn(u32) -> usize) -> Vec<Input> {
         let now = crate::sys::now_ms();
         let Some(policy) = &self.policy else {
             return vec![];
@@ -485,7 +497,7 @@ impl Manager {
             let runs = row.request["runs"].as_u64().unwrap_or(0) as usize;
             if full.len() >= MAX_ROWS
                 || count + runs
-                    > max_runs
+                    > run_limit(next_budget)
                         .min(MAX_RUNS * 192 / next_budget as usize)
                         .min(device_run_limit(self.device_available_bytes, next_budget))
             {
@@ -501,7 +513,7 @@ impl Manager {
         // Otherwise a stream of slow probes could keep known work waiting.
         if count
             >= 4000
-                .min(max_runs)
+                .min(run_limit(budget))
                 .min(MAX_RUNS * 192 / budget as usize)
                 .min(device_run_limit(self.device_available_bytes, budget))
             && !full.is_empty()
@@ -528,9 +540,6 @@ impl Manager {
         self.policy
             .as_ref()
             .map_or((0, 0), |p| p.summary(crate::sys::now_ms()))
-    }
-    pub fn max_runs(&self) -> usize {
-        self.max_runs_for(self.private_kib)
     }
     pub fn max_runs_for(&self, private_kib: u32) -> usize {
         (MAX_RUNS * 192 / private_kib as usize)
@@ -849,6 +858,35 @@ mod tests {
         assert_eq!(memory_run_limit(4096, 256 << 20, 192), 2000);
         assert_eq!(memory_run_limit(4096, 256 << 20, 1536), 0);
         assert_eq!(memory_run_limit(8192, 8 << 30, 192), 0);
+    }
+    #[test]
+    fn smaller_hosts_use_available_memory_instead_of_an_eight_gib_gate() {
+        let total = 16 << 30;
+        assert_eq!(system_memory_reserve(total), 1 << 30);
+        // Both reported machines can run a learned 384-KiB row under 4 GiB.
+        for available in [7 << 30, 4800 << 20] {
+            let runs =
+                memory_run_limit(4096, 256 << 20, 384).min(system_run_limit(available, total, 384));
+            assert!(runs >= 1000);
+        }
+        assert_eq!(system_memory_reserve(8 << 30), 512 << 20);
+        assert_eq!(system_memory_reserve(128 << 30), 2 << 30);
+    }
+    #[test]
+    fn physical_pressure_shrinks_batches_and_respects_system_headroom() {
+        let total = 16 << 30;
+        let full =
+            memory_run_limit(8192, 256 << 20, 384).min(system_run_limit(7 << 30, total, 384));
+        let smaller =
+            memory_run_limit(8192, 256 << 20, 384).min(system_run_limit(2 << 30, total, 384));
+        assert!(smaller >= 1000 && smaller < full);
+        assert_eq!(system_run_limit(1 << 30, total, 192), 0);
+        assert_eq!(system_run_limit(0, total, 192), 0);
+        // Large private arenas still cannot bypass a 4-GiB commit ceiling.
+        assert_eq!(
+            memory_run_limit(4096, 256 << 20, 1536).min(system_run_limit(7 << 30, total, 1536)),
+            0
+        );
     }
     #[test]
     fn gpu_packages_match_the_device_and_small_vram_limits_batches() {

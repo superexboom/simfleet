@@ -450,6 +450,8 @@ pub struct Fleet {
     starved_said: Option<Instant>,
     pub session_dropped: bool,
     pub offline: bool,
+    /// Offline replay can lower reported availability without filling host RAM.
+    replay_memory_available: Option<u64>,
     memory_guard: crate::maintenance::MemoryGuard,
     memory_checked: Instant,
     /// The drain finished and main may replace this process after saving config.
@@ -553,6 +555,7 @@ impl Fleet {
             starved_said: None,
             session_dropped: false,
             offline: false,
+            replay_memory_available: None,
         };
         if f.cfg.slots > 0 {
             f.open = f.cfg.slots;
@@ -1722,32 +1725,47 @@ impl Fleet {
         }
         if self.gpu_restart.is_some(){return;}
         if self.lanes()==0 || !self.gpu.as_ref().is_some_and(|g|g.available()) {return;}
-        // Leave >=8 GiB system headroom. The child independently has an 8 GiB
-        // hard commit limit and a 30-second batch timeout in its supervisor.
-        if sys::memory().is_some_and(|(used,total,_)|total.saturating_sub(used)<8<<30) {self.ui.status(|s|s.gpu.state="待机：系统内存紧张".into());return;}
+        // Physical availability limits additional batch storage. The configured
+        // CPU+GPU Job ceiling separately limits total process commit.
+        let memory=sys::memory().map(|(used,total,_)| {
+            let available=total.saturating_sub(used);
+            (self.replay_memory_available.map_or(available,|cap|available.min(cap)),total)
+        });
         // Inspect only a bounded window of already leased work, leaving CPU
         // lanes free to take the rest. Never ask for artificial/duplicate rows.
         for _ in 0..crate::gpu::MAX_ROWS {
             if self.tasks.len()>=crate::gpu::MAX_ROWS+self.lanes()*2 || !self.start_row(){break;}
         }
         let manager=self.gpu.as_ref().expect("available");
-        let max_runs=manager.max_runs().min(crate::gpu::memory_run_limit(self.cfg.compute_memory_limit_mb,sys::process_memory().unwrap_or(0),manager.budget()));
-        if max_runs==0 {self.ui.status(|s|s.gpu.state="待机：合计内存预算不足".into());return;}
+        let cpu_bytes=sys::process_memory().unwrap_or(0);
+        let system_limit=|budget| memory.map_or(crate::gpu::MAX_RUNS,|(available,total)|crate::gpu::system_run_limit(available,total,budget));
+        let run_limit=|budget| manager.max_runs_for(budget)
+            .min(crate::gpu::memory_run_limit(self.cfg.compute_memory_limit_mb,cpu_bytes,budget))
+            .min(system_limit(budget));
+        let blocked=|budget| {
+            if system_limit(budget)==0 {
+                memory.map_or("待机：系统可用内存不足".into(),|(available,total)|format!("待机：可用 {:.1}G，预留 {:.1}G",available as f64/(1u64<<30) as f64,crate::gpu::system_memory_reserve(total) as f64/(1u64<<30) as f64))
+            } else if manager.max_runs_for(budget)==0 {"待机：显存余量不足".into()}
+            else {"待机：合计内存预算不足".into()}
+        };
+        if run_limit(manager.budget())==0 {self.ui.status(|s|s.gpu.state=blocked(manager.budget()));return;}
         let candidates:Vec<_>=self.tasks.iter().filter_map(|t|match &t.runner {Runner::Board(b)=>b.gpu_input(t.id),_=>None}).collect();
-        let mut rows=manager.select(&candidates,max_runs);
+        let mut rows=manager.select(&candidates,&run_limit);
         let probing=rows.first().is_some_and(|r|r.probe);
         // Keep enough work on the CPU to overlap the GPU batch. The last small
         // tail is faster on the native lanes than waiting for a GPU batch.
         let held=self.tasks.len()+self.packs.iter().map(|p|p.rows.len()).sum::<usize>();
         if !probing {rows.truncate(held.saturating_sub((self.lanes()*2).clamp(4,32)));}
         let budget=rows.iter().map(|r|r.private_kib).max().unwrap_or(192);
-        let allowed=crate::gpu::memory_run_limit(self.cfg.compute_memory_limit_mb,sys::process_memory().unwrap_or(0),budget).min(manager.max_runs_for(budget));
+        let allowed=run_limit(budget);
+        if !probing && allowed==0 {self.ui.status(|s|s.gpu.state=blocked(budget));return;}
         if !probing {let mut total=0;rows.retain(|r|{total+=r.request["runs"].as_u64().unwrap_or(0) as usize;total<=allowed});}
         let required=if probing{1}else{4000.min(allowed) as u64};
         let selected=rows.iter().map(|r|r.request["runs"].as_u64().unwrap_or(0)).sum::<u64>();
         if rows.is_empty() || selected<required {self.ui.status(|s|s.gpu.state=if held==0{"待机：等待新任务".into()}else if held<=32{"待机：CPU收尾".into()}else if selected==0{"待机：暂缓场景或探测间隔".into()}else{format!("待机：合适任务 {selected}/{required}次")});return;}
         match self.gpu.as_mut().expect("available").submit(&rows) {
             Ok(())=>{
+                self.trace.event(json!({"event":"gpu_dispatch","probe":probing,"rows":rows.len(),"runs":selected,"private_kib":budget,"allowed_runs":allowed,"compute_limit_mib":self.cfg.compute_memory_limit_mb,"system_available_bytes":memory.map(|m|m.0),"system_reserve_bytes":memory.map(|m|crate::gpu::system_memory_reserve(m.1))}));
                 if !probing {for t in &mut self.tasks {if rows.iter().any(|r|r.id==t.id) {if let Runner::Board(b)=&mut t.runner {b.gpu_pending=true;t.last_ran=Instant::now();}}}}
                 if probing {self.ui.log(format!("{C_INFO}[GPU]{C_END} 探测 {} / {}，CPU 同时正常计算",rows[0].request["weapon"].as_str().unwrap_or("?"),rows[0].ruler));}
                 else{self.ui.log(format!("{C_INFO}[GPU]{C_END} 已分配 {} 条独立榜单任务",rows.len()));}
@@ -2537,8 +2555,9 @@ impl Fleet {
 
     /// Compute saved tasks (`work` as `/api/board/work` handed them out), all
     /// at once, offline.
-    pub fn replay(&mut self, tasks: &[Value]) -> Result<()> {
+    pub fn replay(&mut self, tasks: &[Value], available_memory: Option<u64>) -> Result<()> {
         self.offline = true;
+        self.replay_memory_available = available_memory;
         if self.cfg.gpu_enabled {
             self.dispatch_gpu();
             let until=Instant::now()+Duration::from_secs(185);
