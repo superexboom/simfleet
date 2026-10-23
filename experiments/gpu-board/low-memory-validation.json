@@ -1,0 +1,91 @@
+[
+  {
+    "engine": "4296a0964da6",
+    "runs": [
+      {
+        "mode": "gpu",
+        "complete_scores": 96,
+        "gpu_rows": 1,
+        "total_work": 164673469920,
+        "gpu_work": 1715348645,
+        "compute_memory_mib": 4096,
+        "available_memory_mib": 7168,
+        "job_limit_bytes": 4227858432,
+        "peak_commit_bytes": 3473096704,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "summary": "REPLAY tasks=96 lanes=4 seconds=29.542340"
+      }
+    ],
+    "dispatch": [
+      {
+        "event": "gpu_dispatch",
+        "probe": false,
+        "rows": 1,
+        "runs": 1000,
+        "private_kib": 384,
+        "allowed_runs": 1000,
+        "compute_limit_mib": 4096,
+        "system_available_bytes": 7516192768,
+        "system_reserve_bytes": 2147483648,
+        "at": 1792755868510
+      }
+    ]
+  },
+  {
+    "engine": "4296a0964da6",
+    "runs": [
+      {
+        "mode": "gpu",
+        "complete_scores": 96,
+        "gpu_rows": 1,
+        "total_work": 164673469920,
+        "gpu_work": 1715348645,
+        "compute_memory_mib": 4096,
+        "available_memory_mib": 4800,
+        "job_limit_bytes": 4227858432,
+        "peak_commit_bytes": 3422081024,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "summary": "REPLAY tasks=96 lanes=4 seconds=29.599903"
+      }
+    ],
+    "dispatch": [
+      {
+        "event": "gpu_dispatch",
+        "probe": false,
+        "rows": 1,
+        "runs": 1000,
+        "private_kib": 384,
+        "allowed_runs": 1000,
+        "compute_limit_mib": 4096,
+        "system_available_bytes": 5033164800,
+        "system_reserve_bytes": 2147483648,
+        "at": 1792755945506
+      }
+    ]
+  },
+  {
+    "engine": "4296a0964da6",
+    "runs": [
+      {
+        "mode": "gpu",
+        "complete_scores": 24,
+        "gpu_rows": 0,
+        "total_work": 41168367480,
+        "gpu_work": 0,
+        "compute_memory_mib": 4096,
+        "available_memory_mib": 512,
+        "job_limit_bytes": 4227858432,
+        "peak_commit_bytes": 3372986368,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "summary": "REPLAY tasks=24 lanes=4 seconds=9.068400"
+      }
+    ],
+    "dispatch": []
+  }
+]
