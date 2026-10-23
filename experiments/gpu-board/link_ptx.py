@@ -15,7 +15,7 @@ p.add_argument("source", type=pathlib.Path)
 p.add_argument("out", type=pathlib.Path)
 p.add_argument("--library", type=pathlib.Path, required=True)
 p.add_argument("--opt", choices=["0", "3"], default="3")
-p.add_argument("--architecture", choices=["sm_75", "sm_120"], default="sm_120")
+p.add_argument("--architecture", choices=["sm_75", "sm_89", "sm_120"], default="sm_120")
 args = p.parse_args()
 lib = c.CDLL(str(args.library.resolve()))
 functions = {}

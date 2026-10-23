@@ -8,9 +8,9 @@
 | CPU 引擎 | `engine-4296a0964da6`；`4296a0964da6-sfe2-v3.dll` | 上游引擎哈希；本地包装和构建修订；CPU 指令级别 |
 | GPU 引擎 | `gpu-4296a0964da6-sfg1`；`simfleet-gpu-4296a0964da6-sfg1-sm75-windows-x64.zip` | 上游引擎哈希；GPU 包格式/实现修订；GPU 架构 |
 
-上游引擎标识不能拿客户端版本号代替。`sfe2` 将 Windows 默认构建切为 PGO＋ThinLTO v3，并保留新文件名避免覆盖已发布的 sfe1；Linux 仍构建 baseline/v3，macOS 构建 Apple silicon。`sfg1` 是 GPU 包的协议/实现修订。`v3` 指 x86-64-v3 主机指令集，`sm75` / `sm120` 指 NVIDIA GPU 架构，两者不能混称。GPU 包内的 `wire.dll` 也需要 x86-64-v3。
+上游引擎标识不能拿客户端版本号代替。`sfe2` 将 Windows 默认构建切为 PGO＋ThinLTO v3，并保留新文件名避免覆盖已发布的 sfe1；Linux 仍构建 baseline/v3，macOS 构建 Apple silicon。`sfg1` 是 GPU 包的协议/实现修订。`v3` 指 x86-64-v3 主机指令集，`sm75` / `sm89` / `sm120` 指 NVIDIA GPU 架构，两者不能混称。GPU 包内的 `wire.dll` 也需要 x86-64-v3。
 
-普通用户仍只下载自己平台的客户端。Windows 有兼容 NVIDIA 显卡、愿意试用 GPU 的用户再下载单独 GPU 包，直接解压到 `simfleet.exe` 所在目录。在设置菜单中打开 GPU 开关；配置会即时保存。首版只读本地 GPU 包，不会自动下载实验性 GPU 二进制。之后自动分发应按引擎、操作系统、主机指令集和 GPU 架构选择，不能给其他型号强行分发 RTX 5080 的模块。
+普通用户仍只下载自己平台的客户端。Windows 有兼容 NVIDIA 显卡、愿意试用 GPU 的用户再下载单独 GPU 包，直接解压到 `simfleet.exe` 所在目录。在设置菜单中打开 GPU 开关；配置会即时保存。目前只读本地 GPU 包，不会自动下载实验性 GPU 二进制。分发按引擎、操作系统、主机指令集和 GPU 计算能力选择：GTX 16 / RTX 20 对应 sm75，RTX 40 对应 sm89，RTX 50 对应 sm120；不按单张显卡型号制作套件。
 
 GPU 包有六个文件：`engine.cubin`、`bridge.wasm`、`wire.dll`、`engine.gpu.json`、`LICENSE` 和 `NOTICE.txt`，都位于 `engines/gpu/<engine>-sfg1-sm120/`。后两份仅保留必要许可。技术报告、基准输入、验证结果、编译器、CUDA SDK 都不进入发行包。客户端仍只有可执行文件、README 和三份许可证/署名文件；CPU DLL 保持独立引擎 Release。
 
@@ -25,4 +25,4 @@ GPU 包有六个文件：`engine.cubin`、`bridge.wasm`、`wire.dll`、`engine.g
 ./tools/package-gpu.ps1 -Source output/gpu-board-62a82930d1d3-sm120
 ```
 
-正式发布前需要提交完整对应源码、确认三平台客户端 CI，并上传已核对哈希的可选 GPU 包。sm75 交叉编译包标记 `device_validated: false`，需要 1660 Ti 实机验证；不能把 RTX 5080 的结果作为 sm75 验收。三个发布层都保留完整对应源码和校验信息，客户端压缩包不加研究材料。
+正式发布前需要提交完整对应源码、确认三平台客户端 CI，并上传已核对哈希的可选 GPU 包。sm75、sm89 交叉编译包标记 `device_validated: false`，需要对应架构实机验证；sm120 的验证结果不能代替其他架构验收。增加同一 GPU ABI 下的架构包不要求更新客户端版本；preview.8 已能选择 sm89。三个发布层都保留完整对应源码和校验信息，客户端压缩包不加研究材料。

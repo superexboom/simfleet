@@ -32,7 +32,7 @@ def main():
     p.add_argument("--sample-row", type=int, default=9)
     p.add_argument("--out", type=pathlib.Path, required=True)
     p.add_argument("--offline", action="store_true")
-    p.add_argument("--architecture", choices=["75", "120"], default="120")
+    p.add_argument("--architecture", choices=["75", "89", "120"], default="120")
     p.add_argument("--reuse-from", type=pathlib.Path, help="reuse matching bridge/wire binaries for another GPU architecture")
     p.add_argument("--skip-device-validation", action="store_true", help="build-only package for a GPU not installed here; explicitly unverified")
     p.add_argument("--check", action="store_true", help="validate configuration and generated Cargo manifests")
