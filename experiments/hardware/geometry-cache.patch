@@ -1,0 +1,213 @@
+--- a/engine/src/rules/space.rs
++++ b/engine/src/rules/space.rs
+@@ -464,14 +464,54 @@
+ /// are the ELEMENT's and are fixed.
+ #[derive(Debug, Clone, Default)]
+ pub struct Neighbours {
+-    near: Vec<Vec<(f64, u32)>>,
++    near: std::sync::Arc<[Vec<(f64, u32)>]>,
++}
++
++thread_local! {
++    static NEIGHBOUR_CACHE: std::cell::RefCell<Option<NeighbourCache>> = const { std::cell::RefCell::new(None) };
++}
++
++struct NeighbourCache {
++    positions: Vec<(u64, u64)>,
++    value: Neighbours,
++    gas: u64,
++}
++
++impl Neighbours {
++    // One entry per lane, bounded in size and released with its thread. Keep
++    // the original metered function body intact and replay its measured gas.
++    pub fn build(bodies: &[Vec2]) -> Self {
++        if bodies.len() > 512 {
++            return Self::build_uncached(bodies);
++        }
++        NEIGHBOUR_CACHE.with(|slot| {
++            let mut slot = slot.borrow_mut();
++            if let Some(entry) = slot.as_ref() {
++                if entry.positions.len() == bodies.len()
++                    && entry.positions.iter().zip(bodies).all(|(&(x, y), b)| x == b.x.to_bits() && y == b.y.to_bits())
++                {
++                    crate::fight::gas::charge(entry.gas);
++                    return entry.value.clone();
++                }
++            }
++            let before = crate::fight::gas::gas_now();
++            let value = Self::build_uncached(bodies);
++            let gas = crate::fight::gas::gas_now().wrapping_sub(before);
++            // At most 512 KiB of payload plus row/key headers per lane.
++            *slot = (value.near.iter().map(Vec::capacity).sum::<usize>() <= 32_768).then(|| NeighbourCache {
++                positions: bodies.iter().map(|b| (b.x.to_bits(), b.y.to_bits())).collect(),
++                value: value.clone(), gas,
++            });
++            value
++        })
++    }
+ }
+ 
+ #[wfsim_gas_macro::metered]
+ impl Neighbours {
+     /// O(N^2) once — 130k distance computations for a 361-body grid, against
+     /// the millions the per-proc scan was doing.
+-    pub fn build(bodies: &[Vec2]) -> Self {
++    fn build_uncached(bodies: &[Vec2]) -> Self {
+         Self {
+             near: bodies
+                 .iter()
+@@ -1490,3 +1530,38 @@
+         assert!(short.y <= 6.0 + 1e-6, "{short:?}");
+     }
+ }
++
++#[cfg(test)]
++mod simfleet_cache_tests {
++    use super::*;
++    fn measured(b: &[Vec2], cached: bool) -> (Neighbours, u64) {
++        let start = crate::fight::gas::gas_now();
++        let n = if cached { Neighbours::build(b) } else { Neighbours::build_uncached(b) };
++        (n, crate::fight::gas::gas_now().wrapping_sub(start))
++    }
++    #[test]
++    fn neighbours_preserve_cold_warm_changed_geometry_and_gas() {
++        let mut b = vec![Vec2::ORIGIN, Vec2::new(3.0, 0.0), Vec2::new(6.0, 0.0)];
++        for step in 0..8 {
++            b[1].x = step as f64;
++            let (expected, gas) = measured(&b, false);
++            for _ in 0..3 {
++                let (actual, charge) = measured(&b, true);
++                assert_eq!(actual.near, expected.near);
++                assert_eq!(charge, gas);
++            }
++        }
++        b[0].x = -0.0;
++        measured(&b, true);
++        NEIGHBOUR_CACHE.with(|s| assert_eq!(s.borrow().as_ref().unwrap().positions[0].0, (-0.0f64).to_bits()));
++    }
++    #[test]
++    fn neighbour_cache_rejects_oversized_payload() {
++        let b = vec![Vec2::ORIGIN; 512];
++        let (expected, gas) = measured(&b, false);
++        let (actual, charge) = measured(&b, true);
++        assert_eq!(actual.near, expected.near);
++        assert_eq!(charge, gas);
++        NEIGHBOUR_CACHE.with(|s| assert!(s.borrow().is_none()));
++    }
++}
+--- a/engine/src/rules/chain.rs
++++ b/engine/src/rules/chain.rs
+@@ -144,10 +144,10 @@
+ pub struct Layout {
+     /// Bodies the splash catches — the seed set, minus whatever was struck
+     /// directly (which the caller supplies per shot).
+-    caught: Vec<u32>,
++    caught: std::sync::Arc<[u32]>,
+     /// Per body, every body within the chain's range, NEAREST FIRST and ties by
+     /// index. A hop reads this and takes the first one it has not visited.
+-    near: Vec<Vec<u32>>,
++    near: std::sync::Arc<[Vec<u32>]>,
+     /// Bodies a SELF-AIMING attack will take, in the order it takes them, and
+     /// empty for every weapon that does not aim itself. Another per-engagement
+     /// constant: the cone is measured off an aim line that does not move,
+@@ -157,10 +157,52 @@
+     beams: u32,
+ }
+ 
++thread_local! {
++    static LAYOUT_CACHE: std::cell::RefCell<Option<LayoutCache>> = const { std::cell::RefCell::new(None) };
++}
++
++struct LayoutCache {
++    positions: Vec<(u64, u64)>,
++    options: [u64; 7],
++    value: Layout,
++    gas: u64,
++}
++
++impl Layout {
++    // Cache only the immutable build, before acquiring() mutates its local
++    // copy. The source body stays metered; hits pay the same measured charge.
++    pub fn build(bodies: &[Vec2], splash: Splash, spec: Spec) -> Self {
++        if bodies.len() > 512 {
++            return Self::build_uncached(bodies, splash, spec);
++        }
++        let options = [splash.at.x.to_bits(), splash.at.y.to_bits(), splash.radius_m.to_bits(),
++            u64::from(spec.hops), spec.range_m.to_bits(), spec.falloff.to_bits(), u64::from(spec.compounds)];
++        LAYOUT_CACHE.with(|slot| {
++            let mut slot = slot.borrow_mut();
++            if let Some(entry) = slot.as_ref() {
++                if entry.options == options && entry.positions.len() == bodies.len()
++                    && entry.positions.iter().zip(bodies).all(|(&(x, y), b)| x == b.x.to_bits() && y == b.y.to_bits())
++                {
++                    crate::fight::gas::charge(entry.gas);
++                    return entry.value.clone();
++                }
++            }
++            let before = crate::fight::gas::gas_now();
++            let value = Self::build_uncached(bodies, splash, spec);
++            let gas = crate::fight::gas::gas_now().wrapping_sub(before);
++            *slot = (value.near.iter().map(Vec::capacity).sum::<usize>() + value.caught.len() <= 131_072).then(|| LayoutCache {
++                positions: bodies.iter().map(|b| (b.x.to_bits(), b.y.to_bits())).collect(),
++                options, value: value.clone(), gas,
++            });
++            value
++        })
++    }
++}
++
+ #[wfsim_gas_macro::metered]
+ impl Layout {
+     /// Build it for one arrangement. O(N^2) once, against O(N) per pellet.
+-    pub fn build(bodies: &[Vec2], splash: Splash, spec: Spec) -> Self {
++    fn build_uncached(bodies: &[Vec2], splash: Splash, spec: Spec) -> Self {
+         let caught = (0..bodies.len())
+             .filter(|&i| crate::rules::space::caught_by_blast(bodies[i].distance(splash.at), splash.radius_m))
+             .map(|i| i as u32)
+@@ -1049,3 +1091,45 @@
+         assert_eq!(v[0].share, 1.0);
+     }
+ }
++
++#[cfg(test)]
++mod simfleet_cache_tests {
++    use super::*;
++    fn measured(b: &[Vec2], splash: Splash, spec: Spec, cached: bool) -> (Layout, u64) {
++        let start = crate::fight::gas::gas_now();
++        let n = if cached { Layout::build(b, splash, spec) } else { Layout::build_uncached(b, splash, spec) };
++        (n, crate::fight::gas::gas_now().wrapping_sub(start))
++    }
++    #[test]
++    fn layout_preserves_inputs_gas_and_local_acquisition() {
++        let mut b = vec![Vec2::ORIGIN, Vec2::new(3.0, 0.0), Vec2::new(6.0, 0.0)];
++        for step in 0..8 {
++            b[1].y = step as f64;
++            let splash = Splash { at: Vec2::new(step as f64, 0.0), radius_m: step as f64 };
++            let spec = Spec { hops: 5, range_m: step as f64, falloff: 0.75, compounds: true };
++            let (expected, gas) = measured(&b, splash, spec, false);
++            for _ in 0..3 {
++                let (mut actual, charge) = measured(&b, splash, spec, true);
++                assert_eq!(actual.near, expected.near);
++                assert_eq!(actual.caught, expected.caught);
++                assert!(actual.acquired.is_empty());
++                assert_eq!(actual.beams, 1);
++                assert_eq!(charge, gas);
++                actual.acquired.push(42);
++                actual.beams = 9;
++            }
++        }
++    }
++    #[test]
++    fn layout_cache_rejects_oversized_payload() {
++        let b = vec![Vec2::ORIGIN; 512];
++        let splash = Splash { at: Vec2::ORIGIN, radius_m: 9.0 };
++        let spec = Spec { hops: 5, range_m: 9.0, falloff: 0.75, compounds: true };
++        let (expected, gas) = measured(&b, splash, spec, false);
++        let (actual, charge) = measured(&b, splash, spec, true);
++        assert_eq!(actual.near, expected.near);
++        assert_eq!(actual.caught, expected.caught);
++        assert_eq!(charge, gas);
++        LAYOUT_CACHE.with(|s| assert!(s.borrow().is_none()));
++    }
++}

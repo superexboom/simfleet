@@ -233,13 +233,16 @@ impl Net {
     }
 
     pub fn get(&self, path: &str) -> Result<Reply> {
+        self.get_timeout(path,Duration::from_secs(30))
+    }
+    pub fn get_timeout(&self,path:&str,timeout:Duration)->Result<Reply> {
         let mut resp = self.call(|a| {
             let mut req = a.get(&self.url(path)).header("Cache-Control", "no-store");
             // The session is the site's: never sent to another host.
             if let (Some(s), false) = (&self.session, path.starts_with("http")) {
                 req = req.header("Cookie", &format!("wfsim_session={s}"));
             }
-            req.call()
+            req.config().timeout_global(Some(timeout)).build().call()
         })?;
         self.reply(&mut resp, !path.starts_with("http"))
     }

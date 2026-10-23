@@ -12,3 +12,8 @@ engine-state.json.tmp
 /reference
 __pycache__/
 *.pyc
+/output/gpu-board-*/
+/gpu-diagnostics/
+/dispatch.log*
+/gpu-policy.json
+/gpu-policy.tmp

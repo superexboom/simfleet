@@ -1,0 +1,480 @@
+{
+  "engine": "62a82930d1d3",
+  "row_recovery": {
+    "engine": "62a82930d1d3",
+    "records": [
+      {
+        "stage": "mixed",
+        "success": 16,
+        "fallback_ids": []
+      },
+      {
+        "stage": "mixed",
+        "success": 15,
+        "fallback_ids": [
+          30
+        ]
+      },
+      {
+        "stage": "larger-budget",
+        "private_kib": 384,
+        "fallback": null
+      },
+      {
+        "stage": "same-worker-after-failure",
+        "complete_scores": 4,
+        "runs": 4000,
+        "pid": 8948
+      }
+    ]
+  },
+  "dispatch_before": {
+    "granted_groups": 1,
+    "expected": 1,
+    "early_requests": 0,
+    "events": [
+      {
+        "event": "signal",
+        "seconds": 1.1880246000073384
+      },
+      {
+        "event": "claim_start",
+        "seconds": 1.2481177000154275,
+        "group": 1
+      },
+      {
+        "event": "claim_done",
+        "seconds": 2.248213399987435,
+        "group": 1
+      },
+      {
+        "event": "sync",
+        "seconds": 2.2496130999934394,
+        "group": 1,
+        "want_ms": 180000,
+        "early": false
+      },
+      {
+        "event": "sync",
+        "seconds": 25.32464889998664,
+        "group": 1,
+        "want_ms": 0,
+        "early": false
+      }
+    ]
+  },
+  "dispatch_after": {
+    "granted_groups": 2,
+    "expected": 2,
+    "early_requests": 0,
+    "events": [
+      {
+        "event": "signal",
+        "seconds": 1.1966701000055764
+      },
+      {
+        "event": "claim_start",
+        "seconds": 1.1970264000119641,
+        "group": 1
+      },
+      {
+        "event": "claim_done",
+        "seconds": 2.197113200003514,
+        "group": 1
+      },
+      {
+        "event": "sync",
+        "seconds": 2.2066640999983065,
+        "group": 1,
+        "want_ms": 180000,
+        "early": false
+      },
+      {
+        "event": "signal",
+        "seconds": 10.35370750000584
+      },
+      {
+        "event": "signal",
+        "seconds": 11.555258300009882
+      },
+      {
+        "event": "signal",
+        "seconds": 12.627530400000978
+      },
+      {
+        "event": "signal",
+        "seconds": 13.63489230000414
+      },
+      {
+        "event": "signal",
+        "seconds": 14.69843160000164
+      },
+      {
+        "event": "signal",
+        "seconds": 15.896853000012925
+      },
+      {
+        "event": "signal",
+        "seconds": 17.099674400000367
+      },
+      {
+        "event": "signal",
+        "seconds": 18.170096999994712
+      },
+      {
+        "event": "signal",
+        "seconds": 18.993507100007264
+      },
+      {
+        "event": "signal",
+        "seconds": 19.942900299996836
+      },
+      {
+        "event": "signal",
+        "seconds": 21.0758182000136
+      },
+      {
+        "event": "claim_start",
+        "seconds": 21.266401200002292,
+        "group": 2
+      },
+      {
+        "event": "signal",
+        "seconds": 22.152455900009954
+      },
+      {
+        "event": "claim_done",
+        "seconds": 22.266562000004342,
+        "group": 2
+      },
+      {
+        "event": "sync",
+        "seconds": 22.279647099989234,
+        "group": 2,
+        "want_ms": 180000,
+        "early": false
+      },
+      {
+        "event": "signal",
+        "seconds": 23.195230400015134
+      },
+      {
+        "event": "signal",
+        "seconds": 24.39008680000552
+      },
+      {
+        "event": "sync",
+        "seconds": 25.27522609999869,
+        "group": 2,
+        "want_ms": 0,
+        "early": false
+      },
+      {
+        "event": "sync",
+        "seconds": 25.275613900012104,
+        "group": 1,
+        "want_ms": 0,
+        "early": false
+      }
+    ]
+  },
+  "live_dispatch": [
+    {
+      "event": "claim_start",
+      "group": 1,
+      "at": 1792723027634
+    },
+    {
+      "event": "claim_done",
+      "group": 1,
+      "elapsed_ms": 769,
+      "ok": true,
+      "at": 1792723028403
+    },
+    {
+      "event": "sync_start",
+      "group": 1,
+      "want_ms": 600000,
+      "pace_ms": 324,
+      "held": 0,
+      "results": 0,
+      "relayed": false,
+      "at": 1792723028908
+    },
+    {
+      "event": "sync_reply",
+      "group": 1,
+      "elapsed_ms": 695,
+      "want_ms": 600000,
+      "rows": 0,
+      "next_ms": 27034,
+      "dials": {
+        "pack8_ms": 600000,
+        "pack8_max": 200,
+        "sync_lease_ms": 1500000,
+        "pack_lease_ms": 300000,
+        "sync_low_ms": 120000,
+        "sync_floor_ms": 60000,
+        "sync_idle_ms": 20000,
+        "flush_ms": 600000,
+        "packs_held": 2,
+        "row_ceiling_ms": 7200000,
+        "poll_ms": 10000,
+        "jitter_ms": 5000,
+        "urgent_jitter_ms": 2000,
+        "report_ms": 3600000
+      },
+      "early": true,
+      "busy": null,
+      "paused": null,
+      "stale": null,
+      "riven": false,
+      "at": 1792723029604
+    },
+    {
+      "event": "sync_start",
+      "group": 1,
+      "want_ms": 600000,
+      "pace_ms": 324,
+      "held": 0,
+      "results": 0,
+      "relayed": false,
+      "at": 1792723058527
+    },
+    {
+      "event": "sync_reply",
+      "group": 1,
+      "elapsed_ms": 1392,
+      "want_ms": 600000,
+      "rows": 1,
+      "next_ms": 60000,
+      "dials": {
+        "pack8_ms": 600000,
+        "pack8_max": 200,
+        "sync_lease_ms": 1500000,
+        "pack_lease_ms": 300000,
+        "sync_low_ms": 120000,
+        "sync_floor_ms": 60000,
+        "sync_idle_ms": 20000,
+        "flush_ms": 600000,
+        "packs_held": 2,
+        "row_ceiling_ms": 7200000,
+        "poll_ms": 10000,
+        "jitter_ms": 5000,
+        "urgent_jitter_ms": 2000,
+        "report_ms": 3600000
+      },
+      "early": null,
+      "busy": null,
+      "paused": null,
+      "stale": null,
+      "riven": false,
+      "at": 1792723059920
+    },
+    {
+      "event": "pack_finished",
+      "group": 1,
+      "rows": 1,
+      "answered": 1,
+      "next_ms": 59730,
+      "pace_ms": 307.6851121758364,
+      "at": 1792723060189
+    },
+    {
+      "event": "claim_start",
+      "group": 2,
+      "at": 1792723067907
+    },
+    {
+      "event": "claim_done",
+      "group": 2,
+      "elapsed_ms": 497,
+      "ok": true,
+      "at": 1792723068404
+    },
+    {
+      "event": "sync_start",
+      "group": 2,
+      "want_ms": 600000,
+      "pace_ms": 489,
+      "held": 0,
+      "results": 0,
+      "relayed": false,
+      "at": 1792723069346
+    },
+    {
+      "event": "sync_reply",
+      "group": 2,
+      "elapsed_ms": 1517,
+      "want_ms": 600000,
+      "rows": 200,
+      "next_ms": 60000,
+      "dials": {
+        "pack8_ms": 600000,
+        "pack8_max": 200,
+        "sync_lease_ms": 1500000,
+        "pack_lease_ms": 300000,
+        "sync_low_ms": 120000,
+        "sync_floor_ms": 60000,
+        "sync_idle_ms": 20000,
+        "flush_ms": 600000,
+        "packs_held": 2,
+        "row_ceiling_ms": 7200000,
+        "poll_ms": 10000,
+        "jitter_ms": 5000,
+        "urgent_jitter_ms": 2000,
+        "report_ms": 3600000
+      },
+      "early": null,
+      "busy": null,
+      "paused": null,
+      "stale": null,
+      "riven": false,
+      "at": 1792723070863
+    },
+    {
+      "event": "claim_start",
+      "group": 3,
+      "at": 1792723088094
+    },
+    {
+      "event": "claim_done",
+      "group": 3,
+      "elapsed_ms": 811,
+      "ok": true,
+      "at": 1792723088906
+    },
+    {
+      "event": "sync_start",
+      "group": 3,
+      "want_ms": 600000,
+      "pace_ms": 3757,
+      "held": 0,
+      "results": 0,
+      "relayed": false,
+      "at": 1792723089101
+    },
+    {
+      "event": "sync_reply",
+      "group": 3,
+      "elapsed_ms": 740,
+      "want_ms": 600000,
+      "rows": 27,
+      "next_ms": 60000,
+      "dials": {
+        "pack8_ms": 600000,
+        "pack8_max": 200,
+        "sync_lease_ms": 1500000,
+        "pack_lease_ms": 300000,
+        "sync_low_ms": 120000,
+        "sync_floor_ms": 60000,
+        "sync_idle_ms": 20000,
+        "flush_ms": 600000,
+        "packs_held": 2,
+        "row_ceiling_ms": 7200000,
+        "poll_ms": 10000,
+        "jitter_ms": 5000,
+        "urgent_jitter_ms": 2000,
+        "report_ms": 3600000
+      },
+      "early": null,
+      "busy": null,
+      "paused": null,
+      "stale": null,
+      "riven": false,
+      "at": 1792723089842
+    },
+    {
+      "event": "sync_start",
+      "group": 1,
+      "want_ms": 600000,
+      "pace_ms": 308,
+      "held": 0,
+      "results": 1,
+      "relayed": false,
+      "at": 1792723121055
+    },
+    {
+      "event": "sync_reply",
+      "group": 1,
+      "elapsed_ms": 1474,
+      "want_ms": 600000,
+      "rows": 1,
+      "next_ms": 60000,
+      "dials": {
+        "pack8_ms": 600000,
+        "pack8_max": 200,
+        "sync_lease_ms": 1500000,
+        "pack_lease_ms": 300000,
+        "sync_low_ms": 120000,
+        "sync_floor_ms": 60000,
+        "sync_idle_ms": 20000,
+        "flush_ms": 600000,
+        "packs_held": 2,
+        "row_ceiling_ms": 7200000,
+        "poll_ms": 10000,
+        "jitter_ms": 5000,
+        "urgent_jitter_ms": 2000,
+        "report_ms": 3600000
+      },
+      "early": null,
+      "busy": null,
+      "paused": null,
+      "stale": null,
+      "riven": false,
+      "at": 1792723122529
+    }
+  ],
+  "automatic_restart": {
+    "engine": "62a82930d1d3",
+    "runs": [
+      {
+        "mode": "killed-gpu",
+        "complete_scores": 96,
+        "gpu_rows": 0,
+        "worker_killed": true,
+        "fallback_observed": true,
+        "worker_restarted": true,
+        "summary": "REPLAY tasks=96 lanes=1 seconds=76.740916"
+      }
+    ]
+  },
+  "deployment": {
+    "version": "0.9.0-preview.4",
+    "sha256": "d8dbac299f483097c6838ad74fda2a6cb6540f75941385642a8ee717dacc95bb",
+    "config_unchanged": true,
+    "package_sha256": "cc4bf6e9b74a29d258b024840d2fe76075f0333e36f9d16dabf202208e19961f"
+  },
+  "live_recovery": {
+    "title": " simfleet 0.9.0-preview.4  \u8ba1\u7b97\u4e2d  GPU \u5f85\u673a   \u5df2\u8fd0\u884c 0:00:59   \u6838\u5fc3 10/16 \u7a7a\u95f2   \u5e76\u53d1 3/3   \u5168\u7ad9\u5728\u7ebf 57   \u5f15  10:52:17  ",
+    "resources": [
+      " \u8d44\u6e90                      RTX 5080",
+      " CPU                            66%",
+      " \u672c\u7a0b\u5e8f                         62%",
+      " GPU\u72b6\u6001\u5f85\u673a \u00b7 \u5b8c\u621011 / \u56de\u90001",
+      " \u7a0b\u5e8fGPU                         0%",
+      " \u663e\u5b58   4.01 GiB \u00b7 \u5171\u4eab 74 MiB",
+      " \u5185\u5b58                      15.1/47G",
+      " \u5360\u7528   229 MB  \u672c\u7a0b\u5e8f",
+      " \u5229\u7528\u7387                         81%",
+      " \u9884\u7b97   \u79bb\u5f00 10 \u6838  \u4f7f\u7528\u65f6 10 \u6838",
+      " \u5e76\u53d1   3 \u8def  \u4e0a\u9650 3 \u00b7 \u79ef\u538b 190s"
+    ]
+  },
+  "live_recovery_later": {
+    "title": " simfleet 0.9.0-preview.4  \u8ba1\u7b97\u4e2d  GPU \u8ba1\u7b97 5\u884c   \u5df2\u8fd0\u884c 0:02:03   \u6838\u5fc3 10/16 \u7a7a\u95f2   \u5e76\u53d1 3/3   \u5168\u7ad9\u5728\u7ebf 57   10:53:21  ",
+    "resources": [
+      " \u8d44\u6e90                      RTX 5080",
+      " CPU                            66%",
+      " \u672c\u7a0b\u5e8f                         61%",
+      " GPU\u72b6\u6001- \u8ba1\u7b97 5\u884c / 5,000\u6b21 \u00b7 0s",
+      " \u7a0b\u5e8fGPU                        96%",
+      " \u663e\u5b58   4.01 GiB \u00b7 \u5171\u4eab 74 MiB",
+      " \u5185\u5b58                      15.0/47G",
+      " \u5360\u7528   97 MB  \u672c\u7a0b\u5e8f",
+      " \u5229\u7528\u7387                         91%",
+      " \u9884\u7b97   \u79bb\u5f00 10 \u6838  \u4f7f\u7528\u65f6 10 \u6838",
+      " \u5e76\u53d1   3 \u8def  \u4e0a\u9650 3 \u00b7 \u79ef\u538b 82s"
+    ]
+  }
+}

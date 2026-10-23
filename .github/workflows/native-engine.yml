@@ -14,8 +14,8 @@
 #   1. builds the wasm the way WFSim builds it (the reference),
 #   2. blanks Digital Extremes' card text (tools/strip_card_text.py, NOTICE.md)
 #      and builds with the local host patches recorded beside the DLL,
-#      native-engine/ twice: for any x86-64, and for x86-64-v3 (AVX2; about
-#      10% faster, the same bits) — Windows <id>.dll / <id>-v3.dll, Linux
+#      native-engine/: Windows builds only PGO x86-64-v3; Linux builds
+#      baseline and x86-64-v3 — Linux
 #      lib<id>.so / lib<id>-v3.so — and once for Apple silicon, macOS
 #      lib<id>.dylib (aarch64-apple-darwin, whose baseline is the M1's own),
 #   3. holds both to the reference wasm on 8 board rows of WFSim's committed
@@ -86,7 +86,7 @@ jobs:
           assets=$(gh release view "engine-$engine" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null || true)
           missing() { for f in "$@"; do grep -qx "$f" <<< "$assets" || return 0; done; return 1; }
           win=false; lin=false; mac=false
-          missing "$stem.dll" "$stem.dll.sha256" "$stem.dll.build.json" "$stem-v3.dll" "$stem-v3.dll.sha256" "$stem-v3.dll.build.json" && win=true
+          missing "$stem-v3.dll" "$stem-v3.dll.sha256" "$stem-v3.dll.build.json" && win=true
           missing "lib$stem.so" "lib$stem.so.sha256" "lib$stem.so.build.json" "lib$stem-v3.so" "lib$stem-v3.so.sha256" "lib$stem-v3.so.build.json" && lin=true
           missing "lib$stem.dylib" "lib$stem.dylib.sha256" "lib$stem.dylib.build.json" && mac=true
           if [ "$VERIFY_EXISTING" = true ]; then win=true; lin=true; mac=true; fi
@@ -133,7 +133,8 @@ jobs:
             exe: target/release/simfleet.exe
             lib: ""
             ext: dll
-            cpus: "baseline v3"
+            cpus: "v3"
+            pgo: true
           - os: linux
             # The oldest glibc the runners have, so the library loads on more systems.
             runner: ubuntu-22.04
@@ -141,6 +142,7 @@ jobs:
             lib: lib
             ext: so
             cpus: "baseline v3"
+            pgo: false
           - os: macos
             # Apple silicon (arm64). One build: the target's baseline is the
             # M1's own (apple-m1), and every M-series chip runs it.
@@ -149,6 +151,7 @@ jobs:
             lib: lib
             ext: dylib
             cpus: "baseline"
+            pgo: false
     runs-on: ${{ matrix.runner }}
     env:
       ENGINE: ${{ needs.check.outputs.engine }}
@@ -156,6 +159,7 @@ jobs:
       GO: ${{ needs.check.outputs[matrix.os] }}
       CPUS: ${{ matrix.cpus }}
       REVISION: ${{ needs.check.outputs.revision }}
+      PGO: ${{ matrix.pgo }}
     steps:
       - uses: actions/checkout@v5
         if: env.GO == 'true'
@@ -184,6 +188,7 @@ jobs:
           echo "bindgen=$bindgen" >> "$GITHUB_OUTPUT"
           echo "WFSim pins rust $rust, wasm-bindgen $bindgen"
           rustup toolchain install "$rust" --profile minimal --target wasm32-unknown-unknown
+          if [ "$PGO" = true ]; then rustup component add llvm-tools --toolchain "$rust"; fi
       - uses: taiki-e/install-action@v2
         if: env.GO == 'true'
         with:
@@ -196,7 +201,8 @@ jobs:
             target/wfsim
             target/native-engine
             target/native-engine-x86-64-v3
-          key: engine-build-${{ runner.os }}-${{ steps.w.outputs.rust }}-${{ needs.check.outputs.commit }}-${{ hashFiles('native-engine/**', 'tools/build-native-engine.ps1', 'src/json_numbers.rs') }}
+            target/native-engine-x86-64-v3-pgo
+          key: engine-build-${{ runner.os }}-${{ steps.w.outputs.rust }}-${{ needs.check.outputs.commit }}-${{ hashFiles('native-engine/**', 'tools/build-native-engine.ps1', 'tools/bench-board.py', 'experiments/prepared-board/orders.json', 'src/json_numbers.rs') }}
           restore-keys: |
             engine-build-${{ runner.os }}-${{ steps.w.outputs.rust }}-
       - name: The reference wasm, built as WFSim builds it
@@ -209,7 +215,7 @@ jobs:
           cd .wfsim-src
           cargo build --release --locked -p wfsim-wasm --target wasm32-unknown-unknown
           wasm-bindgen "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/wfsim_wasm.wasm" --target no-modules --no-typescript --out-dir ../reference
-      - name: The native engine, card text blanked, for each CPU level (x86-64 and x86-64-v3; Apple silicon's one)
+      - name: Native engine (Windows PGO v3, Linux baseline/v3, Apple silicon)
         if: env.GO == 'true'
         shell: pwsh
         env:
@@ -217,7 +223,9 @@ jobs:
         run: |
           foreach ($cpu in ($env:CPUS -split ' ' | ForEach-Object { if ($_ -eq 'v3') { 'x86-64-v3' } else { '' } })) {
             $label = if ($cpu) { $cpu } else { 'baseline' }
-            ./tools/build-native-engine.ps1 -Strip -Commit $env:COMMIT -Engine $env:ENGINE -Cpu $cpu -BuildRoot (Join-Path $env:GITHUB_WORKSPACE "target/native-source-$label")
+            $training = @{}
+            if ($env:PGO -eq 'true') { $training = @{ Pgo = $true; TrainingLanes = 4 } }
+            ./tools/build-native-engine.ps1 -Strip -Commit $env:COMMIT -Engine $env:ENGINE -Cpu $cpu -BuildRoot (Join-Path $env:GITHUB_WORKSPACE "target/native-source-$label") @training
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Hold both to the reference wasm on WFSim's committed board
@@ -269,9 +277,18 @@ jobs:
       REVISION: ${{ needs.check.outputs.revision }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: in
+      - name: Download engine artifacts with bounded network retries
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if gh run download "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY" --pattern 'engine-*' --dir "download-$attempt"; then
+              mkdir -p in
+              cp -a "download-$attempt/." in/
+              exit 0
+            fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep "$((attempt * 10))"
+          done
       - name: Publish what passed and is missing
         shell: bash
         run: |
@@ -308,7 +325,7 @@ jobs:
           {
             echo "Native build of WFSim engine **$ENGINE** for simfleet. simfleet downloads it on its own when wfsim.app serves this engine; there is nothing to install."
             echo
-            echo "- **Builds.** Native revision \`sfe$REVISION\`: Windows \`$ENGINE-sfe$REVISION.dll\` and Linux \`lib$ENGINE-sfe$REVISION.so\` run on any x86-64, the \`-v3\` ones on x86-64-v3 CPUs (AVX2, FMA, BMI2); macOS \`lib$ENGINE-sfe$REVISION.dylib\` on Apple silicon. simfleet 0.8.1 and later prefer this revision. Each build has a SHA-256 file and a source/patch manifest."
+            echo "- **Builds.** Native revision \`sfe$REVISION\`: Windows publishes one PGO + ThinLTO \`$ENGINE-sfe$REVISION-v3.dll\` for x86-64-v3 CPUs (AVX2, FMA, BMI2 and the remaining v3 features). Linux publishes baseline \`lib$ENGINE-sfe$REVISION.so\` and \`lib$ENGINE-sfe$REVISION-v3.so\`; macOS publishes \`lib$ENGINE-sfe$REVISION.dylib\` for Apple silicon. simfleet 0.9.0-preview.7 and later prefer this revision. Older Windows CPUs use the official engine or WASM. Each build has a SHA-256 file and source/patch manifest; Windows also records its PGO training hashes."
             echo "- **Source.** WFSim commit [\`$COMMIT\`](https://github.com/magenie33/wfsim/tree/$COMMIT) (AGPL-3.0-or-later, by magenie33 and WFSim contributors), through $via. Built by $run."
             echo "- **No card text.** Digital Extremes' card text was blanked from WFSim's \`data/\` before the build ([tools/strip_card_text.py](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/tools/strip_card_text.py)), since WFSim grants nothing for it ([LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)). The engine only displays that text; no score depends on it."
             echo "- **Checked.** Each matched the wasm built from the same commit bit for bit on 8 rows of WFSim's committed board (one weapon, every ruler and mode) (\`simfleet check-native\`), and simfleet checks the one it uses against wfsim.app's own wasm on a canary row before every use."

@@ -288,7 +288,7 @@ impl Active {
     }
     fn line(&self, lanes: usize) -> TaskLine {
         let mut l = match &self.runner {
-            Runner::Board(b) => TaskLine { done: b.folded as u64, total: b.runs as u64, ..Default::default() },
+            Runner::Board(b) => TaskLine { done: b.folded as u64, total: b.runs as u64, extra: if b.gpu_pending {"NVIDIA GPU".into()}else{String::new()}, ..Default::default() },
             Runner::Riven(r) => TaskLine { riven: true, done: r.fights, extra: format!("{} 个构筑", group(r.builds)), ..Default::default() },
         };
         l.group = self.group;
@@ -307,6 +307,7 @@ struct Group {
     next_ask: Instant,
     next_ahead: Instant,
     claimed: bool,
+    claiming: Option<(Instant,JoinHandle<Result<()>>)>,
     /// Answers the server took from it this run, and their work.
     done: u64,
     work: u64,
@@ -335,6 +336,8 @@ struct Group {
     points: Option<(Instant, Value)>,
     /// To sync soon, giving back what it no longer computes.
     give_back: bool,
+    last_received: Option<Instant>,
+    wait_reason: String,
 }
 
 /// A protocol 8 sync on its way…
@@ -457,6 +460,12 @@ pub struct Fleet {
     settings_original: crate::settings::Settings,
     accepted_until: Option<u64>,
     waiting_said: Option<String>,
+    gpu: Option<crate::gpu::Manager>,
+    gpu_state: String,
+    gpu_restart:Option<Instant>,
+    gpu_restarts:u32,
+    gpu_recovery:crate::gpu::Recovery,
+    trace:crate::dispatch_trace::Trace,
 }
 
 impl Fleet {
@@ -471,6 +480,12 @@ impl Fleet {
         let settings_original=crate::settings::Settings::from_config(&cfg);
         let ids: Vec<String> = std::iter::once(cfg.verifier.clone()).chain(cfg.extra_verifiers.iter().cloned()).collect();
         let mut f = Fleet {
+            trace:crate::dispatch_trace::Trace::new(&paths.dir),
+            gpu: None,
+            gpu_state: String::new(),
+            gpu_restart:None,
+            gpu_restarts:0,
+            gpu_recovery:crate::gpu::Recovery::default(),
             net,
             cfg,
             ctl,
@@ -573,6 +588,7 @@ impl Fleet {
                 next_ask: now,
                 next_ahead: now,
                 claimed: false,
+                claiming: None,
                 done: 0,
                 work: 0,
                 pace_ms: journal.pace_ms.max(0.0),
@@ -590,6 +606,8 @@ impl Fleet {
                 refused_rows: Vec::new(),
                 points: None,
                 give_back: false,
+                last_received: None,
+                wait_reason: String::new(),
             });
         }
     }
@@ -748,6 +766,7 @@ impl Fleet {
             return self.send_pack(pid, true);
         }
         let p = self.packs.remove(pi);
+        self.trace.event(json!({"event":"pack_finished","group":p.group+1,"rows":p.total,"answered":p.answered,"next_ms":self.groups[p.group].not_before.saturating_duration_since(Instant::now()).as_millis(),"pace_ms":self.groups[p.group].pace_ms}));
         if p.answered < p.total {
             self.groups[p.group].give_back = true;
             self.ui.glog(p.group, format!("{C_GO}[交还]{C_END} 本包还有 {} 行没算，随下次同步交还", p.total - p.answered));
@@ -821,6 +840,7 @@ impl Fleet {
     }
 
     pub fn shutdown(&mut self) {
+        self.stop_gpu();
         self.drop_all("，任务已交还");
         // The last answers count in the closing line too — sent again for up to
         // three quarters of a minute when the site does not answer.
@@ -886,9 +906,7 @@ impl Fleet {
             let plain = open && units == 0 && sending == 0 && now >= g.next_ask;
             let ahead = open && units == 1 && refill && lanes >= 2 && now >= g.next_ahead;
             if plain || ahead {
-                if !g.claimed && self.net.session.is_some() {
-                    self.claim(gi);
-                }
+                if !self.claim(gi) {continue;}
                 let (net, body) = (self.net.clone(), self.ask_body(gi, ahead));
                 // A refusal's body is the message, so it is kept too.
                 let ask = move || {
@@ -1101,9 +1119,20 @@ impl Fleet {
         true
     }
 
-    fn claim(&mut self, gi: usize) {
+    fn claim(&mut self, gi: usize)->bool {
+        if self.groups[gi].claimed || self.net.session.is_none(){return true;}
+        if self.groups[gi].claiming.is_none() {
+            let (net,id)=(self.net.clone(),self.groups[gi].verifier.clone());
+            self.groups[gi].claiming=Some((Instant::now(),std::thread::spawn(move||account::claim_as(&net,&id,gi))));
+            self.trace.event(json!({"event":"claim_start","group":gi+1}));
+            return false;
+        }
+        if !self.groups[gi].claiming.as_ref().is_some_and(|(_,h)|h.is_finished()){return false;}
+        let (at,job)=self.groups[gi].claiming.take().expect("finished claim");
         self.groups[gi].claimed = true;
-        match account::claim_as(&self.net, &self.groups[gi].verifier, gi) {
+        let result=job.join().unwrap_or_else(|_|Err(anyhow::anyhow!("设备绑定线程异常")));
+        self.trace.event(json!({"event":"claim_done","group":gi+1,"elapsed_ms":at.elapsed().as_millis(),"ok":result.is_ok()}));
+        match result {
             Ok(()) => {}
             Err(e) if e.to_string().contains("401") => {
                 self.ui.log(format!("{C_BAD}[账号]{C_END} 登录已失效，贡献暂记在本机；运行 simfleet login 重新登录"));
@@ -1112,6 +1141,7 @@ impl Fleet {
             }
             Err(e) => self.ui.log(format!("{C_BAD}[账号]{C_END} {e:#}")),
         }
+        true
     }
 
     // ---- protocol 8 ---------------------------------------------------------------
@@ -1180,12 +1210,14 @@ impl Fleet {
         let now = Instant::now();
         let wanted = (0..self.groups.len().min(self.open)).any(|gi| {
             let g = &self.groups[gi];
-            g.syncing.is_none() && now >= g.not_before && now >= g.retry_at && self.holds_nothing(gi)
+            // CDN signals have their own poll interval. Keep one fresh while
+            // the grant gate runs, so expiry does not start another HTTP wait.
+            g.syncing.is_none() && now >= g.retry_at && self.holds_nothing(gi)
         });
         if wanted && self.signal_job.is_none() && now >= self.signal_next {
             self.signal_next = now + sync::jittered(self.dials.poll_ms);
             let net = self.net.clone();
-            self.signal_job = Some(std::thread::spawn(move || net.get(&net.public_file(sync::SIGNAL_PATH)).ok().filter(|r| r.status == 200).map(|r| r.body)));
+            self.signal_job = Some(std::thread::spawn(move || net.get_timeout(&net.public_file(sync::SIGNAL_PATH),Duration::from_secs(5)).ok().filter(|r| r.status == 200).map(|r| r.body)));
         }
     }
 
@@ -1215,6 +1247,9 @@ impl Fleet {
     /// whose lease nears its end; to give back what it no longer computes; and
     /// every `report_ms` to say it is on.
     fn syncs(&mut self) {
+        // Account binding runs independently of the signal and never blocks
+        // dispatch/renewals for every other group while HTTP is outstanding.
+        if !self.offline && !self.quit() {for gi in 0..self.groups.len().min(self.open) {self.claim(gi);}}
         for gi in 0..self.groups.len() {
             if self.groups[gi].syncing.as_ref().is_some_and(|s| s.handle.is_finished()) {
                 let s = self.groups[gi].syncing.take().expect("checked above");
@@ -1256,10 +1291,10 @@ impl Fleet {
             }
             let open = gi < self.open && !held_back && self.switch_to.is_none() && !self.memory_guard.draining() && self.settings_restart.is_none();
             let go = match (idle && open && now >= self.groups[gi].not_before).then(|| self.idle_go(gi, now)) {
-                Some(None) => continue,
-                // THE SIGNAL SHOWS WORK and its jitter runs: the sync for work
-                // carries whatever else is due, so nothing goes before it.
-                Some(Some(false)) if self.groups[gi].go_at.is_some() => continue,
+                Some(None) => false,
+                // Work waits for the signal/jitter; due result flushes and
+                // renewals must remain independent of signal availability.
+                Some(Some(false)) if self.groups[gi].go_at.is_some() => false,
                 Some(Some(go)) => go,
                 None => false,
             };
@@ -1280,6 +1315,8 @@ impl Fleet {
             let renew = held > 0 && self.packs.iter().any(|p| p.group == gi && now + sync::RENEW_BEFORE >= p.until);
             let report = idle
                 && open
+                && self.signal.is_some()
+                && self.groups[gi].go_at.is_none()
                 && self.dials.report_ms > 0
                 && g.last_sync.is_none_or(|t| now.duration_since(t) >= Duration::from_millis(self.dials.report_ms));
             if work {
@@ -1295,9 +1332,7 @@ impl Fleet {
     /// for, 0 to renew and hand in only; `last`: the way out, sent again for up
     /// to three quarters of a minute when it gets no reply.
     fn start_sync(&mut self, gi: usize, engine: Option<String>, want: u64, last: bool) {
-        if !self.groups[gi].claimed && self.net.session.is_some() {
-            self.claim(gi);
-        }
+        if !last && !self.claim(gi){return;}
         let engine = engine.unwrap_or_else(|| self.rel.engine.clone());
         let current = engine == self.rel.engine;
         let held = if current { self.held_rows(gi) } else { Vec::new() };
@@ -1317,6 +1352,7 @@ impl Fleet {
             let body = sync::body(&g.verifier, &engine, consent, lanes, pace, want, &held, &send, &refused, g.journal.ask_states(), &since);
             (body, send.iter().map(|k| k.question.clone()).collect::<Vec<_>>())
         };
+        self.trace.event(json!({"event":"sync_start","group":gi+1,"want_ms":want,"pace_ms":pace,"held":held.iter().map(|(_,r)|r.len()).sum::<usize>(),"results":results.len(),"relayed":self.net.relayed()}));
         let sent = Sent {
             at: Instant::now(),
             engine,
@@ -1359,6 +1395,7 @@ impl Fleet {
                 return;
             }
             Out::Failed(why) => {
+                self.trace.event(json!({"event":"sync_failed","group":gi+1,"elapsed_ms":s.at.elapsed().as_millis()}));
                 let g = &mut self.groups[gi];
                 g.failures += 1;
                 g.retry_at = now + sync::backoff(g.failures);
@@ -1370,6 +1407,8 @@ impl Fleet {
                 return;
             }
         };
+        let incoming=r["pack"]["tasks"].as_array().map_or(0,Vec::len);
+        self.trace.event(json!({"event":"sync_reply","group":gi+1,"elapsed_ms":s.at.elapsed().as_millis(),"want_ms":s.want,"rows":incoming,"next_ms":r["next_ms"],"dials":r["dials"],"early":r["early"],"busy":r["busy"],"paused":r["paused"],"stale":r["stale"],"riven":r["work"]["kind"]=="riven_gain"}));
         if r["fallback"] == json!(7) {
             return self.fall_back("服务器暂时关闭了协议 8");
         }
@@ -1381,6 +1420,7 @@ impl Fleet {
         let g = &mut self.groups[gi];
         g.failures = 0;
         g.last_sync = Some(now);
+        g.wait_reason=if r["early"]==true{"服务器领取间隔"}else if r["busy"]==true||r["paused"]==true{"服务器暂缓派发"}else if incoming==0 && r["work"]["kind"]!="riven_gain" && s.want>0{"服务器未分配"}else{"领取间隔"}.into();
         if let Some(ms) = r["next_ms"].as_u64() {
             g.not_before = now + Duration::from_millis(ms);
         }
@@ -1452,6 +1492,7 @@ impl Fleet {
         }
         let pack = &r["pack"];
         if let (Some(rows), Some(lease)) = (pack["tasks"].as_array().filter(|t| !t.is_empty()), pack["lease"].as_str()) {
+            self.groups[gi].last_received=Some(now);self.groups[gi].nothing_at=None;
             if self.quit() || self.held_why().is_some() || s.engine != self.rel.engine {
                 // Not to be computed: the next sync names none of it, so it goes back.
                 self.groups[gi].give_back = true;
@@ -1584,6 +1625,7 @@ impl Fleet {
     /// Fill every free lane: the oldest task with a job for it, honouring
     /// leaders; lanes still free start a pack's next row.
     fn dispatch(&mut self) {
+        self.dispatch_gpu();
         for _ in 0..16 {
             if self.fill_lanes(false) == 0 || !self.start_row() {
                 break;
@@ -1592,6 +1634,126 @@ impl Fleet {
         // Local work first, then steal across nodes/cache domains when they
         // would otherwise idle. A single task can still use the full budget.
         if crate::placement::active() { self.fill_lanes(true); }
+    }
+
+    fn release_gpu_rows(&mut self) {
+        for t in &mut self.tasks {if let Runner::Board(row)=&mut t.runner {row.gpu_pending=false;}}
+    }
+    fn stop_gpu(&mut self) {
+        self.gpu=None;self.gpu_state.clear();self.release_gpu_rows();
+        self.gpu_restart=None;self.gpu_restarts=0;
+        self.gpu_recovery=crate::gpu::Recovery::default();
+        let label=crate::work::backend_label(self.pool.code());self.ui.status(|s|s.backend=label.into());
+        self.ui.status(|s|s.gpu=crate::gpu::View{enabled:self.cfg.gpu_enabled,state:"已暂停".into(),..Default::default()});
+    }
+    /// One bounded batch owns its rows until it returns. Failed, cancelled or
+    /// expired rows never bypass the ordinary Fleet ownership and journal path.
+    fn dispatch_gpu(&mut self) {
+        let state=format!("{}:{}",self.cfg.gpu_enabled,self.rel.engine);
+        if state!=self.gpu_state {
+            self.stop_gpu();self.gpu_state=state;
+            self.ui.status(|s|s.gpu=crate::gpu::View{enabled:self.cfg.gpu_enabled,state:if self.cfg.gpu_enabled{"无匹配引擎".into()}else{"未启用".into()},..Default::default()});
+            if self.cfg.gpu_enabled {
+                let dir=crate::gpu::directory(&self.paths.engines,&self.rel.engine);
+                if dir.join("engine.gpu.json").is_file() {
+                    match crate::gpu::Manager::new(&dir,&self.rel.engine) {
+                        Ok(g)=>{self.gpu=Some(g);self.ui.log(format!("{C_INFO}[GPU]{C_END} 正在加载并校验 {}",dir.file_name().unwrap_or_default().to_string_lossy()));}
+                        Err(e)=>{self.ui.status(|s|s.gpu.state="启动失败，回退 CPU".into());self.ui.log(format!("{C_GO}[GPU]{C_END} 启动失败，继续 CPU：{e:#}"));}
+                    }
+                } else {self.ui.log(format!("{C_GO}[GPU]{C_END} {} 没有匹配的 GPU 包，继续 CPU",self.rel.engine));}
+            }
+        }
+        if self.gpu_restart.is_some_and(|at|Instant::now()>=at) {
+            self.gpu_restart=None;self.gpu_restarts=self.gpu_restarts.saturating_add(1);
+            let dir=crate::gpu::directory(&self.paths.engines,&self.rel.engine);
+            if let Some(old)=self.gpu.take(){
+                match old.restart(&dir,&self.rel.engine){
+                    Ok(g)=>{self.gpu=Some(g);self.ui.log(format!("{C_INFO}[GPU]{C_END} 重建计算进程，第 {} 次恢复；故障批次继续由 CPU 完成",self.gpu_restarts));}
+                    Err(e)=>{self.gpu=Some(old);let delay=self.gpu_recovery.failure(false);self.gpu_restart=Some(Instant::now()+delay);self.trace.event(json!({"event":"gpu_restart_failed","error":format!("{e:#}"),"retry_secs":delay.as_secs()}));self.ui.log(format!("{C_GO}[GPU]{C_END} 恢复失败，{} 秒后再试：{e:#}",delay.as_secs()));}
+                }
+            }
+        }
+        if let Some(event)=self.gpu.as_mut().and_then(|g|g.poll()) {
+            match event {
+                crate::gpu::Event::Progress=>{},
+                crate::gpu::Event::Ready(name)=>{
+                    self.trace.event(json!({"event":"gpu_ready","engine":self.rel.engine,"restarts":self.gpu_restarts}));
+                    self.ui.log(format!("{C_OK}[GPU]{C_END} {name} 就绪；自动探测榜单场景并按收益分流"));
+                    let label=crate::work::backend_label(self.pool.code());self.ui.status(|s|s.backend=format!("{label} + NVIDIA GPU 预览"));
+                }
+                crate::gpu::Event::Failed(e)=>{
+                    let retry=self.gpu.as_ref().is_some_and(|g|g.retryable);
+                    let probe_timeout=self.gpu.as_ref().is_some_and(|g|g.probe_timeout);
+                    let delay=if retry {self.gpu_recovery.failure(probe_timeout).as_secs()}else{0};
+                    if retry {self.gpu_restart=Some(Instant::now()+Duration::from_secs(delay));}
+                    self.trace.event(json!({"event":"gpu_failure","engine":self.rel.engine,"error":e,"retryable":retry,"probe_timeout":probe_timeout,"retry_secs":delay,"restarts":self.gpu_restarts}));
+                    self.release_gpu_rows();self.ui.log(if probe_timeout {format!("{C_INFO}[GPU探测]{C_END} 场景超时暂缓，任务回到 CPU；{delay} 秒后重建 GPU，其他已学会场景优先")}else{format!("{C_GO}[GPU]{C_END} 任务回到 CPU：{e}{}",if retry{format!("；{delay} 秒后恢复 GPU")}else{"；本次停用 GPU".into()})});
+                    let label=crate::work::backend_label(self.pool.code());self.ui.status(|s|s.backend=label.into());
+                }
+                crate::gpu::Event::Finished(rows)=>{
+                    let fallback=rows.iter().filter(|r|r.fallback.is_some()).count();
+                    if rows.len()>fallback {self.gpu_recovery.success(Instant::now());}
+                    self.trace.event(json!({"event":"gpu_batch_finished","rows":rows.len(),"fallback":fallback,"private_kib":self.gpu.as_ref().map(|g|g.budget())}));
+                    if fallback>0 {
+                        self.ui.log(format!("{C_GO}[GPU]{C_END} {fallback} 行超过资源预算，交由 CPU；对应场景暂缓并重新评估，其他场景继续"));
+                    }
+                    for row in rows {
+                        if let Some(probe)=&row.probe {
+                            let (allowed,deferred)=self.gpu.as_ref().map_or((0,0),|g|g.learning_summary());
+                            self.trace.event(json!({"event":"gpu_probe","samples":probe.samples,"gpu_ms":probe.gpu_ms,"cpu_ms":probe.cpu_ms,"max_pages":probe.max_pages,"allowed_contexts":allowed,"deferred_contexts":deferred}));
+                            self.ui.log(format!("{C_INFO}[GPU探测]{C_END} {} 局校验一致，GPU {:.2}s；已学习 {allowed} 类可用 / {deferred} 类暂缓",probe.samples,probe.gpu_ms/1000.0));
+                            continue;
+                        }
+                        let Some(ti)=self.tasks.iter().position(|t|t.id==row.id) else {continue};
+                        if !matches!(&self.tasks[ti].runner,Runner::Board(b) if b.gpu_pending){continue;}
+                        if row.fallback.is_some(){if let Runner::Board(b)=&mut self.tasks[ti].runner {b.gpu_pending=false;}continue;}
+                        let t=self.tasks.remove(ti);
+                        let s=RowScore{score:row.score["score"].as_f64().unwrap_or(0.0),metric:row.score["metric"].as_str().unwrap_or("").into(),
+                            work:row.score["work"].as_u64().unwrap_or(0),compute_ms:row.compute_ms,counts:row.score["counts"].clone()};
+                        self.ui.glog(t.group,format!("{C_OK}[GPU]{C_END} 完成 {}",t.label));self.answer(t,Finished::Board(s));
+                    }
+                }
+            }
+        }
+        if let Some(g)=&self.gpu {
+            let mut view=g.view();let idle=g.available();
+            if let Some(at)=self.gpu_restart{view.state=format!("恢复等待 {}s",at.saturating_duration_since(Instant::now()).as_secs()+1);}
+            self.ui.status(|s|{if idle && s.gpu.state.starts_with("待机："){view.state=s.gpu.state.clone();}s.gpu=view;});
+        }
+        if self.gpu_restart.is_some(){return;}
+        if self.lanes()==0 || !self.gpu.as_ref().is_some_and(|g|g.available()) {return;}
+        // Leave >=8 GiB system headroom. The child independently has an 8 GiB
+        // hard commit limit and a 30-second batch timeout in its supervisor.
+        if sys::memory().is_some_and(|(used,total,_)|total.saturating_sub(used)<8<<30) {self.ui.status(|s|s.gpu.state="待机：系统内存紧张".into());return;}
+        // Inspect only a bounded window of already leased work, leaving CPU
+        // lanes free to take the rest. Never ask for artificial/duplicate rows.
+        for _ in 0..crate::gpu::MAX_ROWS {
+            if self.tasks.len()>=crate::gpu::MAX_ROWS+self.lanes()*2 || !self.start_row(){break;}
+        }
+        let manager=self.gpu.as_ref().expect("available");
+        let max_runs=manager.max_runs().min(crate::gpu::memory_run_limit(self.cfg.compute_memory_limit_mb,sys::process_memory().unwrap_or(0),manager.budget()));
+        if max_runs==0 {self.ui.status(|s|s.gpu.state="待机：合计内存预算不足".into());return;}
+        let candidates:Vec<_>=self.tasks.iter().filter_map(|t|match &t.runner {Runner::Board(b)=>b.gpu_input(t.id),_=>None}).collect();
+        let mut rows=manager.select(&candidates,max_runs);
+        let probing=rows.first().is_some_and(|r|r.probe);
+        // Keep enough work on the CPU to overlap the GPU batch. The last small
+        // tail is faster on the native lanes than waiting for a GPU batch.
+        let held=self.tasks.len()+self.packs.iter().map(|p|p.rows.len()).sum::<usize>();
+        if !probing {rows.truncate(held.saturating_sub((self.lanes()*2).clamp(4,32)));}
+        let budget=rows.iter().map(|r|r.private_kib).max().unwrap_or(192);
+        let allowed=crate::gpu::memory_run_limit(self.cfg.compute_memory_limit_mb,sys::process_memory().unwrap_or(0),budget).min(manager.max_runs_for(budget));
+        if !probing {let mut total=0;rows.retain(|r|{total+=r.request["runs"].as_u64().unwrap_or(0) as usize;total<=allowed});}
+        let required=if probing{1}else{4000.min(allowed) as u64};
+        let selected=rows.iter().map(|r|r.request["runs"].as_u64().unwrap_or(0)).sum::<u64>();
+        if rows.is_empty() || selected<required {self.ui.status(|s|s.gpu.state=if held==0{"待机：等待新任务".into()}else if held<=32{"待机：CPU收尾".into()}else if selected==0{"待机：暂缓场景或探测间隔".into()}else{format!("待机：合适任务 {selected}/{required}次")});return;}
+        match self.gpu.as_mut().expect("available").submit(&rows) {
+            Ok(())=>{
+                if !probing {for t in &mut self.tasks {if rows.iter().any(|r|r.id==t.id) {if let Runner::Board(b)=&mut t.runner {b.gpu_pending=true;t.last_ran=Instant::now();}}}}
+                if probing {self.ui.log(format!("{C_INFO}[GPU]{C_END} 探测 {} / {}，CPU 同时正常计算",rows[0].request["weapon"].as_str().unwrap_or("?"),rows[0].ruler));}
+                else{self.ui.log(format!("{C_INFO}[GPU]{C_END} 已分配 {} 条独立榜单任务",rows.len()));}
+            }
+            Err(e)=>{if let Some(g)=&mut self.gpu{g.send_failed(&e);}let delay=self.gpu_recovery.failure(false);self.gpu_restart=Some(Instant::now()+delay);self.release_gpu_rows();self.trace.event(json!({"event":"gpu_send_failed","error":format!("{e:#}"),"retry_secs":delay.as_secs()}));self.ui.status(|s|s.gpu.state="发送失败，待恢复".into());self.ui.log(format!("{C_GO}[GPU]{C_END} 发送失败，任务回 CPU，{} 秒后恢复：{e:#}",delay.as_secs()));}
+        }
     }
 
     /// …one pass; the lanes it left free that a board row could use.
@@ -1736,6 +1898,9 @@ impl Fleet {
         if let (Some(pid), Finished::Board(s)) = (t.pack, &f) {
             return self.answer_row(&t, pid, s, lanes, secs);
         }
+        if let Finished::Board(s) = &f {
+            self.computed(s.work, matches!(&t.runner, Runner::Board(b) if b.gpu_pending));
+        }
         let (path, body, log_ok, work, recent) = match f {
             Finished::Board(s) => (
                 "/api/board/verify".to_string(),
@@ -1766,7 +1931,7 @@ impl Fleet {
                     return;
                 };
                 let work = r["work"].as_u64().unwrap_or(0);
-                self.computed(work);
+                self.computed(work, false);
                 let build = board_payload(&best, &t.w["context"]);
                 let score = best["kill_progress"].as_f64().unwrap_or(0.0);
                 let (builds, kp, cost) = match &t.runner {
@@ -1813,14 +1978,10 @@ impl Fleet {
 
     /// WHAT WAS COMPUTED, as it is: the speed shown counts work done here, not
     /// the moment the server took it (a protocol 8 result waits for a sync).
-    fn computed(&self, work: u64) {
+    fn computed(&self, work: u64, gpu: bool) {
         let now = Instant::now();
         self.ui.status(|st| {
-            st.computed_work += work;
-            st.answered.push_back((now, work));
-            while st.answered.front().is_some_and(|a| now.duration_since(a.0) > Duration::from_secs(900)) {
-                st.answered.pop_front();
-            }
+            st.record_computed(now, work, gpu);
         });
     }
 
@@ -1845,7 +2006,7 @@ impl Fleet {
             a["counts"] = s.counts.clone();
         }
         self.ui.glog(t.group, format!("{C_OK}[完成]{C_END} 榜单  {}  = {:.4} {} · {:.2} 分 · {secs:.1}s", t.label, s.score, s.metric, points(s.work)));
-        self.computed(s.work);
+        self.computed(s.work, matches!(&t.runner, Runner::Board(b) if b.gpu_pending));
         let Some(p) = self.packs.iter_mut().find(|p| p.id == pid) else { return };
         p.running = p.running.saturating_sub(1);
         p.answered += 1;
@@ -1972,7 +2133,8 @@ impl Fleet {
             _ => return,
         }
         let label = crate::work::backend_label(self.pool.code());
-        self.ui.status(|s| s.backend = label.into());
+        let gpu=self.gpu.as_ref().is_some_and(|g|g.active());
+        self.ui.status(|s| s.backend = if gpu {format!("{label} + NVIDIA GPU 预览")}else{label.into()});
     }
 
     /// THE BOARD WORK HELD, in seconds of the whole budget: the rows not
@@ -2041,7 +2203,14 @@ impl Fleet {
         } else {
             (HELD_LOW, HELD_FULL, HELD_HIGH)
         };
-        let busy_groups = (0..self.open).all(|g| self.tasks.iter().any(|t| t.group == g) || self.packs.iter().any(|p| p.group == g));
+        let signal_work=self.signal.as_ref().is_some_and(|(at,s)|now.duration_since(*at)<Duration::from_millis(3*self.dials.poll_ms)
+            && s.as_ref().is_some_and(|s|s.open>0 || s.urgent>0));
+        let busy_groups = (0..self.open).all(|gi| {
+            let g=&self.groups[gi];
+            let held=self.tasks.iter().any(|t|t.group==gi)||self.packs.iter().any(|p|p.group==gi);
+            capacity_limited(held,g.last_received.is_some(),now<g.not_before,signal_work,
+                g.nothing_at.is_some_and(|at|now.duration_since(at)<NOTHING_RECENT),g.failures>0)
+        });
         let told_nothing = (0..self.open).any(|g| self.groups[g].nothing_at.is_some_and(|t| now.duration_since(t) < NOTHING_RECENT));
         let reopen_ok = self.closed_at.is_none_or(|t| now.duration_since(t) >= REOPEN_AFTER);
         let close = |why: String| (self.open > 1).then_some(why);
@@ -2066,6 +2235,26 @@ impl Fleet {
         }
     }
 
+    fn wait_text(&self,gi:usize,now:Instant)->String {
+        let g=&self.groups[gi];
+        let left=|at:Instant|at.saturating_duration_since(now).as_secs()+1;
+        if let Some((at,_))=&g.claiming {return format!("绑定设备 {}s",at.elapsed().as_secs());}
+        if let Some(s)=&g.syncing {return format!("{} {}s",if s.sent.want>0{"请求任务"}else{"同步结果"},s.sent.at.elapsed().as_secs());}
+        if self.switch_to.is_some(){return "等待切换引擎".into();}
+        if self.memory_guard.draining(){return "排空并回收内存".into();}
+        if self.settings_restart.is_some(){return "排空并应用设置".into();}
+        if self.proto==8 {
+            if now<g.retry_at{return format!("网络重试 {}s",left(g.retry_at));}
+            if now<g.not_before{return format!("{} {}s",g.wait_reason,left(g.not_before));}
+            if let Some(at)=g.go_at.filter(|at|*at>now){return format!("领取错峰 {}s",left(at));}
+            if self.signal_job.is_some() && self.signal.is_none(){return "读取任务信号".into();}
+            if let Some((_,signal))=&self.signal {
+                if signal.is_none() && now<g.fallback_at{return format!("信号不可用，直询 {}s",left(g.fallback_at));}
+                if signal.as_ref().is_some_and(|s|s.open==0 && s.urgent==0){return "信号暂无可派任务".into();}
+            }
+        }
+        "等待任务响应".into()
+    }
     fn show(&mut self) {
         let (lanes, idle, open) = (self.lanes(), self.idle(), self.open);
         let (max_groups, held_secs) = (if self.cfg.slots > 0 { self.cfg.slots.min(self.max_groups()) } else { self.max_groups() }, self.held_secs());
@@ -2089,16 +2278,10 @@ impl Fleet {
                     format!("紫卡搜索{more}")
                 } else if self.sending.iter().any(|s| s.group == gi) {
                     "提交结果".into()
-                } else if g.asking.is_some() || g.syncing.as_ref().is_some_and(|s| s.sent.want > 0) {
-                    "取任务".into()
-                } else if g.syncing.is_some() {
-                    "同步".into()
                 } else if gi >= open {
                     "暂不接活".into()
-                } else if g.next_ask > now || (self.proto == 8 && (g.not_before > now || g.retry_at > now)) {
-                    "暂无任务".into()
                 } else {
-                    "等待".into()
+                    self.wait_text(gi,now)
                 };
                 GroupView { id: g.verifier.get(..8).unwrap_or(&g.verifier).to_string(), state, open: gi < open, tasks: g.done, work: g.work }
             })
@@ -2108,7 +2291,7 @@ impl Fleet {
         } else if let Some(u) = &self.banned_until {
             format!("冷却中，至 {u}")
         } else if self.tasks.is_empty() {
-            "等待任务".to_string()
+            (0..self.open).min_by_key(|i|self.groups[*i].not_before).map_or_else(||"等待任务".into(),|i|self.wait_text(i,now))
         } else {
             "计算中".to_string()
         };
@@ -2137,6 +2320,7 @@ impl Fleet {
             s.core_pref = crate::affinity::active().map(|p| p.name());
             s.idle_cores = self.ctl.idle_cores.load(Ordering::Relaxed);
             s.active_cores = self.ctl.active_cores.load(Ordering::Relaxed);
+            s.compute_memory_limit_mb=self.cfg.compute_memory_limit_mb;
         });
     }
 
@@ -2231,6 +2415,7 @@ impl Fleet {
             }
             self.cool_down_over();
             if let Some(why) = self.held_why() {
+                self.stop_gpu();
                 if !self.tasks.is_empty() || !self.packs.is_empty() {
                     self.drop_all("，任务已交还");
                 }
@@ -2354,6 +2539,14 @@ impl Fleet {
     /// at once, offline.
     pub fn replay(&mut self, tasks: &[Value]) -> Result<()> {
         self.offline = true;
+        if self.cfg.gpu_enabled {
+            self.dispatch_gpu();
+            let until=Instant::now()+Duration::from_secs(185);
+            while self.gpu.is_some() && !self.gpu.as_ref().is_some_and(|g|g.available()) && Instant::now()<until {
+                self.dispatch_gpu();std::thread::sleep(Duration::from_millis(50));
+                if self.gpu.as_ref().is_some_and(|g|g.disabled()){break;}
+            }
+        }
         let v = self.groups[0].verifier.clone();
         for w in tasks {
             if !self.start(0, v.clone(), w.clone(), None) {
@@ -2719,6 +2912,13 @@ const RANKING_FILE: &str = "/stats/contributors.json";
 const RANKING_STALE_MS: u64 = 30 * 60_000;
 
 /// The week's ranking from the file, in the shape `/api/contributors` answers.
+/// Empty because it outran the per-id grant interval is still evidence that
+/// existing groups cannot occupy the available cores. An empty server reply,
+/// absent signal or network error is not permission to open more groups.
+fn capacity_limited(held:bool,received:bool,cooldown:bool,signal:bool,empty_reply:bool,network_error:bool)->bool {
+    held || (received && cooldown && signal && !empty_reply && !network_error)
+}
+
 fn ranking_file(net: &Net) -> Option<Value> {
     let f = net.get(&net.public_file(RANKING_FILE)).ok().filter(|r| r.status == 200)?.body;
     let now = net.server_now_ms();
@@ -2824,6 +3024,16 @@ impl Meter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fast_pack_drained_before_control_can_fill_unused_group_budget() {
+        assert!(capacity_limited(false,true,true,true,false,false));
+        assert!(capacity_limited(true,true,false,true,false,false));
+        assert!(!capacity_limited(false,false,true,true,false,false));
+        assert!(!capacity_limited(false,true,false,true,false,false));
+        assert!(!capacity_limited(false,true,true,false,false,false));
+        assert!(!capacity_limited(false,true,true,true,true,false));
+        assert!(!capacity_limited(false,true,true,true,false,true));
+    }
 
     #[test]
     fn ranking_pace() {

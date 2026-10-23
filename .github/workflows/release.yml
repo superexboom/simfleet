@@ -42,10 +42,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
-        with:
-          path: in
-          merge-multiple: true
+      - name: Download release artifacts with bounded network retries
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3; do
+            if gh run download "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY" --pattern 'dist-*' --dir "download-$attempt"; then
+              mkdir -p in
+              cp download-$attempt/dist-*/* in/
+              exit 0
+            fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep "$((attempt * 10))"
+          done
       - name: Publish
         shell: bash
         env:
@@ -72,4 +82,6 @@ jobs:
             echo
             echo "$sums"
           } > notes.md
-          gh release create "$tag" "${files[@]}" -R "$GITHUB_REPOSITORY" --title "simfleet $tag" --notes-file notes.md
+          flags=()
+          if [[ "$tag" == *-* ]]; then flags+=(--prerelease --latest=false); fi
+          gh release create "$tag" "${files[@]}" -R "$GITHUB_REPOSITORY" --title "simfleet $tag" --notes-file notes.md "${flags[@]}"

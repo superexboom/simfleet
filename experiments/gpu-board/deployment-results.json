@@ -1,0 +1,85 @@
+{
+  "version": "0.9.0-preview.1",
+  "engine": "62a82930d1d3",
+  "client_sha256": "a1a25a490048a15169b4869961f31eecc7b7f835739df487786f266b63fd79ae",
+  "config_changed": [
+    "gpu_enabled"
+  ],
+  "gpu_hashes_verified": true,
+  "package": {
+    "engine": "62a82930d1d3",
+    "wasm_sha256": "8a4145ffaf4b4e5fc8bd6791ab9e3a166d02e8856f867021f0167a7c004e3eca",
+    "wire_format": 1,
+    "gas_address": 6509000,
+    "module_sha256": "15214369b2d382ad1a7fa1cf4a9501dc3ec4d1b5742980dc704593fdfe5f6594",
+    "architecture": "compute_120",
+    "entrypoints": [
+      "sf_setup",
+      "sf_board",
+      "sf_board_packed"
+    ],
+    "wire_sha256": "f20b782fc58a1bfcec1be3dec02b69807d08d0e9e8b20c7466ba21ae90c32ffc",
+    "schema": 1,
+    "revision": 1,
+    "host": "windows-x64-v3",
+    "status": "preview",
+    "source": "cbf94686e2050145ab650dec115294faed28a812",
+    "files": {
+      "bridge.wasm": "8a4145ffaf4b4e5fc8bd6791ab9e3a166d02e8856f867021f0167a7c004e3eca",
+      "wire.dll": "f20b782fc58a1bfcec1be3dec02b69807d08d0e9e8b20c7466ba21ae90c32ffc",
+      "engine.cubin": "15214369b2d382ad1a7fa1cf4a9501dc3ec4d1b5742980dc704593fdfe5f6594"
+    }
+  },
+  "worker": {
+    "engine": "62a82930d1d3",
+    "client_sha256": "a83cc85e319329c7068609e4e1a8d3a5229198b40a4226d29d7bad3704247e66",
+    "complete_scores": 1096,
+    "different_requests": 16,
+    "batches": 70,
+    "elapsed_seconds": 96.97785870000371,
+    "invalid_input_rejected": true,
+    "exclusive_device": true,
+    "engine_mismatch_rejected": true,
+    "retained_growth_bytes": 168071168
+  },
+  "fleet": {
+    "engine": "62a82930d1d3",
+    "runs": [
+      {
+        "mode": "cpu",
+        "complete_scores": 96,
+        "gpu_rows": 0,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "summary": "REPLAY tasks=96 lanes=16 seconds=4.465763"
+      },
+      {
+        "mode": "gpu",
+        "complete_scores": 96,
+        "gpu_rows": 20,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "summary": "REPLAY tasks=96 lanes=16 seconds=5.903994"
+      },
+      {
+        "mode": "killed-gpu",
+        "complete_scores": 96,
+        "gpu_rows": 0,
+        "worker_killed": true,
+        "fallback_observed": true,
+        "summary": "REPLAY tasks=96 lanes=16 seconds=6.951063"
+      }
+    ]
+  },
+  "official_wasm_check": {
+    "wasm": "f6535796d379",
+    "lanes": [
+      1,
+      16
+    ],
+    "runs": 1000,
+    "score": 0.16155973089570266,
+    "work": 985783971,
+    "score_bits_metric_work_counts_equal": true
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "id": 30,
+  "request": {
+    "aim_gliding": false,
+    "aiming": true,
+    "airborne": false,
+    "arcane": [
+      "primary_debilitate"
+    ],
+    "channeling": false,
+    "duration": 180,
+    "enemy": "demolisher_devourer",
+    "evolutions": [
+      "torid_evo1_incarnon_form",
+      "torid_plentiful_mayhem",
+      "torid_extended_volley",
+      "torid_survivors_edge"
+    ],
+    "extra_stats": {},
+    "headshot_pct": 100,
+    "infinite_ammo": true,
+    "invisible": false,
+    "level": 9999,
+    "melee_equipped": true,
+    "metric": "kpm",
+    "mode": "cycle",
+    "mods": [
+      "high_voltage",
+      "galvanized_chamber",
+      "heavy_caliber",
+      "critical_delay",
+      "rifle_elementalist",
+      "vigilante_armaments",
+      "vile_acceleration",
+      "vital_sense",
+      "vigilante_supplies"
+    ],
+    "overshields": false,
+    "player_at": [
+      0,
+      0
+    ],
+    "runs": 8,
+    "seed": 12648430,
+    "sliding": false,
+    "solo_weapon": false,
+    "spectral_form": false,
+    "squad_size": 4,
+    "steel_path": true,
+    "target_at": [
+      0,
+      0.5
+    ],
+    "weapon": "torid",
+    "wf_energy_pct": 1.0
+  },
+  "ruler": "demolisher"
+}

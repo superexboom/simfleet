@@ -94,7 +94,9 @@ pub fn native_variants() -> Vec<&'static str> {
     match std::env::var("SIMFLEET_CPU").unwrap_or_default().as_str() {
         "baseline" => vec![""],
         "v3" => if v3 { vec!["-v3"] } else { vec![] },
+        _ if v3 && cfg!(windows) => vec!["-v3"],
         _ if v3 => vec!["-v3", ""],
+        _ if cfg!(windows) => vec![],
         _ => vec![""],
     }
 }
@@ -116,13 +118,13 @@ fn variant_label(variant: &str) -> &'static str {
 }
 
 #[cfg(target_arch = "x86_64")]
-fn cpu_v3() -> bool {
+pub(crate) fn cpu_v3() -> bool {
     use std::arch::is_x86_feature_detected as has;
     has!("avx2") && has!("fma") && has!("bmi1") && has!("bmi2") && has!("lzcnt") && has!("movbe") && has!("f16c")
 }
 
 #[cfg(not(target_arch = "x86_64"))]
-fn cpu_v3() -> bool {
+pub(crate) fn cpu_v3() -> bool {
     false
 }
 
@@ -623,6 +625,7 @@ pub struct RowScore {
 /// sixty the lanes would wait on it. The fold's body is the same text, byte for
 /// byte, as when it was read there.
 pub struct BoardRun {
+    pub gpu_pending: bool,
     native: Option<Arc<NativeBoard>>,
     home: Option<usize>,
     req_s: String,
@@ -645,6 +648,7 @@ pub struct BoardRun {
 impl BoardRun {
     pub fn new(req: &Value, ruler: &str) -> BoardRun {
         BoardRun {
+            gpu_pending: false,
             native: None,
             home: None,
             req_s: req.to_string(),
@@ -664,6 +668,11 @@ impl BoardRun {
     pub fn enable_native(&mut self, code: Arc<Code>, req: &Value) {
         self.native = NativeBoard::new(code, req, &self.ruler, false);
     }
+    pub fn gpu_input(&self, id:u64)->Option<crate::gpu::Input> {
+        if self.cursor!=0 || self.gpu_pending {return None;}
+        let request:Value=serde_json::from_str(&self.req_s).ok()?;
+        crate::gpu::eligible(&request,&self.ruler).then(||crate::gpu::Input{id,request,ruler:self.ruler.clone(),private_kib:192,probe:false})
+    }
     pub fn job_on(&mut self, tag: u64, lanes: usize, lane: usize, remote: bool) -> Option<Call> {
         if !remote && self.home.is_some_and(|h| !crate::placement::same_domain(h,lane)) { return None; }
         let share = if remote { lanes } else { crate::placement::domain_lanes(lane,lanes) };
@@ -674,6 +683,7 @@ impl BoardRun {
     /// The next job: a fold of what is contiguous first (it moves the row on),
     /// else the next piece. `lanes`: how many share the row.
     pub fn job(&mut self, tag: u64, lanes: usize) -> Option<Call> {
+        if self.gpu_pending {return None;}
         if self.runs > 0 && self.folded == self.runs && self.inflight.is_empty() && self.scoring.is_none() {
             self.scoring = Some(tag);
             if let Some(row) = &self.native { return Some(Call::NativeScore(row.clone())); }
@@ -903,6 +913,21 @@ pub fn board_payload(res: &Value, ctx: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn gpu_ownership_blocks_cpu_and_failure_resumes_at_run_zero() {
+        let req=serde_json::json!({"weapon":"fulmin_prime","enemy":"corrupted_heavy_gunner","mode":"semi_auto","duration":180,"runs":1000});
+        let mut row=super::BoardRun::new(&req,"heavy_gunner");
+        assert!(row.gpu_input(7).is_some());
+        row.gpu_pending=true;
+        assert!(row.job(1,16).is_none());
+        assert!(row.gpu_input(7).is_none());
+        row.gpu_pending=false;
+        match row.job(2,16).unwrap() {
+            crate::engine::Call::Runs(body,1)=>assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap()["from"],0),
+            _=>panic!("expected first CPU run after GPU fallback"),
+        }
+        assert!(row.gpu_input(7).is_none());
+    }
     use super::*;
 
     #[test]

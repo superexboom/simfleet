@@ -1,0 +1,471 @@
+{
+  "engine": "62a82930d1d3",
+  "cpu": "Ryzen 7 9700X",
+  "gpu": "RTX 5080",
+  "worker": {
+    "engine": "62a82930d1d3",
+    "records": [
+      {
+        "index": 6,
+        "weapon": "acceltra",
+        "ruler": "demolisher",
+        "probe": {
+          "samples": 8,
+          "cpu_ms": 97.813,
+          "gpu_ms": 2156.8966,
+          "max_pages": 37
+        },
+        "fallback": null,
+        "probe_wall": 2.432739300013054,
+        "full_seconds": 3.49017219999223,
+        "full_scores": 4,
+        "full_fallback": 0
+      },
+      {
+        "index": 10,
+        "weapon": "kuva_hind",
+        "ruler": "standard_multi_target",
+        "probe": {
+          "samples": 8,
+          "cpu_ms": 8.9703,
+          "gpu_ms": 1600.9954,
+          "max_pages": 51
+        },
+        "fallback": null,
+        "probe_wall": 1.6311212000146043,
+        "full_seconds": 2.64256230002502,
+        "full_scores": 4,
+        "full_fallback": 0
+      },
+      {
+        "index": 11,
+        "weapon": "larkspur_prime",
+        "ruler": "standard_single_target",
+        "probe": {
+          "samples": 8,
+          "cpu_ms": 14.0208,
+          "gpu_ms": 2020.1920000000002,
+          "max_pages": 40
+        },
+        "fallback": null,
+        "probe_wall": 2.06510220002383,
+        "full_seconds": 3.2966754999943078,
+        "full_scores": 4,
+        "full_fallback": 0
+      },
+      {
+        "index": 14,
+        "weapon": "zenith",
+        "ruler": "demolisher",
+        "probe": {
+          "samples": 8,
+          "cpu_ms": 6.9709,
+          "gpu_ms": 835.9793,
+          "max_pages": 31
+        },
+        "fallback": null,
+        "probe_wall": 0.8601242000004277,
+        "full_seconds": 1.158454599994002,
+        "full_scores": 4,
+        "full_fallback": 0
+      }
+    ]
+  },
+  "cold": {
+    "engine": "62a82930d1d3",
+    "runs": [
+      {
+        "mode": "cpu",
+        "complete_scores": 96,
+        "gpu_rows": 0,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "summary": "REPLAY tasks=96 lanes=4 seconds=33.321425"
+      },
+      {
+        "mode": "gpu",
+        "complete_scores": 96,
+        "gpu_rows": 40,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "summary": "REPLAY tasks=96 lanes=4 seconds=21.729267"
+      }
+    ]
+  },
+  "warm": {
+    "engine": "62a82930d1d3",
+    "runs": [
+      {
+        "mode": "gpu",
+        "complete_scores": 96,
+        "gpu_rows": 46,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "summary": "REPLAY tasks=96 lanes=4 seconds=20.094697"
+      }
+    ]
+  },
+  "policy": {
+    "binding": "62a82930d1d3:512d3fcf04b98c9098d9348eb411898aabfaa521a26ec7d00d4d5b76908c218c:NVIDIA GeForce RTX 5080:13040",
+    "entries": {
+      "34086874b7c5e02735269649040cd649ab382ec543ec8e979d998c97780cdcde": {
+        "allowed": true,
+        "until": 1792827109599,
+        "updated": 1792740709599,
+        "private_kib": 384,
+        "reason": "probe passed",
+        "cpu_us": 1309.4249999999997,
+        "gpu_ms": 1568.5988,
+        "failures": 0
+      }
+    }
+  },
+  "slow": {
+    "engine": "62a82930d1d3",
+    "runs": [
+      {
+        "mode": "gpu",
+        "complete_scores": 8,
+        "gpu_rows": 0,
+        "worker_killed": false,
+        "fallback_observed": true,
+        "worker_restarted": true,
+        "summary": "REPLAY tasks=8 lanes=4 seconds=41.357786"
+      }
+    ]
+  },
+  "learned_after_slow": {
+    "binding": "62a82930d1d3:512d3fcf04b98c9098d9348eb411898aabfaa521a26ec7d00d4d5b76908c218c:NVIDIA GeForce RTX 5080:13040",
+    "entries": {
+      "34086874b7c5e02735269649040cd649ab382ec543ec8e979d998c97780cdcde": {
+        "allowed": true,
+        "until": 1792827109599,
+        "updated": 1792740709599,
+        "private_kib": 384,
+        "reason": "probe passed",
+        "cpu_us": 1309.4249999999997,
+        "gpu_ms": 1568.5988,
+        "failures": 0
+      },
+      "9963d33f2b4f4ab1b2e1b5413d550a1cf06b77a5bccc0701b158cb1e176e943c": {
+        "allowed": false,
+        "until": 1792743748979,
+        "updated": 1792741948979,
+        "private_kib": 768,
+        "reason": "GPU timed out; rows return to CPU",
+        "cpu_us": 0.0,
+        "gpu_ms": 0.0,
+        "failures": 1
+      }
+    }
+  },
+  "deployment": {
+    "version": "0.9.0-preview.6",
+    "client_sha256": "090b5e17ff7ea678ac0c63b2a2add2e72447d4097488f04b550af5c508b43111",
+    "package_sha256": "4c53984c08c7720ef239011b773e219dfdc4d740291aab7cc1c520f7722e2332",
+    "config_unchanged": true,
+    "watch_pid": 26500,
+    "main_pid": 3096
+  },
+  "live_memory": {
+    "pid": 22992,
+    "samples": [
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 3339755520,
+        "private_bytes": 2864025600,
+        "members": [
+          {
+            "pid": 22992,
+            "private_bytes": 305479680,
+            "resident_bytes": 312320000
+          },
+          {
+            "pid": 29008,
+            "private_bytes": 3850240,
+            "resident_bytes": 11046912
+          },
+          {
+            "pid": 4628,
+            "private_bytes": 2554695680,
+            "resident_bytes": 341377024
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 3339755520,
+        "private_bytes": 2864033792,
+        "members": [
+          {
+            "pid": 22992,
+            "private_bytes": 305487872,
+            "resident_bytes": 312328192
+          },
+          {
+            "pid": 29008,
+            "private_bytes": 3850240,
+            "resident_bytes": 11046912
+          },
+          {
+            "pid": 4628,
+            "private_bytes": 2554695680,
+            "resident_bytes": 341377024
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 3339755520,
+        "private_bytes": 2864029696,
+        "members": [
+          {
+            "pid": 22992,
+            "private_bytes": 305483776,
+            "resident_bytes": 312324096
+          },
+          {
+            "pid": 29008,
+            "private_bytes": 3850240,
+            "resident_bytes": 11046912
+          },
+          {
+            "pid": 4628,
+            "private_bytes": 2554695680,
+            "resident_bytes": 341377024
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 3339755520,
+        "private_bytes": 2864025600,
+        "members": [
+          {
+            "pid": 22992,
+            "private_bytes": 305479680,
+            "resident_bytes": 312328192
+          },
+          {
+            "pid": 29008,
+            "private_bytes": 3850240,
+            "resident_bytes": 11046912
+          },
+          {
+            "pid": 4628,
+            "private_bytes": 2554695680,
+            "resident_bytes": 341377024
+          }
+        ]
+      }
+    ]
+  },
+  "furis_worker": {
+    "engine": "62a82930d1d3",
+    "records": [
+      {
+        "index": 0,
+        "weapon": "furis",
+        "ruler": "demolisher",
+        "probe": {
+          "samples": 8,
+          "cpu_ms": 31.2848,
+          "gpu_ms": 4263.2264,
+          "max_pages": 39
+        },
+        "fallback": null,
+        "probe_wall": 4.615321499994025,
+        "full_seconds": 6.556628599995747,
+        "full_scores": 4,
+        "full_fallback": 0
+      },
+      {
+        "index": 1,
+        "weapon": "furis",
+        "ruler": "demolisher",
+        "probe": {
+          "samples": 8,
+          "cpu_ms": 69.8269,
+          "gpu_ms": 9060.9482,
+          "max_pages": 45
+        },
+        "fallback": null,
+        "probe_wall": 9.359295800008113
+      }
+    ]
+  },
+  "unit_tests": {
+    "passed": 49,
+    "ignored": 7,
+    "failed": 0
+  },
+  "furis_fleet": {
+    "engine": "62a82930d1d3",
+    "runs": [
+      {
+        "mode": "gpu",
+        "complete_scores": 32,
+        "gpu_rows": 15,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "summary": "REPLAY tasks=32 lanes=4 seconds=24.305554"
+      }
+    ]
+  },
+  "final_test_policy": {
+    "binding": "adaptive-v2:62a82930d1d3:512d3fcf04b98c9098d9348eb411898aabfaa521a26ec7d00d4d5b76908c218c:NVIDIA GeForce RTX 5080:13040:AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD",
+    "entries": {
+      "f0577ada586194d9a721e34e94eb424b950ddad27a8330e930d3c2bf3b73526e": {
+        "allowed": true,
+        "until": 1792829171863,
+        "updated": 1792742771863,
+        "private_kib": 384,
+        "reason": "probe passed",
+        "cpu_us": 4463.924999999999,
+        "gpu_ms": 4191.4749,
+        "failures": 0
+      }
+    }
+  },
+  "initial_adaptive_client_sha256": "a1c95a795493fd74c81938c7e34c9c6f03262ef1d2c9a9b8f07864a5e12de91a",
+  "probe_timeout_recovery_regression": {
+    "engine": "62a82930d1d3",
+    "runs": [
+      {
+        "mode": "gpu",
+        "complete_scores": 8,
+        "gpu_rows": 0,
+        "worker_killed": false,
+        "fallback_observed": true,
+        "worker_restarted": true,
+        "summary": "REPLAY tasks=8 lanes=4 seconds=41.527158"
+      }
+    ],
+    "retry_seconds": 15,
+    "peak_private_bytes": 3455795200
+  },
+  "initial_live_complete_gpu_rows": 10,
+  "initial_live_memory_after_work": {
+    "pid": 33740,
+    "samples": [
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 5623160832,
+        "private_bytes": 118546432,
+        "members": [
+          {
+            "pid": 33740,
+            "private_bytes": 118546432,
+            "resident_bytes": 102707200
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 5623160832,
+        "private_bytes": 113364992,
+        "members": [
+          {
+            "pid": 33740,
+            "private_bytes": 113364992,
+            "resident_bytes": 103096320
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 5623160832,
+        "private_bytes": 112578560,
+        "members": [
+          {
+            "pid": 33740,
+            "private_bytes": 112578560,
+            "resident_bytes": 103907328
+          }
+        ]
+      }
+    ]
+  },
+  "final_live_memory": {
+    "pid": 3096,
+    "samples": [
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 6187663360,
+        "private_bytes": 2906554368,
+        "members": [
+          {
+            "pid": 3096,
+            "private_bytes": 106651648,
+            "resident_bytes": 97148928
+          },
+          {
+            "pid": 22680,
+            "private_bytes": 3846144,
+            "resident_bytes": 11042816
+          },
+          {
+            "pid": 29356,
+            "private_bytes": 2796056576,
+            "resident_bytes": 446070784
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 6187663360,
+        "private_bytes": 2906570752,
+        "members": [
+          {
+            "pid": 3096,
+            "private_bytes": 106668032,
+            "resident_bytes": 97153024
+          },
+          {
+            "pid": 22680,
+            "private_bytes": 3846144,
+            "resident_bytes": 11042816
+          },
+          {
+            "pid": 29356,
+            "private_bytes": 2796056576,
+            "resident_bytes": 446070784
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 6187663360,
+        "private_bytes": 2906640384,
+        "members": [
+          {
+            "pid": 3096,
+            "private_bytes": 106737664,
+            "resident_bytes": 97148928
+          },
+          {
+            "pid": 22680,
+            "private_bytes": 3846144,
+            "resident_bytes": 11042816
+          },
+          {
+            "pid": 29356,
+            "private_bytes": 2796056576,
+            "resident_bytes": 446070784
+          }
+        ]
+      }
+    ]
+  },
+  "final_live_validation": {
+    "complete_gpu_rows_at_least": 19,
+    "observed_probe_timeouts": 2,
+    "both_retry_seconds": 15,
+    "worker_restarted_twice": true,
+    "resumed_process_gpu_percent": 96
+  }
+}

@@ -1,0 +1,2279 @@
+{
+  "cow-fulmin-4096": {
+    "count": 4096,
+    "start": 0,
+    "engine": "99dec9ad6d01",
+    "memory_bytes": 19595264,
+    "module_sha256": "87b4f161b9d50ae698ecf8398493beb41098f01004335a097eee023237a857ba",
+    "cow": true,
+    "block": 32,
+    "samples": [
+      {
+        "reset_seconds": 0.00023140001576393843,
+        "compute_seconds": 1.0050453000003472,
+        "host_cpu_seconds": 0.0
+      },
+      {
+        "reset_seconds": 0.00019550000433810055,
+        "compute_seconds": 1.0080802000011317,
+        "host_cpu_seconds": 0.0
+      },
+      {
+        "reset_seconds": 0.0012417999969329685,
+        "compute_seconds": 1.0114956000179518,
+        "host_cpu_seconds": 0.0
+      }
+    ],
+    "module_load_seconds": 0.104363899998134,
+    "compute_seconds": 1.0080802000011317,
+    "private_pages": {
+      "limit": 48,
+      "min": 33,
+      "max": 33
+    },
+    "exact_shards": 4096,
+    "fold_and_score_seconds": 0.9075558000185993,
+    "cpu_16_full_row_seconds": 0.1740505000052508,
+    "exact_score": {
+      "counts": {
+        "body_shots": 1363968,
+        "dot_ticks": 1383726,
+        "field_ticks": 0,
+        "gas": 47876888364,
+        "hits": 3975042,
+        "kills": 0,
+        "pellets": 2591316,
+        "procs": 4709375,
+        "runs": 4096,
+        "shots": 1363968
+      },
+      "metric": "kpm",
+      "ok": true,
+      "score": 0.16049382924896133,
+      "work": 4032244418
+    }
+  },
+  "binary-fulmin-4096": {
+    "count": 4096,
+    "start": 0,
+    "engine": "99dec9ad6d01",
+    "memory_bytes": 19595264,
+    "module_sha256": "75154f4ab1b083c00dffc2b42a7308870376d1349547ee2cb846443febb799d0",
+    "cow": true,
+    "block": 32,
+    "samples": [
+      {
+        "reset_seconds": 0.0002632999967318028,
+        "compute_seconds": 1.0525704000028782,
+        "host_cpu_seconds": 0.0,
+        "fold_and_score_seconds": 0.013999499991768971
+      },
+      {
+        "reset_seconds": 0.0002345999819226563,
+        "compute_seconds": 1.0470654000237118,
+        "host_cpu_seconds": 0.0,
+        "fold_and_score_seconds": 0.015108999999938533
+      },
+      {
+        "reset_seconds": 0.00023140001576393843,
+        "compute_seconds": 1.0388006000139285,
+        "host_cpu_seconds": 0.0,
+        "fold_and_score_seconds": 0.013283600012073293
+      }
+    ],
+    "module_load_seconds": 20.109167199989315,
+    "exact_score": {
+      "counts": {
+        "body_shots": 1363968,
+        "dot_ticks": 1383726,
+        "field_ticks": 0,
+        "gas": 47876888364,
+        "hits": 3975042,
+        "kills": 0,
+        "pellets": 2591316,
+        "procs": 4709375,
+        "runs": 4096,
+        "shots": 1363968
+      },
+      "metric": "kpm",
+      "ok": true,
+      "score": 0.16049382924896133,
+      "work": 4032244418
+    },
+    "compute_seconds": 1.0470654000237118,
+    "private_pages": {
+      "limit": 48,
+      "min": 33,
+      "max": 33
+    },
+    "fold_and_score_seconds": 0.01492730001336895,
+    "exact_shards": 4096,
+    "cpu_full_row_seconds": 0.1940323000017088
+  },
+  "binary-16384": {
+    "count": 16384,
+    "start": 0,
+    "engine": "99dec9ad6d01",
+    "memory_bytes": 19595264,
+    "module_sha256": "75154f4ab1b083c00dffc2b42a7308870376d1349547ee2cb846443febb799d0",
+    "cow": true,
+    "block": 32,
+    "samples": [
+      {
+        "reset_seconds": 0.0005450999888125807,
+        "compute_seconds": 1.5926411999971606,
+        "host_cpu_seconds": 0.0,
+        "fold_and_score_seconds": 0.0657647000043653
+      },
+      {
+        "reset_seconds": 0.0005682999908458441,
+        "compute_seconds": 1.589486399985617,
+        "host_cpu_seconds": 0.0,
+        "fold_and_score_seconds": 0.06306069999118336
+      },
+      {
+        "reset_seconds": 0.0005800999933853745,
+        "compute_seconds": 1.580133300012676,
+        "host_cpu_seconds": 0.015625,
+        "fold_and_score_seconds": 0.06475550000322983
+      }
+    ],
+    "module_load_seconds": 0.1162876000162214,
+    "exact_score": {
+      "counts": {
+        "body_shots": 5455872,
+        "dot_ticks": 5538584,
+        "field_ticks": 0,
+        "gas": 191532862352,
+        "hits": 15904329,
+        "kills": 0,
+        "pellets": 10365745,
+        "procs": 18842634,
+        "runs": 16384,
+        "shots": 5455872
+      },
+      "metric": "kpm",
+      "ok": true,
+      "score": 0.16089265172704284,
+      "work": 16130243117
+    },
+    "compute_seconds": 1.589486399985617,
+    "private_pages": {
+      "limit": 48,
+      "min": 33,
+      "max": 33
+    },
+    "fold_and_score_seconds": 0.06202320000738837,
+    "exact_shards": 16384,
+    "cpu_full_row_seconds": 0.6013513999932911
+  },
+  "mixed-16384": {
+    "count": 16384,
+    "start": 0,
+    "engine": "99dec9ad6d01",
+    "memory_bytes": 19595264,
+    "module_sha256": "75154f4ab1b083c00dffc2b42a7308870376d1349547ee2cb846443febb799d0",
+    "cow": true,
+    "block": 32,
+    "samples": [
+      {
+        "reset_seconds": 0.007006400002865121,
+        "compute_seconds": 1.6395743000030052,
+        "host_cpu_seconds": 21.484375,
+        "fold_and_score_seconds": 0.10146679999888875
+      },
+      {
+        "reset_seconds": 0.0011023999832104892,
+        "compute_seconds": 1.5909469999896828,
+        "host_cpu_seconds": 20.03125,
+        "fold_and_score_seconds": 0.08587970002554357
+      },
+      {
+        "reset_seconds": 0.000987500010523945,
+        "compute_seconds": 1.6277665000234265,
+        "host_cpu_seconds": 21.265625,
+        "fold_and_score_seconds": 0.08772209999733604
+      },
+      {
+        "reset_seconds": 0.020752200012793764,
+        "compute_seconds": 1.6545968000136781,
+        "host_cpu_seconds": 19.71875,
+        "fold_and_score_seconds": 0.10121259998413734
+      },
+      {
+        "reset_seconds": 0.0008647000067867339,
+        "compute_seconds": 1.634586100000888,
+        "host_cpu_seconds": 18.234375,
+        "fold_and_score_seconds": 0.11229429999366403
+      },
+      {
+        "reset_seconds": 0.008156600000802428,
+        "compute_seconds": 1.599990999995498,
+        "host_cpu_seconds": 19.578125,
+        "fold_and_score_seconds": 0.11522389997844584
+      },
+      {
+        "reset_seconds": 0.00404329999582842,
+        "compute_seconds": 1.6278236999933142,
+        "host_cpu_seconds": 20.9375,
+        "fold_and_score_seconds": 0.13637339998967946
+      },
+      {
+        "reset_seconds": 0.003250200010370463,
+        "compute_seconds": 1.680916499986779,
+        "host_cpu_seconds": 20.734375,
+        "fold_and_score_seconds": 0.08866239999770187
+      },
+      {
+        "reset_seconds": 0.002167399972677231,
+        "compute_seconds": 1.6000541000103112,
+        "host_cpu_seconds": 19.71875,
+        "fold_and_score_seconds": 0.11679920001188293
+      },
+      {
+        "reset_seconds": 0.0007322999881580472,
+        "compute_seconds": 1.6640271999931429,
+        "host_cpu_seconds": 18.90625,
+        "fold_and_score_seconds": 0.08742339999298565
+      }
+    ],
+    "module_load_seconds": 0.11054990001139231,
+    "exact_score": {
+      "counts": {
+        "body_shots": 5455872,
+        "dot_ticks": 5538584,
+        "field_ticks": 0,
+        "gas": 191532862352,
+        "hits": 15904329,
+        "kills": 0,
+        "pellets": 10365745,
+        "procs": 18842634,
+        "runs": 16384,
+        "shots": 5455872
+      },
+      "metric": "kpm",
+      "ok": true,
+      "score": 0.16089265172704284,
+      "work": 16130243117
+    },
+    "mixed": {
+      "cpu_rows": 28,
+      "gpu_rows": 10,
+      "cpu_lanes": 16,
+      "mixed_seconds": 18.021072500006994,
+      "cpu_only_seconds": 23.264747699984582,
+      "speedup": 1.2909746464854162
+    },
+    "compute_seconds": 1.6312048999971012,
+    "private_pages": {
+      "limit": 48,
+      "min": 33,
+      "max": 33
+    },
+    "fold_and_score_seconds": 0.05689759997767396,
+    "exact_shards": 16384,
+    "cpu_full_row_seconds": 0.6022823000093922
+  },
+  "packed-mixed-1": {
+    "engine": "99dec9ad6d01",
+    "rows": 16,
+    "runs": 16000,
+    "block": 32,
+    "module_sha256": "62325e32a026766e3a7ee6901f76b6b820232a8b271168830e27ccabf5324508",
+    "samples": [
+      {
+        "compute_seconds": 1.229475400003139,
+        "merge_seconds": 0.09946019999915734,
+        "total_seconds": 1.337623600004008,
+        "host_cpu_seconds": 0.078125,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.230890900013037,
+        "merge_seconds": 0.08325339999282733,
+        "total_seconds": 1.330858300003456,
+        "host_cpu_seconds": 0.078125,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2305992000037804,
+        "merge_seconds": 0.0807902000087779,
+        "total_seconds": 1.3268862999975681,
+        "host_cpu_seconds": 0.09375,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2348343000048772,
+        "merge_seconds": 0.07249900000169873,
+        "total_seconds": 1.3316280999861192,
+        "host_cpu_seconds": 0.078125,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2319279999937862,
+        "merge_seconds": 0.07161230000201613,
+        "total_seconds": 1.3107604999968316,
+        "host_cpu_seconds": 0.078125,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2323199000093155,
+        "merge_seconds": 0.09079370001563802,
+        "total_seconds": 1.330360899999505,
+        "host_cpu_seconds": 0.0625,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2328885000024457,
+        "merge_seconds": 0.07406240000273101,
+        "total_seconds": 1.3275525999779347,
+        "host_cpu_seconds": 0.0625,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.230866199999582,
+        "merge_seconds": 0.07763490002253093,
+        "total_seconds": 1.3163994000060484,
+        "host_cpu_seconds": 0.078125,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2271147999854293,
+        "merge_seconds": 0.08971329999621958,
+        "total_seconds": 1.326495099987369,
+        "host_cpu_seconds": 0.078125,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2311518999922555,
+        "merge_seconds": 0.0730541999801062,
+        "total_seconds": 1.319190799986245,
+        "host_cpu_seconds": 0.0625,
+        "max_private_pages": 33
+      }
+    ],
+    "mixed": {
+      "cpu_rows": 440,
+      "gpu_rows": 160,
+      "seconds": 16.536329800001113,
+      "cpu_only_seconds": 23.11343709999346,
+      "speedup": 1.3977368242856347
+    },
+    "exact_shards": 16000,
+    "exact_scores": 16,
+    "scores": [
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      }
+    ],
+    "median_seconds": 1.3272194499877514
+  },
+  "packed-mixed-2": {
+    "engine": "99dec9ad6d01",
+    "rows": 16,
+    "runs": 16000,
+    "block": 32,
+    "module_sha256": "62325e32a026766e3a7ee6901f76b6b820232a8b271168830e27ccabf5324508",
+    "samples": [
+      {
+        "compute_seconds": 1.3679727999842726,
+        "merge_seconds": 0.07899899999029003,
+        "total_seconds": 1.4650030999910086,
+        "host_cpu_seconds": 0.0625,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2336368999967817,
+        "merge_seconds": 0.08031839999603108,
+        "total_seconds": 1.3314196999999695,
+        "host_cpu_seconds": 0.09375,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2290377000172157,
+        "merge_seconds": 0.1008023000031244,
+        "total_seconds": 1.3413309000025038,
+        "host_cpu_seconds": 0.078125,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2329148999997415,
+        "merge_seconds": 0.10964380000950769,
+        "total_seconds": 1.3556930999911856,
+        "host_cpu_seconds": 0.0625,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2297747999837156,
+        "merge_seconds": 0.07265290000941604,
+        "total_seconds": 1.3139899999951012,
+        "host_cpu_seconds": 0.078125,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2316393999790307,
+        "merge_seconds": 0.07671860000118613,
+        "total_seconds": 1.3294919999898411,
+        "host_cpu_seconds": 0.09375,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2289332999789622,
+        "merge_seconds": 0.07768309998209588,
+        "total_seconds": 1.319472399976803,
+        "host_cpu_seconds": 0.078125,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2313216000038665,
+        "merge_seconds": 0.071435299993027,
+        "total_seconds": 1.3122839000134263,
+        "host_cpu_seconds": 0.0625,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2307390999922063,
+        "merge_seconds": 0.07006860000547022,
+        "total_seconds": 1.321368100005202,
+        "host_cpu_seconds": 0.078125,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2353944999922533,
+        "merge_seconds": 0.08238790000905283,
+        "total_seconds": 1.3274200999876484,
+        "host_cpu_seconds": 0.0625,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2293952999752946,
+        "merge_seconds": 0.07409259999985807,
+        "total_seconds": 1.3241947999922559,
+        "host_cpu_seconds": 0.09375,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2328205999801867,
+        "merge_seconds": 0.07413440002710558,
+        "total_seconds": 1.321991499979049,
+        "host_cpu_seconds": 0.09375,
+        "max_private_pages": 33
+      }
+    ],
+    "mixed": {
+      "cpu_rows": 440,
+      "gpu_rows": 192,
+      "seconds": 17.601519799995003,
+      "cpu_only_seconds": 25.781433600001037,
+      "speedup": 1.4647276992528995
+    },
+    "exact_shards": 16000,
+    "exact_scores": 16,
+    "scores": [
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      }
+    ],
+    "median_seconds": 1.3258074499899521
+  },
+  "packed-mixed-3": {
+    "engine": "99dec9ad6d01",
+    "rows": 16,
+    "runs": 16000,
+    "block": 32,
+    "module_sha256": "62325e32a026766e3a7ee6901f76b6b820232a8b271168830e27ccabf5324508",
+    "samples": [
+      {
+        "compute_seconds": 1.2274241000122856,
+        "merge_seconds": 0.07097880000947043,
+        "total_seconds": 1.312031500012381,
+        "host_cpu_seconds": 0.0625,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2295604999817442,
+        "merge_seconds": 0.07108399999560788,
+        "total_seconds": 1.3138668999890797,
+        "host_cpu_seconds": 0.0625,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2317182999977376,
+        "merge_seconds": 0.07131259999005124,
+        "total_seconds": 1.3129180999821983,
+        "host_cpu_seconds": 0.078125,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2279929000069387,
+        "merge_seconds": 0.08760149998124689,
+        "total_seconds": 1.3233976000046823,
+        "host_cpu_seconds": 0.09375,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2260360999789555,
+        "merge_seconds": 0.08763140000519343,
+        "total_seconds": 1.3318288999726065,
+        "host_cpu_seconds": 0.0625,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2390511000121478,
+        "merge_seconds": 0.09292650001589209,
+        "total_seconds": 1.3517409000196494,
+        "host_cpu_seconds": 0.09375,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2301675000053365,
+        "merge_seconds": 0.07898920000297949,
+        "total_seconds": 1.317265599995153,
+        "host_cpu_seconds": 0.078125,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2243358999839984,
+        "merge_seconds": 0.07099529998959042,
+        "total_seconds": 1.3059441999939736,
+        "host_cpu_seconds": 0.0625,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2301541000197176,
+        "merge_seconds": 0.07623279999825172,
+        "total_seconds": 1.3153927999956068,
+        "host_cpu_seconds": 0.0625,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.230407600000035,
+        "merge_seconds": 0.10757880000164732,
+        "total_seconds": 1.3503968000004534,
+        "host_cpu_seconds": 0.078125,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.22779200001969,
+        "merge_seconds": 0.07545520001440309,
+        "total_seconds": 1.3176192000100855,
+        "host_cpu_seconds": 0.0625,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 1.2345667000045069,
+        "merge_seconds": 0.07349529999191873,
+        "total_seconds": 1.3223648999992292,
+        "host_cpu_seconds": 0.078125,
+        "max_private_pages": 33
+      }
+    ],
+    "mixed": {
+      "cpu_rows": 440,
+      "gpu_rows": 192,
+      "seconds": 17.66435380000621,
+      "cpu_only_seconds": 25.57917909999378,
+      "speedup": 1.4480676389070506
+    },
+    "exact_shards": 16000,
+    "exact_scores": 16,
+    "scores": [
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      }
+    ],
+    "median_seconds": 1.3174424000026193
+  },
+  "packed-32000": {
+    "engine": "99dec9ad6d01",
+    "rows": 32,
+    "runs": 32000,
+    "block": 32,
+    "module_sha256": "62325e32a026766e3a7ee6901f76b6b820232a8b271168830e27ccabf5324508",
+    "samples": [
+      {
+        "compute_seconds": 2.7056282999983523,
+        "merge_seconds": 0.0898348999908194,
+        "total_seconds": 2.807027000002563,
+        "host_cpu_seconds": 0.09375,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 2.681200799997896,
+        "merge_seconds": 0.09349400000064634,
+        "total_seconds": 2.7864914999809116,
+        "host_cpu_seconds": 0.125,
+        "max_private_pages": 33
+      },
+      {
+        "compute_seconds": 2.70020459999796,
+        "merge_seconds": 0.09174929998698644,
+        "total_seconds": 2.805132599984063,
+        "host_cpu_seconds": 0.09375,
+        "max_private_pages": 33
+      }
+    ],
+    "exact_shards": 32000,
+    "exact_scores": 32,
+    "scores": [
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      }
+    ],
+    "median_seconds": 2.805132599984063
+  },
+  "packed-heterogeneous": {
+    "engine": "99dec9ad6d01",
+    "rows": 3,
+    "runs": 3000,
+    "block": 32,
+    "module_sha256": "62325e32a026766e3a7ee6901f76b6b820232a8b271168830e27ccabf5324508",
+    "samples": [
+      {
+        "compute_seconds": 6.458723000017926,
+        "merge_seconds": 0.012160399986896664,
+        "total_seconds": 6.472218700015219,
+        "host_cpu_seconds": 0.0,
+        "max_private_pages": 63
+      }
+    ],
+    "exact_shards": 3000,
+    "exact_scores": 3,
+    "scores": [
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 2283000,
+          "dot_ticks": 511475,
+          "field_ticks": 0,
+          "gas": 66670599673,
+          "hits": 4813519,
+          "kills": 46508,
+          "pellets": 2283000,
+          "procs": 3042896,
+          "runs": 1000,
+          "shots": 2283000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 15.602257190704641,
+        "work": 3733529983
+      },
+      {
+        "counts": {
+          "body_shots": 1049300,
+          "dot_ticks": 0,
+          "field_ticks": 117200,
+          "gas": 6398487313,
+          "hits": 1433512,
+          "kills": 0,
+          "pellets": 45825,
+          "procs": 1312056,
+          "runs": 1000,
+          "shots": 41972
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.12198858116782234,
+        "work": 719924365
+      }
+    ],
+    "median_seconds": 6.472218700015219
+  },
+  "torid-full-32": {
+    "count": 32,
+    "start": 0,
+    "engine": "99dec9ad6d01",
+    "memory_bytes": 19595264,
+    "module_sha256": "62325e32a026766e3a7ee6901f76b6b820232a8b271168830e27ccabf5324508",
+    "cow": true,
+    "block": 8,
+    "samples": [
+      {
+        "reset_seconds": 2.5299988919869065e-05,
+        "compute_seconds": 41.427544200007105,
+        "host_cpu_seconds": 0.03125,
+        "fold_and_score_seconds": 0.0
+      }
+    ],
+    "module_load_seconds": 0.10694099997635931,
+    "compute_seconds": 41.427544200007105,
+    "private_pages": {
+      "limit": 256,
+      "min": 88,
+      "max": 141
+    },
+    "exact_shards": 32
+  },
+  "memory-differential": {
+    "cases": 64,
+    "operations_per_case": 1024,
+    "checks": [
+      {
+        "block": 8,
+        "capacity": 32,
+        "all_bytes_equal": true
+      },
+      {
+        "block": 32,
+        "capacity": 32,
+        "all_bytes_equal": true
+      },
+      {
+        "block": 32,
+        "capacity": 4,
+        "overflow_rejected": true
+      }
+    ]
+  },
+  "negative-checks": {
+    "malformed_shard": "rejected",
+    "wrong_wasm_snapshot": "rejected"
+  },
+  "conditions": {
+    "cpu": "Ryzen 7 9700X, 16 logical threads",
+    "gpu": "RTX 5080, compute_120",
+    "driver": "616.92",
+    "engine": "99dec9ad6d01",
+    "source": "3747fab2571809ae1920bf1f20afaf87e1b6ee0b",
+    "scope": "Offline fixed public board inputs. Repeated tasks benchmark compute throughput; no live leases or submissions. Primary throughput case is Fulmin Prime / heavy gunner / semi-auto."
+  },
+  "memory_limits": {
+    "job_gib": 24,
+    "early_stop_gib": 21,
+    "poll_ms": 100,
+    "heavy_jobs": "serialized",
+    "overflow_selftest": "passed"
+  },
+  "delivery": {
+    "engine": "99dec9ad6d01",
+    "wasm_sha256": "5b29543c81478ac0dde7f3783b17c8ef58eb197005615926789fd0a2ae4c2371",
+    "wire_format": 1,
+    "gas_address": 6510728,
+    "architecture": "compute_120",
+    "module_sha256": "62325e32a026766e3a7ee6901f76b6b820232a8b271168830e27ccabf5324508",
+    "entrypoints": [
+      "sf_setup",
+      "sf_board",
+      "sf_board_packed"
+    ],
+    "wire_sha256": "2980f81ae1d79cd388657547df054b05e454c47485034acb85a1f710f5a5effa",
+    "status": "experimental offline backend",
+    "source": "3747fab2571809ae1920bf1f20afaf87e1b6ee0b",
+    "files": {
+      "engine.cubin": "62325e32a026766e3a7ee6901f76b6b820232a8b271168830e27ccabf5324508",
+      "bridge.wasm": "5b29543c81478ac0dde7f3783b17c8ef58eb197005615926789fd0a2ae4c2371",
+      "wire.dll": "2980f81ae1d79cd388657547df054b05e454c47485034acb85a1f710f5a5effa"
+    }
+  },
+  "delivery-check": {
+    "engine": "99dec9ad6d01",
+    "rows": 2,
+    "runs": 2000,
+    "block": 32,
+    "module_sha256": "62325e32a026766e3a7ee6901f76b6b820232a8b271168830e27ccabf5324508",
+    "samples": [
+      {
+        "compute_seconds": 0.7349889999895822,
+        "merge_seconds": 0.009291299997130409,
+        "total_seconds": 0.7454673999745864,
+        "host_cpu_seconds": 0.015625,
+        "max_private_pages": 33
+      }
+    ],
+    "exact_shards": 2000,
+    "exact_scores": 2,
+    "scores": [
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      },
+      {
+        "counts": {
+          "body_shots": 333000,
+          "dot_ticks": 338522,
+          "field_ticks": 0,
+          "gas": 11691112364,
+          "hits": 971106,
+          "kills": 0,
+          "pellets": 632584,
+          "procs": 1150127,
+          "runs": 1000,
+          "shots": 333000
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16155973089570266,
+        "work": 984555618
+      }
+    ],
+    "median_seconds": 0.7454673999745864
+  },
+  "checks": {
+    "python_compile": "passed",
+    "diff_whitespace": "passed",
+    "nested_memory_job": "passed",
+    "build_configuration": "passed",
+    "build_stages": "executed separately and verified",
+    "runtime_cuda_sdk_required": false
+  }
+}

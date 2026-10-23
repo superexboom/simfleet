@@ -1,5 +1,7 @@
 # simfleet
 
+`0.9.0-preview.7` 的可选 NVIDIA GPU 榜单后端不再按武器白名单放行：自动少量探测、校验并学习适合 GPU 的任务上下文，慢任务或资源失败暂缓并到期重评。探测期间 CPU 照常计算，探测结果不作为成绩提交。Windows 默认限制 CPU＋GPU 合计提交在 8 GiB 预算内，可在 **S → CPU+GPU上限 MiB** 修改，显存另计并限制批量。GPU 引擎单独安装，客户端包仍为原有五文件。Windows x64-v3 主机按显卡选择 sm120（RTX 5080 验证）或 sm75（GTX 1660 Ti 交叉编译测试包）；按 **S → NVIDIA GPU 预览** 开启。贡献“速度”包含 CPU＋GPU 最近十分钟完成工作，“其中GPU”显示其 GPU 部分；账号榜单按约半小时入账增长估计。Windows 原生引擎 sfe2 只构建 PGO v3，旧 CPU 使用官方原生或 WASM。详见[自动学习与实测](docs/gpu-adaptive-dispatch.md)、[领取等待](docs/dispatch-and-gpu-recovery.md)、[长期恢复与内存](docs/gpu-long-run-recovery.md)和[预览版说明](docs/releases/v0.9.0-preview.7.md)。
+
 **WFSim 的志愿计算客户端**：把 [wfsim.app](https://wfsim.app) 网页里「帮 WFSim 计算」的那部分单独拿出来，做成一个命令行小程序。开着它，这台电脑就会按你给的预算，替 WFSim 计算排行榜分数和紫卡增益——跟开着网页一样，只是更快、更省、能常驻。
 
 > 非官方项目，**基于 [WFSim](https://github.com/magenie33/wfsim)**（作者 magenie33，AGPL-3.0-or-later），与 WFSim 官方、Digital Extremes 均无关联。按 WFSim 的 [商标政策](https://github.com/magenie33/wfsim/blob/main/TRADEMARK.md)，衍生项目不能以 “WFSim” 命名，所以叫 simfleet。署名与许可详见 [NOTICE.md](NOTICE.md)。
@@ -31,6 +33,8 @@
 ## 上手
 
 0.8.1 优化了紫卡 lead 的重复元数据处理和中间报告。客户端会自动下载带 `-sfe1` 修订号的原生库，避免沿用同一引擎 ID 的旧构建。引擎在 [独立 Release](https://github.com/superexboom/simfleet/releases/tag/engine-872e90ffaf0d) 发布，客户端压缩包只包含程序、README 和许可说明。旧库保持可回退；技术细节见 [紫卡 lead 优化](https://github.com/superexboom/simfleet/blob/v0.8.1/docs/riven-lead-0.8.1.md)。
+
+同类客户端的实现参考见 [两轮性能与内存优化迁移指南](docs/optimization-transfer-guide.md)：覆盖任务级准备、原生 ABI、顺序合并、有界 lead 缓存、内存生命周期、NUMA 调度与等价验证。
 
 **下载**：在 [Releases](https://github.com/superexboom/simfleet/releases) 下载 `simfleet-<版本>-windows-x64.zip` 并解压。只需要 Windows 10/11 x64，不需要装 Rust 或任何运行库。
 

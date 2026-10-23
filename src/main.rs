@@ -17,8 +17,11 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 mod account;
 mod affinity;
 mod config;
+mod dispatch_trace;
 mod engine;
 mod fleet;
+mod gpu;
+mod gpu_meter;
 mod jsnum;
 mod json_numbers;
 mod maintenance;
@@ -251,6 +254,7 @@ fn adopt_session(c: &mut Config, session: String) -> Result<()> {
 }
 
 fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<bool> {
+    let _compute_budget=maintenance::ComputeBudget::new(cfg.compute_memory_limit_mb)?;
     if cfg.placement.is_empty() {cfg.placement="auto".into();}
     sys::set_priority(&cfg.priority);
     let placement = placement::init(&cfg)?;
@@ -305,6 +309,7 @@ fn run(paths: Paths, mut cfg: Config, cores_override: Option<usize>) -> Result<b
         };
         ui.log(format!("{C_INFO}[引擎]{C_END} 网站引擎 {} · wasm {}", rel.engine, rel.wasm));
         let (rel,code) = engine_update::startup(&net,&paths,&cfg,&ui,rel)?;
+        ui.log(format!("{C_INFO}[启动]{C_END} 引擎就绪，用时 {:.1}s；开始领取任务",started.elapsed().as_secs_f64()));
         Ok(fleet::Fleet::new(net.clone(), cfg.clone(), paths.clone(), ctl.clone(), ui.clone(), rel, code))
     })();
     let mut summary = None;
@@ -597,8 +602,15 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, dat
 }
 
 fn main() {
-    enable_vt();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // The isolated GPU protocol never reads account/config or touches a lease.
+    if args.first().is_some_and(|s|s=="gpu-worker") {
+        let native=args.iter().position(|s|s=="--native").and_then(|i|args.get(i+1)).map(std::path::Path::new);
+        let result=(||->Result<()>{gpu::worker_main(std::path::Path::new(args.get(1).context("GPU package directory")?),args.get(2).context("GPU engine id")?,native)})();
+        if let Err(e)=result {println!("{}",serde_json::json!({"error":format!("{e:#}")}));std::process::exit(1);}
+        return;
+    }
+    enable_vt();
     let paths = Paths::locate();
     let code = (|| -> Result<()> {
         let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
@@ -611,6 +623,12 @@ fn main() {
         match cmd {
             "help" | "-h" | "--help" => print!("{HELP}"),
             "version" | "-V" | "--version" => println!("simfleet {}", env!("CARGO_PKG_VERSION")),
+            "gpu-meter" => {
+                let pid=args.get(1).context("gpu-meter <worker pid> [--seconds N]")?.parse::<u32>()?;
+                let meter=gpu_meter::Monitor::new(pid);
+                let seconds=flag("--seconds").and_then(|s|s.parse::<u64>().ok()).unwrap_or(5).clamp(1,60);
+                for _ in 0..seconds {std::thread::sleep(std::time::Duration::from_secs(1));println!("{}",serde_json::to_string(&meter.read())?);}
+            }
             "setup" => {
                 wizard(&paths, paths.load()?, true)?;
             }
@@ -655,12 +673,17 @@ fn main() {
                 }
                 let lanes = flag("--lanes").and_then(|x| x.parse().ok()).unwrap_or_else(sys::cores);
                 let mut cfg = Config::fresh(lanes);
+                let _compute_budget=maintenance::ComputeBudget::new(cfg.compute_memory_limit_mb)?;
                 if let Some(p) = flag("--placement") { cfg.placement = p; }
                 placement::init(&cfg)?;
                 cfg.native_engine = flag("--wasm").is_none() && !args.iter().any(|a| a == "--wasm");
+                cfg.gpu_enabled = args.iter().any(|a|a=="--gpu");
                 let net = net::Net::new(&cfg.server, None);
                 let ui = Ui::new();
-                let rel = work::fetch_release(&net)?;
+                let rel = if let Some(file)=flag("--release") {
+                    cfg.native_engine_url.clear();cfg.official_engine=false;
+                    serde_json::from_slice::<work::Release>(&std::fs::read(&file)?)?
+                }else{work::fetch_release(&net)?};
                 let code = work::load_code(&net, &paths, &cfg, &ui, &rel)?;
                 // A replay of a riven gain runs where the fleet's would: natively once the canary says so.
                 if let Some(n) = &code.native {
@@ -668,9 +691,10 @@ fn main() {
                 }
                 cfg.idle_cores=lanes;cfg.active_cores=lanes;
                 let ctl = Arc::new(Ctl::new(&cfg,lanes));
-                let mut f = fleet::Fleet::new(net, cfg, paths.clone(), ctl, ui, rel, code);
+                let mut f = fleet::Fleet::new(net, cfg, paths.clone(), ctl, ui.clone(), rel, code);
                 let started = Instant::now();
                 f.replay(&tasks)?;
+                ui.status(|s| println!("REPLAY-WORK total={} gpu={}",s.computed_work,s.computed_gpu_work));
                 println!("REPLAY tasks={} lanes={lanes} seconds={:.6}", tasks.len(), started.elapsed().as_secs_f64());
             }
             "cpu" => {

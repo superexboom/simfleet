@@ -17,6 +17,8 @@ pub struct Settings {
     pub native_wait_hours: u64,
     pub idle_after_secs: u64,
     pub pause_on_battery: bool,
+    pub gpu_enabled: bool,
+    pub compute_memory_limit_mb:u64,
 }
 impl Settings {
     pub fn from_config(c: &Config) -> Self {
@@ -33,6 +35,8 @@ impl Settings {
             native_wait_hours: c.native_wait_hours,
             idle_after_secs: c.idle_after_secs,
             pause_on_battery: c.pause_on_battery,
+            gpu_enabled: c.gpu_enabled,
+            compute_memory_limit_mb:c.compute_memory_limit_mb,
         }
     }
     pub fn write(&self, c: &mut Config) {
@@ -48,12 +52,15 @@ impl Settings {
         c.native_wait_hours = self.native_wait_hours;
         c.idle_after_secs = self.idle_after_secs;
         c.pause_on_battery = self.pause_on_battery;
+        c.gpu_enabled = self.gpu_enabled;
+        c.compute_memory_limit_mb=self.compute_memory_limit_mb;
     }
     pub fn topology_changed(&self, old: &Self) -> bool {
         self.placement != old.placement
             || self.numa_nodes != old.numa_nodes
             || self.cpu_offset != old.cpu_offset
             || self.core_type != old.core_type
+            || self.compute_memory_limit_mb!=old.compute_memory_limit_mb
     }
     pub fn apply_value(&mut self, row: usize, value: &str, max: usize) -> Result<()> {
         let value = value.trim();
@@ -145,6 +152,8 @@ impl Settings {
                     _ => bail!("请选择 true/false"),
                 }
             }
+            12 => self.gpu_enabled = match value {"true"=>true,"false"=>false,_=>bail!("请选择 true/false")},
+            13 => {let n=integer()?;if !(4096..=65536).contains(&n){bail!("CPU+GPU 内存上限应在 4096..=65536 MiB");}self.compute_memory_limit_mb=n;},
             _ => bail!("未知设置"),
         }
         Ok(())
@@ -215,6 +224,8 @@ impl Settings {
                 self.pause_on_battery.to_string(),
                 "true 暂停 / false 继续。",
             ),
+            ("NVIDIA GPU 预览",self.gpu_enabled.to_string(),"true 自动探测榜单收益；学习适合 GPU 的场景，失败或过慢暂缓并回 CPU。"),
+            ("CPU+GPU上限 MiB",self.compute_memory_limit_mb.to_string(),"Windows 进程合计提交硬上限，默认 8192；显存另计。改动后排空并重启。"),
         ]
     }
     pub fn choices(row: usize) -> &'static [&'static str] {
@@ -222,7 +233,7 @@ impl Settings {
             3 => &["auto", "system", "numa", "cache"],
             6 => &["auto", "p", "e", "windows"],
             7 => &["idle", "below_normal", "normal"],
-            11 => &["true", "false"],
+            11 | 12 => &["true", "false"],
             _ => &[],
         }
     }
@@ -249,8 +260,13 @@ mod tests {
         assert_eq!(s.numa_nodes, vec![0, 1]);
         assert!(s.apply_value(9, "-1", 16).is_err());
         s.apply_value(9, "48", 16).unwrap();
+        s.apply_value(12,"true",16).unwrap();
+        assert!(s.apply_value(13,"2048",16).is_err());s.apply_value(13,"8192",16).unwrap();
+        assert!(s.apply_value(12,"maybe",16).is_err());
         s.write(&mut c);
         assert_eq!(c.verifier, id);
         assert_eq!(c.native_wait_hours, 48);
+        assert!(c.gpu_enabled);
+        assert_eq!(c.compute_memory_limit_mb,8192);
     }
 }

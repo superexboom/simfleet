@@ -1,0 +1,2409 @@
+{
+  "engine": "99dec9ad6d01",
+  "source": "3747fab2571809ae1920bf1f20afaf87e1b6ee0b",
+  "cpu": "AMD Ryzen 7 9700X",
+  "gpu": "NVIDIA GeForce RTX 5080",
+  "rustc": "1.99.0 (LLVM 23.1.1)",
+  "native_cpu": "x86-64-v3",
+  "pgo_training": {
+    "orders": "experiments/prepared-board/orders.json",
+    "runs_per_order": 128,
+    "lanes": 8,
+    "passes": 2
+  },
+  "comparisons": {
+    "pgo-ab": {
+      "corpus": [
+        {
+          "label": "0:braton_prime/standard_multi_target/cycle",
+          "runs": 128
+        },
+        {
+          "label": "1:braton_prime/demolisher/cycle",
+          "runs": 128
+        },
+        {
+          "label": "2:torid/standard_multi_target/cycle",
+          "runs": 128
+        },
+        {
+          "label": "3:torid/demolisher/cycle",
+          "runs": 128
+        },
+        {
+          "label": "4:dual_toxocyst/standard_multi_target/cycle",
+          "runs": 128
+        },
+        {
+          "label": "5:dual_toxocyst/demolisher/cycle",
+          "runs": 128
+        },
+        {
+          "label": "6:acceltra/demolisher/base",
+          "runs": 128
+        },
+        {
+          "label": "7:braton_prime/demolisher/base",
+          "runs": 128
+        },
+        {
+          "label": "8:burston_prime/standard_single_target/base",
+          "runs": 128
+        },
+        {
+          "label": "9:fulmin_prime/heavy_gunner/semi_auto",
+          "runs": 128
+        },
+        {
+          "label": "10:kuva_hind/standard_multi_target/semi_auto",
+          "runs": 128
+        },
+        {
+          "label": "11:larkspur_prime/standard_single_target/base",
+          "runs": 128
+        },
+        {
+          "label": "12:phenmor/standard_single_target/cycle",
+          "runs": 128
+        },
+        {
+          "label": "13:torid/demolisher/cycle",
+          "runs": 128
+        },
+        {
+          "label": "14:zenith/demolisher/base",
+          "runs": 128
+        }
+      ],
+      "orders_sha256": "3c68d978c7a5eed90f82c32185c34538884719cc57f025235100d594e12d164f",
+      "libraries": {
+        "baseline": {
+          "path": "C:\\Users\\SuperExboom\\Documents\\simfleet\\.bench-hardware\\board-acceleration\\artifacts\\original\\baseline-v3.dll",
+          "sha256": "a3e233b109003f0f2bb0feacc8e3efd5a8d4fba5201a52ec6ce06f885c022c09"
+        },
+        "pgo": {
+          "path": "C:\\Users\\SuperExboom\\Documents\\simfleet\\.bench-hardware\\board-acceleration\\work\\pgo-v3.dll",
+          "sha256": "410d8494a3aea0ea0c11addf2211cdab889c9d29bc2c267c8d68d2c98e726f9f"
+        }
+      },
+      "batch": 8,
+      "summary": [
+        {
+          "library": "baseline",
+          "lanes": 1,
+          "median_seconds": 17.25707130000228,
+          "min_seconds": 17.154158900026232,
+          "max_seconds": 17.322145799989812
+        },
+        {
+          "library": "pgo",
+          "lanes": 1,
+          "median_seconds": 11.948147699964466,
+          "min_seconds": 11.916935999994166,
+          "max_seconds": 12.033590099978028
+        },
+        {
+          "library": "baseline",
+          "lanes": 8,
+          "median_seconds": 2.394101400015643,
+          "min_seconds": 2.3778592000016943,
+          "max_seconds": 2.399553699971875
+        },
+        {
+          "library": "pgo",
+          "lanes": 8,
+          "median_seconds": 1.6711991000920534,
+          "min_seconds": 1.6512747000379022,
+          "max_seconds": 1.6777842000010423
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "median_seconds": 1.5455421000078786,
+          "min_seconds": 1.541790800052695,
+          "max_seconds": 1.5991596999811009
+        },
+        {
+          "library": "pgo",
+          "lanes": 16,
+          "median_seconds": 1.1059383999672718,
+          "min_seconds": 1.0622410000069067,
+          "max_seconds": 1.2489613000070676
+        }
+      ],
+      "trials": [
+        {
+          "library": "pgo",
+          "lanes": 1,
+          "trial": 1,
+          "seconds": 11.916935999994166,
+          "work": 14809818733,
+          "work_per_second": 1242753903.6046891
+        },
+        {
+          "library": "baseline",
+          "lanes": 1,
+          "trial": 1,
+          "seconds": 17.154158900026232,
+          "work": 14809818733,
+          "work_per_second": 863336921.3443251
+        },
+        {
+          "library": "baseline",
+          "lanes": 1,
+          "trial": 2,
+          "seconds": 17.322145799989812,
+          "work": 14809818733,
+          "work_per_second": 854964442.8583848
+        },
+        {
+          "library": "pgo",
+          "lanes": 1,
+          "trial": 2,
+          "seconds": 12.033590099978028,
+          "work": 14809818733,
+          "work_per_second": 1230706597.944286
+        },
+        {
+          "library": "pgo",
+          "lanes": 1,
+          "trial": 3,
+          "seconds": 11.948147699964466,
+          "work": 14809818733,
+          "work_per_second": 1239507503.999473
+        },
+        {
+          "library": "baseline",
+          "lanes": 1,
+          "trial": 3,
+          "seconds": 17.25707130000228,
+          "work": 14809818733,
+          "work_per_second": 858188418.8540174
+        },
+        {
+          "library": "pgo",
+          "lanes": 8,
+          "trial": 1,
+          "seconds": 1.6777842000010423,
+          "work": 14809818733,
+          "work_per_second": 8827010489.782177
+        },
+        {
+          "library": "baseline",
+          "lanes": 8,
+          "trial": 1,
+          "seconds": 2.3778592000016943,
+          "work": 14809818733,
+          "work_per_second": 6228215166.393976
+        },
+        {
+          "library": "baseline",
+          "lanes": 8,
+          "trial": 2,
+          "seconds": 2.394101400015643,
+          "work": 14809818733,
+          "work_per_second": 6185961351.888952
+        },
+        {
+          "library": "pgo",
+          "lanes": 8,
+          "trial": 2,
+          "seconds": 1.6512747000379022,
+          "work": 14809818733,
+          "work_per_second": 8968718973.687458
+        },
+        {
+          "library": "pgo",
+          "lanes": 8,
+          "trial": 3,
+          "seconds": 1.6711991000920534,
+          "work": 14809818733,
+          "work_per_second": 8861791950.572641
+        },
+        {
+          "library": "baseline",
+          "lanes": 8,
+          "trial": 3,
+          "seconds": 2.399553699971875,
+          "work": 14809818733,
+          "work_per_second": 6171905522.753495
+        },
+        {
+          "library": "pgo",
+          "lanes": 16,
+          "trial": 1,
+          "seconds": 1.1059383999672718,
+          "work": 14809818733,
+          "work_per_second": 13391178689.010408
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "trial": 1,
+          "seconds": 1.5455421000078786,
+          "work": 14809818733,
+          "work_per_second": 9582281021.60692
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "trial": 2,
+          "seconds": 1.541790800052695,
+          "work": 14809818733,
+          "work_per_second": 9605595475.400316
+        },
+        {
+          "library": "pgo",
+          "lanes": 16,
+          "trial": 2,
+          "seconds": 1.0622410000069067,
+          "work": 14809818733,
+          "work_per_second": 13942051505.170397
+        },
+        {
+          "library": "pgo",
+          "lanes": 16,
+          "trial": 3,
+          "seconds": 1.2489613000070676,
+          "work": 14809818733,
+          "work_per_second": 11857708267.594995
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "trial": 3,
+          "seconds": 1.5991596999811009,
+          "work": 14809818733,
+          "work_per_second": 9261000469.918686
+        }
+      ],
+      "per_row_medians": [
+        {
+          "lanes": 1,
+          "label": "0:braton_prime/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 1.1724104000022635,
+            "baseline": 1.7020268000196666
+          }
+        },
+        {
+          "lanes": 1,
+          "label": "1:braton_prime/demolisher/cycle",
+          "seconds": {
+            "pgo": 0.3640475999854971,
+            "baseline": 0.522583299985854
+          }
+        },
+        {
+          "lanes": 1,
+          "label": "2:torid/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 2.081756800005678,
+            "baseline": 2.6666870999906678
+          }
+        },
+        {
+          "lanes": 1,
+          "label": "3:torid/demolisher/cycle",
+          "seconds": {
+            "pgo": 0.25594050000654534,
+            "baseline": 0.3440331000019796
+          }
+        },
+        {
+          "lanes": 1,
+          "label": "4:dual_toxocyst/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 4.001126999995904,
+            "baseline": 6.078440200013574
+          }
+        },
+        {
+          "lanes": 1,
+          "label": "5:dual_toxocyst/demolisher/cycle",
+          "seconds": {
+            "pgo": 1.2849494999973103,
+            "baseline": 1.9247449000249617
+          }
+        },
+        {
+          "lanes": 1,
+          "label": "6:acceltra/demolisher/base",
+          "seconds": {
+            "pgo": 0.23927930000354536,
+            "baseline": 0.3370975999860093
+          }
+        },
+        {
+          "lanes": 1,
+          "label": "7:braton_prime/demolisher/base",
+          "seconds": {
+            "pgo": 0.38501989998621866,
+            "baseline": 0.4966992000117898
+          }
+        },
+        {
+          "lanes": 1,
+          "label": "8:burston_prime/standard_single_target/base",
+          "seconds": {
+            "pgo": 0.6059273999999277,
+            "baseline": 0.9491836999950465
+          }
+        },
+        {
+          "lanes": 1,
+          "label": "9:fulmin_prime/heavy_gunner/semi_auto",
+          "seconds": {
+            "pgo": 0.06872939999448135,
+            "baseline": 0.09646800000336953
+          }
+        },
+        {
+          "lanes": 1,
+          "label": "10:kuva_hind/standard_multi_target/semi_auto",
+          "seconds": {
+            "pgo": 0.1510785999998916,
+            "baseline": 0.2013370000058785
+          }
+        },
+        {
+          "lanes": 1,
+          "label": "11:larkspur_prime/standard_single_target/base",
+          "seconds": {
+            "pgo": 0.20265269998344593,
+            "baseline": 0.2872612999926787
+          }
+        },
+        {
+          "lanes": 1,
+          "label": "12:phenmor/standard_single_target/cycle",
+          "seconds": {
+            "pgo": 0.7657477000029758,
+            "baseline": 1.1529044000199065
+          }
+        },
+        {
+          "lanes": 1,
+          "label": "13:torid/demolisher/cycle",
+          "seconds": {
+            "pgo": 0.26474419998703524,
+            "baseline": 0.3601753999828361
+          }
+        },
+        {
+          "lanes": 1,
+          "label": "14:zenith/demolisher/base",
+          "seconds": {
+            "pgo": 0.09841869998490438,
+            "baseline": 0.14117560000158846
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "0:braton_prime/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 0.16458219999913126,
+            "baseline": 0.2378663000126835
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "1:braton_prime/demolisher/cycle",
+          "seconds": {
+            "pgo": 0.05113440001150593,
+            "baseline": 0.07310370000777766
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "2:torid/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 0.2943818000203464,
+            "baseline": 0.3660781000216957
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "3:torid/demolisher/cycle",
+          "seconds": {
+            "pgo": 0.036322400002973154,
+            "baseline": 0.05115869999281131
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "4:dual_toxocyst/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 0.5428588999784552,
+            "baseline": 0.8293197999882977
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "5:dual_toxocyst/demolisher/cycle",
+          "seconds": {
+            "pgo": 0.17913609999231994,
+            "baseline": 0.2655691999825649
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "6:acceltra/demolisher/base",
+          "seconds": {
+            "pgo": 0.03305759999784641,
+            "baseline": 0.04765759999281727
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "7:braton_prime/demolisher/base",
+          "seconds": {
+            "pgo": 0.054172700009075925,
+            "baseline": 0.07281690000672825
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "8:burston_prime/standard_single_target/base",
+          "seconds": {
+            "pgo": 0.0838905000127852,
+            "baseline": 0.13355249998858199
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "9:fulmin_prime/heavy_gunner/semi_auto",
+          "seconds": {
+            "pgo": 0.010908600001130253,
+            "baseline": 0.014390299998922274
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "10:kuva_hind/standard_multi_target/semi_auto",
+          "seconds": {
+            "pgo": 0.022694400016916916,
+            "baseline": 0.028554500022437423
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "11:larkspur_prime/standard_single_target/base",
+          "seconds": {
+            "pgo": 0.02772670000558719,
+            "baseline": 0.04031019998365082
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "12:phenmor/standard_single_target/cycle",
+          "seconds": {
+            "pgo": 0.10785950001445599,
+            "baseline": 0.1624409000214655
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "13:torid/demolisher/cycle",
+          "seconds": {
+            "pgo": 0.038162499986356124,
+            "baseline": 0.051838899991707876
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "14:zenith/demolisher/base",
+          "seconds": {
+            "pgo": 0.015088000014657155,
+            "baseline": 0.021102699975017458
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "0:braton_prime/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 0.10481560000334866,
+            "baseline": 0.15180910000344738
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "1:braton_prime/demolisher/cycle",
+          "seconds": {
+            "pgo": 0.036791999998968095,
+            "baseline": 0.04703159999917261
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "2:torid/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 0.1843393000017386,
+            "baseline": 0.23135759998694994
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "3:torid/demolisher/cycle",
+          "seconds": {
+            "pgo": 0.034994699992239475,
+            "baseline": 0.04140630000620149
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "4:dual_toxocyst/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 0.3439987000019755,
+            "baseline": 0.517130599997472
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "5:dual_toxocyst/demolisher/cycle",
+          "seconds": {
+            "pgo": 0.11030689999461174,
+            "baseline": 0.16574759999639355
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "6:acceltra/demolisher/base",
+          "seconds": {
+            "pgo": 0.030761400004848838,
+            "baseline": 0.03393510001478717
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "7:braton_prime/demolisher/base",
+          "seconds": {
+            "pgo": 0.03712009999435395,
+            "baseline": 0.04834320000372827
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "8:burston_prime/standard_single_target/base",
+          "seconds": {
+            "pgo": 0.06085969999548979,
+            "baseline": 0.08528820000356063
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "9:fulmin_prime/heavy_gunner/semi_auto",
+          "seconds": {
+            "pgo": 0.010822500014910474,
+            "baseline": 0.01050169998779893
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "10:kuva_hind/standard_multi_target/semi_auto",
+          "seconds": {
+            "pgo": 0.019765400007599965,
+            "baseline": 0.019114599999738857
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "11:larkspur_prime/standard_single_target/base",
+          "seconds": {
+            "pgo": 0.022710499993991107,
+            "baseline": 0.03385869998601265
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "12:phenmor/standard_single_target/cycle",
+          "seconds": {
+            "pgo": 0.07046039999113418,
+            "baseline": 0.10244020001846366
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "13:torid/demolisher/cycle",
+          "seconds": {
+            "pgo": 0.02939630000037141,
+            "baseline": 0.037313400011043996
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "14:zenith/demolisher/base",
+          "seconds": {
+            "pgo": 0.011049499997170642,
+            "baseline": 0.017434500012313947
+          }
+        }
+      ]
+    },
+    "pgo-holdout": {
+      "corpus": [
+        {
+          "label": "0:boar_prime/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "1:ocucor/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "2:kuva_nukor/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "3:amprex/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "4:tenet_arca_plasmor/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "5:phantasma_prime/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "6:strun_prime/standard_multi_target/cycle",
+          "runs": 128
+        },
+        {
+          "label": "7:kuva_bramma/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "8:xoris/standard_multi_target/charged_throw_detonate",
+          "runs": 128
+        },
+        {
+          "label": "9:laetum/standard_multi_target/cycle",
+          "runs": 128
+        },
+        {
+          "label": "10:lex_prime/standard_multi_target/cycle",
+          "runs": 128
+        }
+      ],
+      "orders_sha256": "ffaae361ddfbfe2a7e068618925a629518c75b5a49a551dcbf87f6f3df5b2d7a",
+      "libraries": {
+        "baseline": {
+          "path": "C:\\Users\\SuperExboom\\Documents\\simfleet\\.bench-hardware\\board-acceleration\\artifacts\\original\\baseline-v3.dll",
+          "sha256": "a3e233b109003f0f2bb0feacc8e3efd5a8d4fba5201a52ec6ce06f885c022c09"
+        },
+        "pgo": {
+          "path": "C:\\Users\\SuperExboom\\Documents\\simfleet\\.bench-hardware\\board-acceleration\\work\\pgo-v3.dll",
+          "sha256": "410d8494a3aea0ea0c11addf2211cdab889c9d29bc2c267c8d68d2c98e726f9f"
+        }
+      },
+      "batch": 8,
+      "summary": [
+        {
+          "library": "baseline",
+          "lanes": 8,
+          "median_seconds": 5.048306899960153,
+          "min_seconds": 5.044822500000009,
+          "max_seconds": 5.052772900031414
+        },
+        {
+          "library": "pgo",
+          "lanes": 8,
+          "median_seconds": 4.169822399970144,
+          "min_seconds": 4.152206299942918,
+          "max_seconds": 4.185203100001672
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "median_seconds": 3.1133461999997962,
+          "min_seconds": 3.0836369000026025,
+          "max_seconds": 3.1184810000122525
+        },
+        {
+          "library": "pgo",
+          "lanes": 16,
+          "median_seconds": 2.6207379000261426,
+          "min_seconds": 2.6064471999998204,
+          "max_seconds": 2.634074799978407
+        }
+      ],
+      "trials": [
+        {
+          "library": "pgo",
+          "lanes": 8,
+          "trial": 1,
+          "seconds": 4.152206299942918,
+          "work": 35361774420,
+          "work_per_second": 8516381861.972063
+        },
+        {
+          "library": "baseline",
+          "lanes": 8,
+          "trial": 1,
+          "seconds": 5.044822500000009,
+          "work": 35361774420,
+          "work_per_second": 7009518059.356882
+        },
+        {
+          "library": "baseline",
+          "lanes": 8,
+          "trial": 2,
+          "seconds": 5.052772900031414,
+          "work": 35361774420,
+          "work_per_second": 6998488774.308489
+        },
+        {
+          "library": "pgo",
+          "lanes": 8,
+          "trial": 2,
+          "seconds": 4.169822399970144,
+          "work": 35361774420,
+          "work_per_second": 8480403007.152821
+        },
+        {
+          "library": "pgo",
+          "lanes": 8,
+          "trial": 3,
+          "seconds": 4.185203100001672,
+          "work": 35361774420,
+          "work_per_second": 8449237366.756675
+        },
+        {
+          "library": "baseline",
+          "lanes": 8,
+          "trial": 3,
+          "seconds": 5.048306899960153,
+          "work": 35361774420,
+          "work_per_second": 7004680008.713242
+        },
+        {
+          "library": "pgo",
+          "lanes": 16,
+          "trial": 1,
+          "seconds": 2.6207379000261426,
+          "work": 35361774420,
+          "work_per_second": 13493060263.541523
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "trial": 1,
+          "seconds": 3.0836369000026025,
+          "work": 35361774420,
+          "work_per_second": 11467554568.428648
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "trial": 2,
+          "seconds": 3.1184810000122525,
+          "work": 35361774420,
+          "work_per_second": 11339422757.381258
+        },
+        {
+          "library": "pgo",
+          "lanes": 16,
+          "trial": 2,
+          "seconds": 2.6064471999998204,
+          "work": 35361774420,
+          "work_per_second": 13567040383.554455
+        },
+        {
+          "library": "pgo",
+          "lanes": 16,
+          "trial": 3,
+          "seconds": 2.634074799978407,
+          "work": 35361774420,
+          "work_per_second": 13424741932.267784
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "trial": 3,
+          "seconds": 3.1133461999997962,
+          "work": 35361774420,
+          "work_per_second": 11358124714.817232
+        }
+      ],
+      "per_row_medians": [
+        {
+          "lanes": 8,
+          "label": "0:boar_prime/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.5870357000094373,
+            "baseline": 0.9272911000007298
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "1:ocucor/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.44803860000683926,
+            "baseline": 0.5400227999780327
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "2:kuva_nukor/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.781378899991978,
+            "baseline": 0.874803399987286
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "3:amprex/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.12458070000866428,
+            "baseline": 0.16276469998410903
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "4:tenet_arca_plasmor/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.034609499998623505,
+            "baseline": 0.047103900025831535
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "5:phantasma_prime/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.778712600003928,
+            "baseline": 0.8271256999869365
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "6:strun_prime/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 0.4604348999855574,
+            "baseline": 0.49028339999495074
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "7:kuva_bramma/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.07357910001883283,
+            "baseline": 0.0933528000023216
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "8:xoris/standard_multi_target/charged_throw_detonate",
+          "seconds": {
+            "pgo": 0.14350359997479245,
+            "baseline": 0.15887370001291856
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "9:laetum/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 0.7186015000042971,
+            "baseline": 0.8945858999795746
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "10:lex_prime/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 0.026981800008798018,
+            "baseline": 0.03740169998491183
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "0:boar_prime/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.34931339998729527,
+            "baseline": 0.5437560999998823
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "1:ocucor/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.263247599999886,
+            "baseline": 0.31357550001121126
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "2:kuva_nukor/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.5037250000168569,
+            "baseline": 0.557256400003098
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "3:amprex/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.083195400016848,
+            "baseline": 0.10387799999443814
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "4:tenet_arca_plasmor/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.027373300021281466,
+            "baseline": 0.03036819997942075
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "5:phantasma_prime/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.502673799986951,
+            "baseline": 0.5349622000067029
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "6:strun_prime/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 0.3067402000015136,
+            "baseline": 0.3184474000008777
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "7:kuva_bramma/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.0448583000106737,
+            "baseline": 0.05721389999962412
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "8:xoris/standard_multi_target/charged_throw_detonate",
+          "seconds": {
+            "pgo": 0.0901634999900125,
+            "baseline": 0.0936068000155501
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "9:laetum/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 0.43400369997834787,
+            "baseline": 0.5132709000026807
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "10:lex_prime/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 0.01773019999382086,
+            "baseline": 0.026865300023928285
+          }
+        }
+      ]
+    },
+    "thin-holdout": {
+      "corpus": [
+        {
+          "label": "0:boar_prime/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "1:ocucor/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "2:kuva_nukor/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "3:amprex/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "4:tenet_arca_plasmor/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "5:phantasma_prime/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "6:strun_prime/standard_multi_target/cycle",
+          "runs": 128
+        },
+        {
+          "label": "7:kuva_bramma/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "8:xoris/standard_multi_target/charged_throw_detonate",
+          "runs": 128
+        },
+        {
+          "label": "9:laetum/standard_multi_target/cycle",
+          "runs": 128
+        },
+        {
+          "label": "10:lex_prime/standard_multi_target/cycle",
+          "runs": 128
+        }
+      ],
+      "orders_sha256": "ffaae361ddfbfe2a7e068618925a629518c75b5a49a551dcbf87f6f3df5b2d7a",
+      "libraries": {
+        "baseline": {
+          "path": "C:\\Users\\SuperExboom\\Documents\\simfleet\\.bench-hardware\\board-acceleration\\artifacts\\original\\baseline-v3.dll",
+          "sha256": "a3e233b109003f0f2bb0feacc8e3efd5a8d4fba5201a52ec6ce06f885c022c09"
+        },
+        "thin": {
+          "path": "C:\\Users\\SuperExboom\\Documents\\simfleet\\.bench-hardware\\board-acceleration\\work\\thin-v3.dll",
+          "sha256": "d3a94a7c567333b4277c58c7d0554b599c27d2518fe54af272c15e24b81f1efa"
+        },
+        "pgo": {
+          "path": "C:\\Users\\SuperExboom\\Documents\\simfleet\\.bench-hardware\\board-acceleration\\work\\pgo-v3.dll",
+          "sha256": "410d8494a3aea0ea0c11addf2211cdab889c9d29bc2c267c8d68d2c98e726f9f"
+        }
+      },
+      "batch": 8,
+      "summary": [
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "median_seconds": 3.119828700000653,
+          "min_seconds": 3.053587200003676,
+          "max_seconds": 3.1465070999984164
+        },
+        {
+          "library": "thin",
+          "lanes": 16,
+          "median_seconds": 3.060288299951935,
+          "min_seconds": 3.057304199959617,
+          "max_seconds": 3.09398250002414
+        },
+        {
+          "library": "pgo",
+          "lanes": 16,
+          "median_seconds": 2.5889346999756526,
+          "min_seconds": 2.573713499994483,
+          "max_seconds": 2.879155600006925
+        }
+      ],
+      "trials": [
+        {
+          "library": "pgo",
+          "lanes": 16,
+          "trial": 1,
+          "seconds": 2.5889346999756526,
+          "work": 35361774420,
+          "work_per_second": 13658812800.621258
+        },
+        {
+          "library": "thin",
+          "lanes": 16,
+          "trial": 1,
+          "seconds": 3.09398250002414,
+          "work": 35361774420,
+          "work_per_second": 11429209576.888073
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "trial": 1,
+          "seconds": 3.1465070999984164,
+          "work": 35361774420,
+          "work_per_second": 11238421937.779133
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "trial": 2,
+          "seconds": 3.053587200003676,
+          "work": 35361774420,
+          "work_per_second": 11580404325.7574
+        },
+        {
+          "library": "thin",
+          "lanes": 16,
+          "trial": 2,
+          "seconds": 3.060288299951935,
+          "work": 35361774420,
+          "work_per_second": 11555046764.893162
+        },
+        {
+          "library": "pgo",
+          "lanes": 16,
+          "trial": 2,
+          "seconds": 2.573713499994483,
+          "work": 35361774420,
+          "work_per_second": 13739592390.55777
+        },
+        {
+          "library": "pgo",
+          "lanes": 16,
+          "trial": 3,
+          "seconds": 2.879155600006925,
+          "work": 35361774420,
+          "work_per_second": 12281994908.477661
+        },
+        {
+          "library": "thin",
+          "lanes": 16,
+          "trial": 3,
+          "seconds": 3.057304199959617,
+          "work": 35361774420,
+          "work_per_second": 11566325137.180357
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "trial": 3,
+          "seconds": 3.119828700000653,
+          "work": 35361774420,
+          "work_per_second": 11334524366.67199
+        }
+      ],
+      "per_row_medians": [
+        {
+          "lanes": 16,
+          "label": "0:boar_prime/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.34605819999706,
+            "thin": 0.5469613999885041,
+            "baseline": 0.5381468999839853
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "1:ocucor/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.25709090000600554,
+            "thin": 0.3111346999939997,
+            "baseline": 0.31001700001070276
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "2:kuva_nukor/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.5145727999915835,
+            "thin": 0.548957299994072,
+            "baseline": 0.552283199998783
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "3:amprex/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.07678909998503514,
+            "thin": 0.095931699994253,
+            "baseline": 0.10158089999458753
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "4:tenet_arca_plasmor/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.027752699999837205,
+            "thin": 0.034313199983444065,
+            "baseline": 0.03294979999191128
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "5:phantasma_prime/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.494227499992121,
+            "thin": 0.5139110999880359,
+            "baseline": 0.5279377000115346
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "6:strun_prime/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 0.2958855000033509,
+            "thin": 0.3083072000008542,
+            "baseline": 0.3183516999997664
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "7:kuva_bramma/standard_multi_target/base",
+          "seconds": {
+            "pgo": 0.05661339999642223,
+            "thin": 0.06480170000577345,
+            "baseline": 0.05794499997864477
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "8:xoris/standard_multi_target/charged_throw_detonate",
+          "seconds": {
+            "pgo": 0.08751260000281036,
+            "thin": 0.10005249999812804,
+            "baseline": 0.09227100000134669
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "9:laetum/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 0.41942709998693317,
+            "thin": 0.5184314000071026,
+            "baseline": 0.5305715999857057
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "10:lex_prime/standard_multi_target/cycle",
+          "seconds": {
+            "pgo": 0.026502499997150153,
+            "thin": 0.030138300004182383,
+            "baseline": 0.03341160001582466
+          }
+        }
+      ]
+    },
+    "native-holdout": {
+      "corpus": [
+        {
+          "label": "0:boar_prime/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "1:ocucor/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "2:kuva_nukor/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "3:amprex/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "4:tenet_arca_plasmor/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "5:phantasma_prime/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "6:strun_prime/standard_multi_target/cycle",
+          "runs": 128
+        },
+        {
+          "label": "7:kuva_bramma/standard_multi_target/base",
+          "runs": 128
+        },
+        {
+          "label": "8:xoris/standard_multi_target/charged_throw_detonate",
+          "runs": 128
+        },
+        {
+          "label": "9:laetum/standard_multi_target/cycle",
+          "runs": 128
+        },
+        {
+          "label": "10:lex_prime/standard_multi_target/cycle",
+          "runs": 128
+        }
+      ],
+      "orders_sha256": "ffaae361ddfbfe2a7e068618925a629518c75b5a49a551dcbf87f6f3df5b2d7a",
+      "libraries": {
+        "pgo-v3": {
+          "path": "C:\\Users\\SuperExboom\\Documents\\simfleet\\.bench-hardware\\board-acceleration\\work\\pgo-v3.dll",
+          "sha256": "410d8494a3aea0ea0c11addf2211cdab889c9d29bc2c267c8d68d2c98e726f9f"
+        },
+        "pgo-native": {
+          "path": "C:\\Users\\SuperExboom\\Documents\\simfleet\\.bench-hardware\\board-acceleration\\work\\pgo-native.dll",
+          "sha256": "389e7cb5b83f361e79888c357e45357564150457e10fbb9f977525eceb48b625"
+        }
+      },
+      "batch": 8,
+      "summary": [
+        {
+          "library": "pgo-v3",
+          "lanes": 16,
+          "median_seconds": 2.590657699969597,
+          "min_seconds": 2.5698818000382744,
+          "max_seconds": 2.617029199958779
+        },
+        {
+          "library": "pgo-native",
+          "lanes": 16,
+          "median_seconds": 2.5509316999523435,
+          "min_seconds": 2.5348557999823242,
+          "max_seconds": 2.6018921000068076
+        }
+      ],
+      "trials": [
+        {
+          "library": "pgo-native",
+          "lanes": 16,
+          "trial": 1,
+          "seconds": 2.5509316999523435,
+          "work": 35361774420,
+          "work_per_second": 13862297614.891308
+        },
+        {
+          "library": "pgo-v3",
+          "lanes": 16,
+          "trial": 1,
+          "seconds": 2.617029199958779,
+          "work": 35361774420,
+          "work_per_second": 13512181836.013517
+        },
+        {
+          "library": "pgo-v3",
+          "lanes": 16,
+          "trial": 2,
+          "seconds": 2.5698818000382744,
+          "work": 35361774420,
+          "work_per_second": 13760078155.918821
+        },
+        {
+          "library": "pgo-native",
+          "lanes": 16,
+          "trial": 2,
+          "seconds": 2.6018921000068076,
+          "work": 35361774420,
+          "work_per_second": 13590792031.655533
+        },
+        {
+          "library": "pgo-native",
+          "lanes": 16,
+          "trial": 3,
+          "seconds": 2.5348557999823242,
+          "work": 35361774420,
+          "work_per_second": 13950211455.912632
+        },
+        {
+          "library": "pgo-v3",
+          "lanes": 16,
+          "trial": 3,
+          "seconds": 2.590657699969597,
+          "work": 35361774420,
+          "work_per_second": 13649728569.086912
+        }
+      ],
+      "per_row_medians": [
+        {
+          "lanes": 16,
+          "label": "0:boar_prime/standard_multi_target/base",
+          "seconds": {
+            "pgo-native": 0.3734767999849282,
+            "pgo-v3": 0.35633290000259876
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "1:ocucor/standard_multi_target/base",
+          "seconds": {
+            "pgo-native": 0.25777559998095967,
+            "pgo-v3": 0.25638880001497455
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "2:kuva_nukor/standard_multi_target/base",
+          "seconds": {
+            "pgo-native": 0.4857425000227522,
+            "pgo-v3": 0.49513009999645874
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "3:amprex/standard_multi_target/base",
+          "seconds": {
+            "pgo-native": 0.07828109999536537,
+            "pgo-v3": 0.07582749999710359
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "4:tenet_arca_plasmor/standard_multi_target/base",
+          "seconds": {
+            "pgo-native": 0.023551099991891533,
+            "pgo-v3": 0.026301699981559068
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "5:phantasma_prime/standard_multi_target/base",
+          "seconds": {
+            "pgo-native": 0.49105639997287653,
+            "pgo-v3": 0.5030670999840368
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "6:strun_prime/standard_multi_target/cycle",
+          "seconds": {
+            "pgo-native": 0.2806126000068616,
+            "pgo-v3": 0.29039010000997223
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "7:kuva_bramma/standard_multi_target/base",
+          "seconds": {
+            "pgo-native": 0.04726780002238229,
+            "pgo-v3": 0.048591500002657995
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "8:xoris/standard_multi_target/charged_throw_detonate",
+          "seconds": {
+            "pgo-native": 0.08777169999666512,
+            "pgo-v3": 0.09379230000195093
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "9:laetum/standard_multi_target/cycle",
+          "seconds": {
+            "pgo-native": 0.40187760000117123,
+            "pgo-v3": 0.41755450001801364
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "10:lex_prime/standard_multi_target/cycle",
+          "seconds": {
+            "pgo-native": 0.018092799989972264,
+            "pgo-v3": 0.022599999996600673
+          }
+        }
+      ]
+    },
+    "full-row-ab": {
+      "corpus": [
+        {
+          "label": "0:braton_prime/demolisher/cycle",
+          "runs": 1000
+        },
+        {
+          "label": "1:torid/demolisher/cycle",
+          "runs": 1000
+        },
+        {
+          "label": "2:fulmin_prime/heavy_gunner/semi_auto",
+          "runs": 1000
+        },
+        {
+          "label": "3:kuva_hind/standard_multi_target/semi_auto",
+          "runs": 1000
+        }
+      ],
+      "orders_sha256": "5b1347876b792a7ea7f31763eab1743e8c67916353fb0d8d338ae53217bd0bc7",
+      "libraries": {
+        "baseline": {
+          "path": "C:\\Users\\SuperExboom\\Documents\\simfleet\\.bench-hardware\\board-acceleration\\artifacts\\original\\baseline-v3.dll",
+          "sha256": "a3e233b109003f0f2bb0feacc8e3efd5a8d4fba5201a52ec6ce06f885c022c09"
+        },
+        "pgo": {
+          "path": "C:\\Users\\SuperExboom\\Documents\\simfleet\\.bench-hardware\\board-acceleration\\work\\pgo-v3.dll",
+          "sha256": "410d8494a3aea0ea0c11addf2211cdab889c9d29bc2c267c8d68d2c98e726f9f"
+        }
+      },
+      "batch": 8,
+      "summary": [
+        {
+          "library": "baseline",
+          "lanes": 8,
+          "median_seconds": 1.2170220000552945,
+          "min_seconds": 1.2158744999906048,
+          "max_seconds": 1.2266590999788605
+        },
+        {
+          "library": "pgo",
+          "lanes": 8,
+          "median_seconds": 0.8488302999758162,
+          "min_seconds": 0.7834166999964509,
+          "max_seconds": 0.9148468000348657
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "median_seconds": 0.7955518999951892,
+          "min_seconds": 0.7112718000134919,
+          "max_seconds": 0.8340144999674521
+        },
+        {
+          "library": "pgo",
+          "lanes": 16,
+          "median_seconds": 0.5668236000055913,
+          "min_seconds": 0.5012679999927059,
+          "max_seconds": 0.5964936999953352
+        }
+      ],
+      "trials": [
+        {
+          "library": "pgo",
+          "lanes": 8,
+          "trial": 1,
+          "seconds": 0.7834166999964509,
+          "work": 9075786398,
+          "work_per_second": 11584877368.635511
+        },
+        {
+          "library": "baseline",
+          "lanes": 8,
+          "trial": 1,
+          "seconds": 1.2170220000552945,
+          "work": 9075786398,
+          "work_per_second": 7457372502.376825
+        },
+        {
+          "library": "baseline",
+          "lanes": 8,
+          "trial": 2,
+          "seconds": 1.2158744999906048,
+          "work": 9075786398,
+          "work_per_second": 7464410511.175396
+        },
+        {
+          "library": "pgo",
+          "lanes": 8,
+          "trial": 2,
+          "seconds": 0.8488302999758162,
+          "work": 9075786398,
+          "work_per_second": 10692109363.035906
+        },
+        {
+          "library": "pgo",
+          "lanes": 8,
+          "trial": 3,
+          "seconds": 0.9148468000348657,
+          "work": 9075786398,
+          "work_per_second": 9920553252.90979
+        },
+        {
+          "library": "baseline",
+          "lanes": 8,
+          "trial": 3,
+          "seconds": 1.2266590999788605,
+          "work": 9075786398,
+          "work_per_second": 7398784550.7822075
+        },
+        {
+          "library": "pgo",
+          "lanes": 16,
+          "trial": 1,
+          "seconds": 0.5964936999953352,
+          "work": 9075786398,
+          "work_per_second": 15215225907.785742
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "trial": 1,
+          "seconds": 0.8340144999674521,
+          "work": 9075786398,
+          "work_per_second": 10882048691.424654
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "trial": 2,
+          "seconds": 0.7955518999951892,
+          "work": 9075786398,
+          "work_per_second": 11408163814.39713
+        },
+        {
+          "library": "pgo",
+          "lanes": 16,
+          "trial": 2,
+          "seconds": 0.5668236000055913,
+          "work": 9075786398,
+          "work_per_second": 16011659355.592241
+        },
+        {
+          "library": "pgo",
+          "lanes": 16,
+          "trial": 3,
+          "seconds": 0.5012679999927059,
+          "work": 9075786398,
+          "work_per_second": 18105656850.491283
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "trial": 3,
+          "seconds": 0.7112718000134919,
+          "work": 9075786398,
+          "work_per_second": 12759941273.965654
+        }
+      ],
+      "per_row_medians": [
+        {
+          "lanes": 8,
+          "label": "0:braton_prime/demolisher/cycle",
+          "seconds": {
+            "pgo": 0.36715050000930205,
+            "baseline": 0.544918300001882
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "1:torid/demolisher/cycle",
+          "seconds": {
+            "pgo": 0.25550010000006296,
+            "baseline": 0.3755628000071738
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "2:fulmin_prime/heavy_gunner/semi_auto",
+          "seconds": {
+            "pgo": 0.07000469998456538,
+            "baseline": 0.09871370001928881
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "3:kuva_hind/standard_multi_target/semi_auto",
+          "seconds": {
+            "pgo": 0.15617499998188578,
+            "baseline": 0.20141150002018549
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "0:braton_prime/demolisher/cycle",
+          "seconds": {
+            "pgo": 0.24606370000401512,
+            "baseline": 0.3527962999942247
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "1:torid/demolisher/cycle",
+          "seconds": {
+            "pgo": 0.1659761999908369,
+            "baseline": 0.23762390000047162
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "2:fulmin_prime/heavy_gunner/semi_auto",
+          "seconds": {
+            "pgo": 0.048707099980674684,
+            "baseline": 0.062123100011376664
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "3:kuva_hind/standard_multi_target/semi_auto",
+          "seconds": {
+            "pgo": 0.09926720001385547,
+            "baseline": 0.14045720000285655
+          }
+        }
+      ]
+    },
+    "geometry-ab": {
+      "corpus": [
+        {
+          "label": "0:braton_prime/standard_multi_target/cycle",
+          "runs": 128
+        },
+        {
+          "label": "1:braton_prime/demolisher/cycle",
+          "runs": 128
+        },
+        {
+          "label": "2:torid/standard_multi_target/cycle",
+          "runs": 128
+        },
+        {
+          "label": "3:torid/demolisher/cycle",
+          "runs": 128
+        },
+        {
+          "label": "4:dual_toxocyst/standard_multi_target/cycle",
+          "runs": 128
+        },
+        {
+          "label": "5:dual_toxocyst/demolisher/cycle",
+          "runs": 128
+        },
+        {
+          "label": "6:acceltra/demolisher/base",
+          "runs": 128
+        },
+        {
+          "label": "7:braton_prime/demolisher/base",
+          "runs": 128
+        },
+        {
+          "label": "8:burston_prime/standard_single_target/base",
+          "runs": 128
+        },
+        {
+          "label": "9:fulmin_prime/heavy_gunner/semi_auto",
+          "runs": 128
+        },
+        {
+          "label": "10:kuva_hind/standard_multi_target/semi_auto",
+          "runs": 128
+        },
+        {
+          "label": "11:larkspur_prime/standard_single_target/base",
+          "runs": 128
+        },
+        {
+          "label": "12:phenmor/standard_single_target/cycle",
+          "runs": 128
+        },
+        {
+          "label": "13:torid/demolisher/cycle",
+          "runs": 128
+        },
+        {
+          "label": "14:zenith/demolisher/base",
+          "runs": 128
+        }
+      ],
+      "orders_sha256": "3c68d978c7a5eed90f82c32185c34538884719cc57f025235100d594e12d164f",
+      "libraries": {
+        "baseline": {
+          "path": "C:\\Users\\SuperExboom\\Documents\\simfleet\\.bench-hardware\\board-acceleration\\artifacts\\original\\baseline-v3.dll",
+          "sha256": "a3e233b109003f0f2bb0feacc8e3efd5a8d4fba5201a52ec6ce06f885c022c09"
+        },
+        "geometry": {
+          "path": "C:\\Users\\SuperExboom\\Documents\\simfleet\\.bench-hardware\\board-acceleration\\work\\geometry-v3.dll",
+          "sha256": "123252a3d8f03f75864da1fe92fb572f54dbb30a25af6cb2c80b5fcfd21a3bdc"
+        }
+      },
+      "batch": 8,
+      "summary": [
+        {
+          "library": "baseline",
+          "lanes": 8,
+          "median_seconds": 2.404509599931771,
+          "min_seconds": 2.4004849999328144,
+          "max_seconds": 2.406034899962833
+        },
+        {
+          "library": "geometry",
+          "lanes": 8,
+          "median_seconds": 2.4228250999585725,
+          "min_seconds": 2.410016399982851,
+          "max_seconds": 2.4232272999652196
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "median_seconds": 1.4742966999765486,
+          "min_seconds": 1.459059799934039,
+          "max_seconds": 1.5724482999939937
+        },
+        {
+          "library": "geometry",
+          "lanes": 16,
+          "median_seconds": 1.4928428999555763,
+          "min_seconds": 1.46797990007326,
+          "max_seconds": 1.4939429000078235
+        }
+      ],
+      "trials": [
+        {
+          "library": "geometry",
+          "lanes": 8,
+          "trial": 1,
+          "seconds": 2.410016399982851,
+          "work": 14809818733,
+          "work_per_second": 6145111183.934425
+        },
+        {
+          "library": "baseline",
+          "lanes": 8,
+          "trial": 1,
+          "seconds": 2.404509599931771,
+          "work": 14809818733,
+          "work_per_second": 6159184697.545077
+        },
+        {
+          "library": "baseline",
+          "lanes": 8,
+          "trial": 2,
+          "seconds": 2.4004849999328144,
+          "work": 14809818733,
+          "work_per_second": 6169511050.231308
+        },
+        {
+          "library": "geometry",
+          "lanes": 8,
+          "trial": 2,
+          "seconds": 2.4228250999585725,
+          "work": 14809818733,
+          "work_per_second": 6112623950.137065
+        },
+        {
+          "library": "geometry",
+          "lanes": 8,
+          "trial": 3,
+          "seconds": 2.4232272999652196,
+          "work": 14809818733,
+          "work_per_second": 6111609395.128787
+        },
+        {
+          "library": "baseline",
+          "lanes": 8,
+          "trial": 3,
+          "seconds": 2.406034899962833,
+          "work": 14809818733,
+          "work_per_second": 6155280097.237481
+        },
+        {
+          "library": "geometry",
+          "lanes": 16,
+          "trial": 1,
+          "seconds": 1.46797990007326,
+          "work": 14809818733,
+          "work_per_second": 10088570512.621399
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "trial": 1,
+          "seconds": 1.459059799934039,
+          "work": 14809818733,
+          "work_per_second": 10150247943.00379
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "trial": 2,
+          "seconds": 1.5724482999939937,
+          "work": 14809818733,
+          "work_per_second": 9418318384.812124
+        },
+        {
+          "library": "geometry",
+          "lanes": 16,
+          "trial": 2,
+          "seconds": 1.4928428999555763,
+          "work": 14809818733,
+          "work_per_second": 9920547388.771255
+        },
+        {
+          "library": "geometry",
+          "lanes": 16,
+          "trial": 3,
+          "seconds": 1.4939429000078235,
+          "work": 14809818733,
+          "work_per_second": 9913242824.021215
+        },
+        {
+          "library": "baseline",
+          "lanes": 16,
+          "trial": 3,
+          "seconds": 1.4742966999765486,
+          "work": 14809818733,
+          "work_per_second": 10045344830.003063
+        }
+      ],
+      "per_row_medians": [
+        {
+          "lanes": 8,
+          "label": "0:braton_prime/standard_multi_target/cycle",
+          "seconds": {
+            "geometry": 0.2400707000051625,
+            "baseline": 0.2391291999956593
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "1:braton_prime/demolisher/cycle",
+          "seconds": {
+            "geometry": 0.07497180000063963,
+            "baseline": 0.07358949998160824
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "2:torid/standard_multi_target/cycle",
+          "seconds": {
+            "geometry": 0.3680715000082273,
+            "baseline": 0.3691065000020899
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "3:torid/demolisher/cycle",
+          "seconds": {
+            "geometry": 0.05262510001193732,
+            "baseline": 0.05085460000555031
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "4:dual_toxocyst/standard_multi_target/cycle",
+          "seconds": {
+            "geometry": 0.8389322999864817,
+            "baseline": 0.8348083999881055
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "5:dual_toxocyst/demolisher/cycle",
+          "seconds": {
+            "geometry": 0.26375079998979345,
+            "baseline": 0.2627644999884069
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "6:acceltra/demolisher/base",
+          "seconds": {
+            "geometry": 0.04842750000534579,
+            "baseline": 0.04824810000718571
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "7:braton_prime/demolisher/base",
+          "seconds": {
+            "geometry": 0.07349619999877177,
+            "baseline": 0.07275279998430051
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "8:burston_prime/standard_single_target/base",
+          "seconds": {
+            "geometry": 0.13326380000216886,
+            "baseline": 0.13109589999658056
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "9:fulmin_prime/heavy_gunner/semi_auto",
+          "seconds": {
+            "geometry": 0.014698399987537414,
+            "baseline": 0.014640600013080984
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "10:kuva_hind/standard_multi_target/semi_auto",
+          "seconds": {
+            "geometry": 0.028768799995305017,
+            "baseline": 0.028723199997330084
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "11:larkspur_prime/standard_single_target/base",
+          "seconds": {
+            "geometry": 0.040722699981415644,
+            "baseline": 0.03994539999985136
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "12:phenmor/standard_single_target/cycle",
+          "seconds": {
+            "geometry": 0.16330469999229535,
+            "baseline": 0.15915929997572675
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "13:torid/demolisher/cycle",
+          "seconds": {
+            "geometry": 0.05380609998246655,
+            "baseline": 0.052079199987929314
+          }
+        },
+        {
+          "lanes": 8,
+          "label": "14:zenith/demolisher/base",
+          "seconds": {
+            "geometry": 0.02162690000841394,
+            "baseline": 0.021140700002433732
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "0:braton_prime/standard_multi_target/cycle",
+          "seconds": {
+            "geometry": 0.16139160000602715,
+            "baseline": 0.14552299998467788
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "1:braton_prime/demolisher/cycle",
+          "seconds": {
+            "geometry": 0.048655299993697554,
+            "baseline": 0.04685719998087734
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "2:torid/standard_multi_target/cycle",
+          "seconds": {
+            "geometry": 0.21615079999901354,
+            "baseline": 0.21642310000606813
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "3:torid/demolisher/cycle",
+          "seconds": {
+            "geometry": 0.04094390000682324,
+            "baseline": 0.03997969999909401
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "4:dual_toxocyst/standard_multi_target/cycle",
+          "seconds": {
+            "geometry": 0.49225479998858646,
+            "baseline": 0.49941479999688454
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "5:dual_toxocyst/demolisher/cycle",
+          "seconds": {
+            "geometry": 0.1528820999956224,
+            "baseline": 0.15991819999180734
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "6:acceltra/demolisher/base",
+          "seconds": {
+            "geometry": 0.032911699992837384,
+            "baseline": 0.030300999991595745
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "7:braton_prime/demolisher/base",
+          "seconds": {
+            "geometry": 0.0501955000218004,
+            "baseline": 0.04797929999767803
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "8:burston_prime/standard_single_target/base",
+          "seconds": {
+            "geometry": 0.08876559999771416,
+            "baseline": 0.07774330000393093
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "9:fulmin_prime/heavy_gunner/semi_auto",
+          "seconds": {
+            "geometry": 0.011078799987444654,
+            "baseline": 0.012186800013296306
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "10:kuva_hind/standard_multi_target/semi_auto",
+          "seconds": {
+            "geometry": 0.018421499989926815,
+            "baseline": 0.0194162999978289
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "11:larkspur_prime/standard_single_target/base",
+          "seconds": {
+            "geometry": 0.02720090001821518,
+            "baseline": 0.025613400008296594
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "12:phenmor/standard_single_target/cycle",
+          "seconds": {
+            "geometry": 0.09583089998341165,
+            "baseline": 0.09677950001787394
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "13:torid/demolisher/cycle",
+          "seconds": {
+            "geometry": 0.03426319998106919,
+            "baseline": 0.03727739999885671
+          }
+        },
+        {
+          "lanes": 16,
+          "label": "14:zenith/demolisher/base",
+          "seconds": {
+            "geometry": 0.013552799995522946,
+            "baseline": 0.015322999999625608
+          }
+        }
+      ]
+    }
+  },
+  "validation": {
+    "wasm_rows": 41,
+    "skipped": 0,
+    "riven": "exact",
+    "gpu_rng_values": 262144,
+    "quick_fleet_steps": 103,
+    "quick_fleet_fights": 20880,
+    "quick_fleet_work": 9075847355,
+    "quick_fleet_transcript": "same",
+    "build_script_e2e": "passed with spaced Windows build path; engine 872e90ffaf0d fixture",
+    "corrupt_expected_answer": "rejected",
+    "memory": {
+      "contexts": 2000,
+      "warm_private_mib_min": 40.59,
+      "warm_private_mib_max": 41.29,
+      "final_private_mib": 40.95,
+      "scope": "short allocation/lifetime regression, not a 1-2 day soak"
+    }
+  },
+  "limits": [
+    "CPU timings are offline board ABI measurements on one desktop, not live accepted server throughput.",
+    "GPU measurements are primitives on synthetic inputs, not complete board simulation.",
+    "PGO holdout weapons were not used in training.",
+    "All elapsed medians exclude warmup and include row preparation, ordered reduction and final scoring."
+  ],
+  "cuda": {
+    "scope": "primitives only; synthetic inputs; no board acceleration claim",
+    "reference_sha256": "a7a044dc8d5cbbb68e2c6234cd3f92ca1964d2356f21098141c584e198cff27e",
+    "seed": 46174,
+    "lanes": 16,
+    "samples": [
+      {
+        "primitive": "first_hit",
+        "count": 32,
+        "bodies": 361,
+        "exact_bits_and_gas": true,
+        "seconds": {
+          "cpu_one": 1.580000389367342e-05,
+          "cpu_all": 0.0004211000050418079,
+          "gpu_resident": 0.0001204000145662576,
+          "gpu_transfer": 0.00012199999764561653
+        },
+        "samples": {
+          "cpu_one": [
+            1.7300015315413475e-05,
+            1.4499993994832039e-05,
+            1.580000389367342e-05,
+            1.4299992471933365e-05,
+            1.479999627918005e-05,
+            1.6600009985268116e-05,
+            1.6700010746717453e-05
+          ],
+          "cpu_all": [
+            0.0004893000004813075,
+            0.0004267000185791403,
+            0.0004211000050418079,
+            0.0004378999874461442,
+            0.000371000001905486,
+            0.00034080000477842987,
+            0.0003547999949660152
+          ],
+          "gpu_resident": [
+            0.00010859998292289674,
+            0.0001357999863103032,
+            0.0003037000133190304,
+            0.00012849998893216252,
+            0.00010880001354962587,
+            0.0001204000145662576,
+            0.00010710000060498714
+          ],
+          "gpu_transfer": [
+            0.00011829999857582152,
+            0.0002274000144097954,
+            0.0009686999837867916,
+            0.00012740000966005027,
+            0.00011660001473501325,
+            0.00012199999764561653,
+            0.00011439999798312783
+          ]
+        }
+      },
+      {
+        "primitive": "first_hit",
+        "count": 256,
+        "bodies": 361,
+        "exact_bits_and_gas": true,
+        "seconds": {
+          "cpu_one": 0.00011110000195913017,
+          "cpu_all": 0.0003279999946244061,
+          "gpu_resident": 0.0001345000055152923,
+          "gpu_transfer": 0.00014020001981407404
+        },
+        "samples": {
+          "cpu_one": [
+            0.0001157999795395881,
+            0.00011279998579993844,
+            0.00011860000086016953,
+            0.00010939998901449144,
+            0.00011110000195913017,
+            0.00010710000060498714,
+            0.00010740000288933516
+          ],
+          "cpu_all": [
+            0.0005081999988760799,
+            0.00040749998879618943,
+            0.0003279999946244061,
+            0.0003155999875161797,
+            0.00031450000824406743,
+            0.00030780001543462276,
+            0.0003443000023253262
+          ],
+          "gpu_resident": [
+            0.00012700000661425292,
+            0.00022990000434219837,
+            0.00012879999121651053,
+            0.00014640000881627202,
+            0.00012469998910091817,
+            0.0001345000055152923,
+            0.000526399991940707
+          ],
+          "gpu_transfer": [
+            0.00014020001981407404,
+            0.00014570000348612666,
+            0.00013689999468624592,
+            0.0001469000126235187,
+            0.00013780000153928995,
+            0.0001419000036548823,
+            0.00013770000077784061
+          ]
+        }
+      },
+      {
+        "primitive": "first_hit",
+        "count": 4096,
+        "bodies": 361,
+        "exact_bits_and_gas": true,
+        "seconds": {
+          "cpu_one": 0.0018811000045388937,
+          "cpu_all": 0.00044979999074712396,
+          "gpu_resident": 0.00015249999705702066,
+          "gpu_transfer": 0.00018000000272877514
+        },
+        "samples": {
+          "cpu_one": [
+            0.0018694000027608126,
+            0.0018727999995462596,
+            0.0018949000223074108,
+            0.0018972000107169151,
+            0.0018811000045388937,
+            0.0019047000096179545,
+            0.0018768000009004027
+          ],
+          "cpu_all": [
+            0.0004975000047124922,
+            0.0004524000105448067,
+            0.00044979999074712396,
+            0.0004731999943032861,
+            0.00039969998761080205,
+            0.00044850000995211303,
+            0.00040109999827109277
+          ],
+          "gpu_resident": [
+            0.0001297999988310039,
+            0.00023620002320967615,
+            0.00013159998343326151,
+            0.00022590000298805535,
+            0.00013020000187680125,
+            0.00022319998242892325,
+            0.00015249999705702066
+          ],
+          "gpu_transfer": [
+            0.00016930000856518745,
+            0.00018840000848285854,
+            0.00016820000018924475,
+            0.00018470000941306353,
+            0.00016960001084953547,
+            0.00018000000272877514,
+            0.00019309998606331646
+          ]
+        }
+      },
+      {
+        "primitive": "first_hit",
+        "count": 65536,
+        "bodies": 361,
+        "exact_bits_and_gas": true,
+        "seconds": {
+          "cpu_one": 0.026116900000488386,
+          "cpu_all": 0.0041551000031176955,
+          "gpu_resident": 0.000836199993500486,
+          "gpu_transfer": 0.0010823000047821552
+        },
+        "samples": {
+          "cpu_one": [
+            0.026116900000488386,
+            0.022733999998308718,
+            0.03012110001873225,
+            0.025833599996985868,
+            0.028635700000450015,
+            0.023006100003840402,
+            0.027431499998783693
+          ],
+          "cpu_all": [
+            0.004061499988893047,
+            0.004164599988143891,
+            0.004269900004146621,
+            0.004150099994149059,
+            0.004056500009028241,
+            0.004174799978500232,
+            0.0041551000031176955
+          ],
+          "gpu_resident": [
+            0.000836199993500486,
+            0.0008568000048398972,
+            0.0007548999856226146,
+            0.000881300016772002,
+            0.0007526000263169408,
+            0.0009514999983366579,
+            0.0007562999962829053
+          ],
+          "gpu_transfer": [
+            0.0013139999937266111,
+            0.0010443999781273305,
+            0.0012146999943070114,
+            0.0010217999806627631,
+            0.0010178000084124506,
+            0.0013543000095523894,
+            0.0010823000047821552
+          ]
+        }
+      }
+    ],
+    "device": "NVIDIA GeForce RTX 5080",
+    "architecture": "compute_120",
+    "compiler_options": [
+      "--gpu-architecture=compute_120",
+      "--std=c++17",
+      "--fmad=false",
+      "--ftz=false",
+      "--prec-div=true",
+      "--prec-sqrt=true"
+    ],
+    "gas": {
+      "base": 34,
+      "per_body": 77,
+      "compare": 4
+    },
+    "rng_exact_values": 262144
+  }
+}

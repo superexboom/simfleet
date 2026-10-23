@@ -1,0 +1,985 @@
+{
+  "engine": "62a82930d1d3",
+  "module_sha256": "15214369b2d382ad1a7fa1cf4a9501dc3ec4d1b5742980dc704593fdfe5f6594",
+  "cpu": "Ryzen 7 9700X",
+  "gpu": "RTX 5080",
+  "lanes": 16,
+  "screen_runs": 16,
+  "screening": [
+    {
+      "label": "training-1",
+      "weapon": "braton_prime",
+      "ruler": "demolisher",
+      "mode": "cycle",
+      "gpu_seconds": 5.9186246000172105,
+      "cpu_seconds": 0.03634379999130033,
+      "private_pages": {
+        "limit": 192,
+        "min": 36,
+        "max": 36
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 36528,
+          "dot_ticks": 8353,
+          "field_ticks": 0,
+          "gas": 1070590207,
+          "hits": 77181,
+          "kills": 748,
+          "pellets": 36528,
+          "procs": 48955,
+          "runs": 16,
+          "shots": 36528
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 15.706876028165205,
+        "work": 59929510
+      }
+    },
+    {
+      "label": "training-2",
+      "weapon": "torid",
+      "ruler": "standard_multi_target",
+      "mode": "cycle",
+      "error": "compute timeout"
+    },
+    {
+      "label": "training-3",
+      "weapon": "torid",
+      "ruler": "demolisher",
+      "mode": "cycle",
+      "gpu_seconds": 2.112840400019195,
+      "cpu_seconds": 0.018771600007312372,
+      "private_pages": {
+        "limit": 192,
+        "min": 35,
+        "max": 35
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 31984,
+          "dot_ticks": 0,
+          "field_ticks": 9408,
+          "gas": 720118704,
+          "hits": 41392,
+          "kills": 935,
+          "pellets": 31984,
+          "procs": 44829,
+          "runs": 16,
+          "shots": 31984
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 19.628272753253757,
+        "work": 42405935
+      }
+    },
+    {
+      "label": "training-6",
+      "weapon": "acceltra",
+      "ruler": "demolisher",
+      "mode": "base",
+      "gpu_seconds": 2.510697599995183,
+      "cpu_seconds": 0.023848500015446916,
+      "private_pages": {
+        "limit": 192,
+        "min": 32,
+        "max": 32
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 25904,
+          "dot_ticks": 6122,
+          "field_ticks": 0,
+          "gas": 729326393,
+          "hits": 57930,
+          "kills": 0,
+          "pellets": 25904,
+          "procs": 29036,
+          "runs": 16,
+          "shots": 25904
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.18191259672205634,
+        "work": 42866319
+      }
+    },
+    {
+      "label": "training-7",
+      "weapon": "braton_prime",
+      "ruler": "demolisher",
+      "mode": "base",
+      "gpu_seconds": 3.8307329999806825,
+      "cpu_seconds": 0.03673230001004413,
+      "private_pages": {
+        "limit": 192,
+        "min": 30,
+        "max": 30
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 46736,
+          "dot_ticks": 45587,
+          "field_ticks": 0,
+          "gas": 1070345412,
+          "hits": 92323,
+          "kills": 10,
+          "pellets": 46736,
+          "procs": 38802,
+          "runs": 16,
+          "shots": 46736
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.3324737366621562,
+        "work": 59917270
+      }
+    },
+    {
+      "label": "training-8",
+      "weapon": "burston_prime",
+      "ruler": "standard_single_target",
+      "mode": "base",
+      "gpu_seconds": 7.70675859999028,
+      "cpu_seconds": 0.06461219998891465,
+      "private_pages": {
+        "limit": 192,
+        "min": 35,
+        "max": 35
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 48240,
+          "dot_ticks": 19210,
+          "field_ticks": 0,
+          "gas": 2259963394,
+          "hits": 184474,
+          "kills": 324,
+          "pellets": 165216,
+          "procs": 49563,
+          "runs": 16,
+          "shots": 48240
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 6.933258769100179,
+        "work": 119398169
+      }
+    },
+    {
+      "label": "training-9",
+      "weapon": "fulmin_prime",
+      "ruler": "heavy_gunner",
+      "mode": "semi_auto",
+      "gpu_seconds": 0.703432000009343,
+      "cpu_seconds": 0.005455500009702519,
+      "private_pages": {
+        "limit": 192,
+        "min": 38,
+        "max": 38
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 5328,
+          "dot_ticks": 5471,
+          "field_ticks": 0,
+          "gas": 187361664,
+          "hits": 15574,
+          "kills": 0,
+          "pellets": 10103,
+          "procs": 18382,
+          "runs": 16,
+          "shots": 5328
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.1585131999517195,
+        "work": 15768083
+      }
+    },
+    {
+      "label": "training-10",
+      "weapon": "kuva_hind",
+      "ruler": "standard_multi_target",
+      "mode": "semi_auto",
+      "gpu_seconds": 1.869544399989536,
+      "cpu_seconds": 0.010524100012844428,
+      "private_pages": {
+        "limit": 192,
+        "min": 42,
+        "max": 43
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 298400,
+          "dot_ticks": 25946,
+          "field_ticks": 0,
+          "gas": 420113389,
+          "hits": 49818,
+          "kills": 224,
+          "pellets": 11936,
+          "procs": 27028,
+          "runs": 16,
+          "shots": 11936
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 4.896994507296943,
+        "work": 27405669
+      }
+    },
+    {
+      "label": "training-11",
+      "weapon": "larkspur_prime",
+      "ruler": "standard_single_target",
+      "mode": "base",
+      "gpu_seconds": 2.336421899992274,
+      "cpu_seconds": 0.020424499991349876,
+      "private_pages": {
+        "limit": 192,
+        "min": 31,
+        "max": 32
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 28800,
+          "dot_ticks": 3146,
+          "field_ticks": 0,
+          "gas": 634452499,
+          "hits": 31946,
+          "kills": 411,
+          "pellets": 28800,
+          "procs": 84356,
+          "runs": 16,
+          "shots": 28800
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 8.60454431819184,
+        "work": 38122624
+      }
+    },
+    {
+      "label": "training-12",
+      "weapon": "phenmor",
+      "ruler": "standard_single_target",
+      "mode": "cycle",
+      "gpu_seconds": 12.68583000000217,
+      "cpu_seconds": 0.07854760001646355,
+      "private_pages": {
+        "limit": 192,
+        "min": 37,
+        "max": 37
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 44086,
+          "dot_ticks": 56263,
+          "field_ticks": 0,
+          "gas": 2712448444,
+          "hits": 219241,
+          "kills": 851,
+          "pellets": 162978,
+          "procs": 211018,
+          "runs": 16,
+          "shots": 44086
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 17.835858439335528,
+        "work": 142022422
+      }
+    },
+    {
+      "label": "training-14",
+      "weapon": "zenith",
+      "ruler": "demolisher",
+      "mode": "base",
+      "gpu_seconds": 0.9232738999999128,
+      "cpu_seconds": 0.007777400023769587,
+      "private_pages": {
+        "limit": 192,
+        "min": 32,
+        "max": 33
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 15344,
+          "dot_ticks": 2980,
+          "field_ticks": 0,
+          "gas": 281537334,
+          "hits": 18324,
+          "kills": 0,
+          "pellets": 15344,
+          "procs": 2011,
+          "runs": 16,
+          "shots": 15344
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.23861479205112235,
+        "work": 20476866
+      }
+    },
+    {
+      "label": "holdout-0",
+      "weapon": "boar_prime",
+      "ruler": "standard_multi_target",
+      "mode": "base",
+      "error": "compute timeout"
+    },
+    {
+      "label": "holdout-1",
+      "weapon": "ocucor",
+      "ruler": "standard_multi_target",
+      "mode": "base",
+      "gpu_seconds": 32.965175499994075,
+      "cpu_seconds": 0.24502569998730905,
+      "private_pages": {
+        "limit": 192,
+        "min": 56,
+        "max": 56
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 1304350,
+          "dot_ticks": 52893,
+          "field_ticks": 0,
+          "gas": 7389424235,
+          "hits": 839572,
+          "kills": 2029,
+          "pellets": 52174,
+          "procs": 2060463,
+          "runs": 16,
+          "shots": 52174
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 42.46006451908302,
+        "work": 375871211
+      }
+    },
+    {
+      "label": "holdout-2",
+      "weapon": "kuva_nukor",
+      "ruler": "standard_multi_target",
+      "mode": "base",
+      "error": "compute failed"
+    },
+    {
+      "label": "holdout-3",
+      "weapon": "amprex",
+      "ruler": "standard_multi_target",
+      "mode": "base",
+      "gpu_seconds": 8.27309289999539,
+      "cpu_seconds": 0.08151469999575056,
+      "private_pages": {
+        "limit": 192,
+        "min": 55,
+        "max": 57
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 1341600,
+          "dot_ticks": 11415,
+          "field_ticks": 0,
+          "gas": 2534235499,
+          "hits": 226071,
+          "kills": 129,
+          "pellets": 53664,
+          "procs": 537690,
+          "runs": 16,
+          "shots": 53664
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 2.9018555583912247,
+        "work": 133111774
+      }
+    },
+    {
+      "label": "holdout-4",
+      "weapon": "tenet_arca_plasmor",
+      "ruler": "standard_multi_target",
+      "mode": "base",
+      "gpu_seconds": 2.9708402000251226,
+      "cpu_seconds": 0.021909400005824864,
+      "private_pages": {
+        "limit": 192,
+        "min": 53,
+        "max": 55
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 112000,
+          "dot_ticks": 15230,
+          "field_ticks": 0,
+          "gas": 750671635,
+          "hits": 84025,
+          "kills": 785,
+          "pellets": 13723,
+          "procs": 208060,
+          "runs": 16,
+          "shots": 4480
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 16.535561450242508,
+        "work": 43933581
+      }
+    },
+    {
+      "label": "holdout-5",
+      "weapon": "phantasma_prime",
+      "ruler": "standard_multi_target",
+      "mode": "base",
+      "error": "compute failed"
+    },
+    {
+      "label": "holdout-7",
+      "weapon": "kuva_bramma",
+      "ruler": "standard_multi_target",
+      "mode": "base",
+      "gpu_seconds": 30.68355899999733,
+      "cpu_seconds": 0.0399868999957107,
+      "private_pages": {
+        "limit": 192,
+        "min": 51,
+        "max": 52
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 160000,
+          "dot_ticks": 9058,
+          "field_ticks": 0,
+          "gas": 1127552396,
+          "hits": 158698,
+          "kills": 517,
+          "pellets": 6400,
+          "procs": 30210,
+          "runs": 16,
+          "shots": 6400
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 10.880761766266566,
+        "work": 62777619
+      }
+    },
+    {
+      "label": "holdout-8",
+      "weapon": "xoris",
+      "ruler": "standard_multi_target",
+      "mode": "charged_throw_detonate",
+      "gpu_seconds": 28.56023709999863,
+      "cpu_seconds": 0.08117940000374801,
+      "private_pages": {
+        "limit": 192,
+        "min": 70,
+        "max": 73
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 51600,
+          "dot_ticks": 427448,
+          "field_ticks": 0,
+          "gas": 3323247316,
+          "hits": 503756,
+          "kills": 1142,
+          "pellets": 2064,
+          "procs": 79113,
+          "runs": 16,
+          "shots": 2064
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 23.975204230352404,
+        "work": 172562365
+      }
+    },
+    {
+      "label": "holdout-9",
+      "weapon": "laetum",
+      "ruler": "standard_multi_target",
+      "mode": "cycle",
+      "error": "compute timeout"
+    },
+    {
+      "label": "holdout-10",
+      "weapon": "lex_prime",
+      "ruler": "standard_multi_target",
+      "mode": "cycle",
+      "gpu_seconds": 2.3804909999889787,
+      "cpu_seconds": 0.016626900003757328,
+      "private_pages": {
+        "limit": 192,
+        "min": 53,
+        "max": 53
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 73250,
+          "dot_ticks": 14377,
+          "field_ticks": 0,
+          "gas": 553913099,
+          "hits": 62788,
+          "kills": 1482,
+          "pellets": 10881,
+          "procs": 151198,
+          "runs": 16,
+          "shots": 2930
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 30.989556823782586,
+        "work": 34095654
+      }
+    },
+    {
+      "label": "torid-base",
+      "weapon": "torid",
+      "ruler": "standard_multi_target",
+      "mode": "base",
+      "gpu_seconds": 28.93530829998781,
+      "cpu_seconds": 0.13392900000326335,
+      "private_pages": {
+        "limit": 192,
+        "min": 56,
+        "max": 58
+      },
+      "exact_shards": 16,
+      "score": {
+        "counts": {
+          "body_shots": 79200,
+          "dot_ticks": 0,
+          "field_ticks": 484772,
+          "gas": 5217365660,
+          "hits": 978503,
+          "kills": 52,
+          "pellets": 12479,
+          "procs": 595787,
+          "runs": 16,
+          "shots": 3168
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 1.1984294849438362,
+        "work": 267268283
+      }
+    },
+    {
+      "label": "torid-incarnon",
+      "weapon": "torid",
+      "ruler": "standard_multi_target",
+      "mode": "incarnon",
+      "error": "prepare failed"
+    },
+    {
+      "label": "torid-no-arcane",
+      "weapon": "torid",
+      "ruler": "standard_multi_target",
+      "mode": "cycle",
+      "error": "prepare failed"
+    }
+  ],
+  "batches": {
+    "training-14": {
+      "engine": "62a82930d1d3",
+      "rows": 16,
+      "runs": 16000,
+      "block": 32,
+      "module_sha256": "15214369b2d382ad1a7fa1cf4a9501dc3ec4d1b5742980dc704593fdfe5f6594",
+      "mixed": {
+        "cpu_rows": 240,
+        "gpu_rows": 64,
+        "seconds": 20.39126590001979,
+        "cpu_only_seconds": 25.65749660000438,
+        "speedup": 1.2582591353477215
+      },
+      "exact_shards": 16000,
+      "exact_scores": 16,
+      "median_seconds": 1.7707370999996783
+    },
+    "training-3": {
+      "engine": "62a82930d1d3",
+      "rows": 16,
+      "runs": 16000,
+      "block": 32,
+      "module_sha256": "15214369b2d382ad1a7fa1cf4a9501dc3ec4d1b5742980dc704593fdfe5f6594",
+      "mixed": {
+        "cpu_rows": 240,
+        "gpu_rows": 64,
+        "seconds": 47.61334340000758,
+        "cpu_only_seconds": 62.28081289998954,
+        "speedup": 1.3080537608283065
+      },
+      "exact_shards": 16000,
+      "exact_scores": 16,
+      "median_seconds": 4.013967400009278
+    }
+  },
+  "diagnostic": {
+    "nukor": {
+      "count": 1,
+      "start": 0,
+      "engine": "62a82930d1d3",
+      "memory_bytes": 19595264,
+      "module_sha256": "15214369b2d382ad1a7fa1cf4a9501dc3ec4d1b5742980dc704593fdfe5f6594",
+      "cow": true,
+      "block": 8,
+      "module_load_seconds": 0.10733309999341145,
+      "statuses": [
+        120
+      ]
+    },
+    "phantasma": {
+      "count": 1,
+      "start": 0,
+      "engine": "62a82930d1d3",
+      "memory_bytes": 19595264,
+      "module_sha256": "15214369b2d382ad1a7fa1cf4a9501dc3ec4d1b5742980dc704593fdfe5f6594",
+      "cow": true,
+      "block": 8,
+      "module_load_seconds": 0.10774800000945106,
+      "statuses": [
+        120
+      ]
+    },
+    "torid-no-arcane": {
+      "count": 1,
+      "start": 0,
+      "engine": "62a82930d1d3",
+      "memory_bytes": 19595264,
+      "module_sha256": "15214369b2d382ad1a7fa1cf4a9501dc3ec4d1b5742980dc704593fdfe5f6594",
+      "cow": true,
+      "block": 8,
+      "module_load_seconds": 0.10729519999586046,
+      "exact_score": {
+        "counts": {
+          "body_shots": 52975,
+          "dot_ticks": 0,
+          "field_ticks": 3528,
+          "gas": 364502064,
+          "hits": 84710,
+          "kills": 208,
+          "pellets": 2187,
+          "procs": 87264,
+          "runs": 1,
+          "shots": 2119
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 69.61864598048983,
+        "work": 18625103
+      },
+      "compute_seconds": 12.41597480000928,
+      "private_pages": {
+        "limit": 256,
+        "min": 119,
+        "max": 119
+      },
+      "statuses": [
+        0
+      ],
+      "fold_and_score_seconds": 0.015718700014986098,
+      "exact_shards": 1,
+      "cpu_full_row_seconds": 0.029490899993106723
+    },
+    "torid-original": {
+      "count": 1,
+      "start": 0,
+      "engine": "62a82930d1d3",
+      "memory_bytes": 19595264,
+      "module_sha256": "15214369b2d382ad1a7fa1cf4a9501dc3ec4d1b5742980dc704593fdfe5f6594",
+      "cow": true,
+      "block": 8,
+      "module_load_seconds": 0.10778859999845736,
+      "exact_score": {
+        "counts": {
+          "body_shots": 53175,
+          "dot_ticks": 0,
+          "field_ticks": 3420,
+          "gas": 378413900,
+          "hits": 86331,
+          "kills": 1557,
+          "pellets": 2193,
+          "procs": 91313,
+          "runs": 1,
+          "shots": 2127
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 519.2074075073452,
+        "work": 19320695
+      },
+      "compute_seconds": 12.927704100002302,
+      "private_pages": {
+        "limit": 256,
+        "min": 58,
+        "max": 58
+      },
+      "statuses": [
+        0
+      ],
+      "fold_and_score_seconds": 0.017056699987733737,
+      "exact_shards": 1,
+      "cpu_full_row_seconds": 0.030493700003717095
+    }
+  },
+  "meter": {
+    "engine": "62a82930d1d3",
+    "client_sha256": "963dbc9d949d9973df333b6e6b982649cf71f367c09a5422bc215f6df29a1743",
+    "complete_scores": 168,
+    "different_requests": 16,
+    "batches": 12,
+    "elapsed_seconds": 19.292344499990577,
+    "invalid_input_rejected": true,
+    "exclusive_device": true,
+    "engine_mismatch_rejected": true,
+    "retained_growth_bytes": 1073152,
+    "meter_samples": [
+      {
+        "utilization": null,
+        "dedicated_bytes": null,
+        "shared_bytes": null
+      },
+      {
+        "utilization": 0.8231861940780916,
+        "dedicated_bytes": 3289944064,
+        "shared_bytes": 77594624
+      },
+      {
+        "utilization": 0.7837085065423769,
+        "dedicated_bytes": 6326644736,
+        "shared_bytes": 77594624
+      },
+      {
+        "utilization": 0.8595511912927065,
+        "dedicated_bytes": 6326644736,
+        "shared_bytes": 77594624
+      },
+      {
+        "utilization": 0.8699883846320663,
+        "dedicated_bytes": 6326644736,
+        "shared_bytes": 77594624
+      },
+      {
+        "utilization": 0.8203150905216041,
+        "dedicated_bytes": 6326644736,
+        "shared_bytes": 77594624
+      },
+      {
+        "utilization": 0.9439508763678773,
+        "dedicated_bytes": 6326644736,
+        "shared_bytes": 77594624
+      },
+      {
+        "utilization": 0.819306035736107,
+        "dedicated_bytes": 6326644736,
+        "shared_bytes": 77594624
+      },
+      {
+        "utilization": 0.8307264647652398,
+        "dedicated_bytes": 6326644736,
+        "shared_bytes": 77594624
+      },
+      {
+        "utilization": 0.9413388635401272,
+        "dedicated_bytes": 6326644736,
+        "shared_bytes": 77594624
+      }
+    ]
+  },
+  "worker_validation": {
+    "zenith": {
+      "engine": "62a82930d1d3",
+      "client_sha256": "c0fdbaebf1557b17f5e6a74b86d351ada042766dcbeb8b35a428085d5f09cf78",
+      "complete_scores": 104,
+      "different_requests": 16,
+      "batches": 8,
+      "elapsed_seconds": 15.580918100022245,
+      "invalid_input_rejected": true,
+      "exclusive_device": true,
+      "engine_mismatch_rejected": true,
+      "retained_growth_bytes": 655360,
+      "meter_samples": [
+        {
+          "utilization": null,
+          "dedicated_bytes": null,
+          "shared_bytes": null
+        },
+        {
+          "utilization": 0.9482196431383346,
+          "dedicated_bytes": 3289944064,
+          "shared_bytes": 77594624
+        },
+        {
+          "utilization": 0.7294582640029617,
+          "dedicated_bytes": 6326644736,
+          "shared_bytes": 77594624
+        },
+        {
+          "utilization": 0.8913045266303005,
+          "dedicated_bytes": 6326644736,
+          "shared_bytes": 77594624
+        },
+        {
+          "utilization": 0.9268697252334787,
+          "dedicated_bytes": 6326644736,
+          "shared_bytes": 77594624
+        },
+        {
+          "utilization": 0.884101476265795,
+          "dedicated_bytes": 6326644736,
+          "shared_bytes": 77594624
+        },
+        {
+          "utilization": 0.8266529520169731,
+          "dedicated_bytes": 6326644736,
+          "shared_bytes": 77594624
+        },
+        {
+          "utilization": 0.9589477903370761,
+          "dedicated_bytes": 6326644736,
+          "shared_bytes": 77594624
+        },
+        {
+          "utilization": 0.8245581338972826,
+          "dedicated_bytes": 6326644736,
+          "shared_bytes": 77594624
+        },
+        {
+          "utilization": 0.9498948630227492,
+          "dedicated_bytes": 6326644736,
+          "shared_bytes": 77594624
+        }
+      ]
+    },
+    "torid-demolisher": {
+      "engine": "62a82930d1d3",
+      "client_sha256": "c0fdbaebf1557b17f5e6a74b86d351ada042766dcbeb8b35a428085d5f09cf78",
+      "complete_scores": 104,
+      "different_requests": 16,
+      "batches": 8,
+      "elapsed_seconds": 32.59828120001475,
+      "invalid_input_rejected": true,
+      "exclusive_device": true,
+      "engine_mismatch_rejected": true,
+      "retained_growth_bytes": 565248,
+      "meter_samples": [
+        {
+          "utilization": null,
+          "dedicated_bytes": null,
+          "shared_bytes": null
+        },
+        {
+          "utilization": 0.9379030293925509,
+          "dedicated_bytes": 3289944064,
+          "shared_bytes": 77594624
+        },
+        {
+          "utilization": 0.9543749871382687,
+          "dedicated_bytes": 3289944064,
+          "shared_bytes": 77594624
+        },
+        {
+          "utilization": 0.6529436861129685,
+          "dedicated_bytes": 6326644736,
+          "shared_bytes": 77594624
+        },
+        {
+          "utilization": 0.9483393654698166,
+          "dedicated_bytes": 6326644736,
+          "shared_bytes": 77594624
+        },
+        {
+          "utilization": 0.9531273476407399,
+          "dedicated_bytes": 6326644736,
+          "shared_bytes": 77594624
+        },
+        {
+          "utilization": 0.9445265799685117,
+          "dedicated_bytes": 6326644736,
+          "shared_bytes": 77594624
+        },
+        {
+          "utilization": 0.8192498467578847,
+          "dedicated_bytes": 6326644736,
+          "shared_bytes": 77594624
+        },
+        {
+          "utilization": 0.947599273802848,
+          "dedicated_bytes": 6326644736,
+          "shared_bytes": 77594624
+        },
+        {
+          "utilization": 0.9554681299730235,
+          "dedicated_bytes": 6326644736,
+          "shared_bytes": 77594624
+        }
+      ]
+    }
+  },
+  "fleet_validation": {
+    "engine": "62a82930d1d3",
+    "runs": [
+      {
+        "mode": "gpu",
+        "complete_scores": 96,
+        "gpu_rows": 16,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "summary": "REPLAY tasks=96 lanes=16 seconds=6.051482"
+      },
+      {
+        "mode": "killed-gpu",
+        "complete_scores": 96,
+        "gpu_rows": 0,
+        "worker_killed": true,
+        "fallback_observed": true,
+        "summary": "REPLAY tasks=96 lanes=16 seconds=6.940335"
+      }
+    ]
+  },
+  "deployment": {
+    "version": "0.9.0-preview.2",
+    "client_sha256": "c0fdbaebf1557b17f5e6a74b86d351ada042766dcbeb8b35a428085d5f09cf78",
+    "config_unchanged": true,
+    "engine": "62a82930d1d3",
+    "gpu_revision": 1
+  },
+  "live_ui": {
+    "title": " simfleet 0.9.0-preview.2  \u7b49\u5f85\u4efb\u52a1  GPU \u5f85\u673a   \u5df2\u8fd0\u884c 0:00:29   \u6838\u5fc3 10/16 \u4f7f\u7528\u4e2d   \u5e76\u53d1 1/3   \u5168\u7ad9\u5728\u7ebf 36   10:14:34  ",
+    "resources": [
+      " \u8d44\u6e90                      RTX 5080",
+      " CPU                            17%",
+      " \u672c\u7a0b\u5e8f                          6%",
+      " GPU\u72b6\u6001\u5f85\u673a \u00b7 \u5b8c\u62100\u884c",
+      " \u7a0b\u5e8fGPU                         0%",
+      " \u663e\u5b58   2.07 GiB \u00b7 \u5171\u4eab 74 MiB",
+      " \u5185\u5b58                      15.0/47G",
+      " \u5360\u7528   222 MB  \u672c\u7a0b\u5e8f",
+      " \u5229\u7528\u7387                          3%",
+      " \u9884\u7b97   \u79bb\u5f00 10 \u6838  \u4f7f\u7528\u65f6 10 \u6838",
+      " \u5e76\u53d1   1 \u8def  \u4e0a\u9650 3 \u00b7 \u79ef\u538b -0s"
+    ]
+  }
+}

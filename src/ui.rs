@@ -92,10 +92,13 @@ pub struct Status {
     pub idle: bool,
     pub engine: String,
     pub backend: String,
+    pub gpu:crate::gpu::View,
+    pub compute_memory_limit_mb:u64,
     pub session_tasks: u64,
     pub session_work: u64,
     /// Work computed this run, taken or not (the speed is read off it).
     pub computed_work: u64,
+    pub computed_gpu_work: u64,
     /// Results computed and kept, not taken by the server yet (protocol 8).
     pub kept_rows: u64,
     pub kept_work: u64,
@@ -144,7 +147,7 @@ pub struct Status {
     pub idle_cores: usize,
     pub active_cores: usize,
     /// When the server took each answer, and its work: the last quarter hour.
-    pub answered: VecDeque<(Instant, u64)>,
+    pub answered: VecDeque<(Instant, u64, u64)>,
     pub note: String,
 }
 
@@ -175,6 +178,18 @@ pub const C_GO: &str = "\x1b[33m";
 pub const C_BAD: &str = "\x1b[31m";
 pub const C_INFO: &str = "\x1b[36m";
 pub const C_END: &str = "\x1b[0m";
+
+impl Status {
+    pub fn record_computed(&mut self, now: Instant, work: u64, gpu: bool) {
+        let gpu_work = if gpu { work } else { 0 };
+        self.computed_work += work;
+        self.computed_gpu_work += gpu_work;
+        self.answered.push_back((now, work, gpu_work));
+        while self.answered.front().is_some_and(|a| now.duration_since(a.0) > Duration::from_secs(900)) {
+            self.answered.pop_front();
+        }
+    }
+}
 
 /// Log lines kept for the panels and for paging back.
 const KEEP: usize = 3000;
@@ -245,10 +260,10 @@ fn hms(secs: u64) -> String {
 }
 
 /// Points a minute computed: over the last ten minutes, and over the whole run.
-fn rates(s: &Status, up: Duration) -> (f64, f64) {
+fn rates(s: &Status, up: Duration) -> (f64, f64, f64) {
     let mins = (up.as_secs_f64() / 60.0).max(1.0 / 60.0);
-    let recent: u64 = s.answered.iter().filter(|(t, _)| t.elapsed() < Duration::from_secs(600)).map(|(_, w)| w).sum();
-    (points(recent) / mins.min(10.0), points(s.computed_work) / mins)
+    let (recent, gpu_recent) = s.answered.iter().filter(|(t, _, _)| t.elapsed() < Duration::from_secs(600)).fold((0,0), |(total,gpu),(_,w,g)| (total+w,gpu+g));
+    (points(recent) / mins.min(10.0), points(s.computed_work) / mins, points(gpu_recent) / mins.min(10.0))
 }
 
 impl Ui {
@@ -306,7 +321,7 @@ impl Ui {
 
     /// The minute line of a run without a terminal.
     fn plain_status(&self, s: &Status, ctl: &Ctl) -> String {
-        let (rate, _) = rates(s, self.started.elapsed());
+        let (rate, _, _) = rates(s, self.started.elapsed());
         let mut a = format!(
             "{} | {}/{} 核 | 本次 {} 任务 {} 分 | {:.1} 分/分钟",
             s.state,
@@ -328,8 +343,10 @@ impl Ui {
         if s.kept_rows > 0 {
             a += &format!(" | 待交 {} 行 {} 分", s.kept_rows, pts(points(s.kept_work)));
         }
+        if s.gpu.enabled {a+=&format!(" | GPU {} · 本程序 {}",gpu_activity(&s.gpu,self.started.elapsed()),gpu_percent(s.gpu.sample.utilization));}
         for t in &s.tasks {
-            if t.total > 0 {
+            if t.extra=="NVIDIA GPU" {a+=&format!(" | {} GPU计算中",t.label);}
+            else if t.total > 0 {
                 a += &format!(" | {} {:.0}%", t.label, 100.0 * t.done as f64 / t.total as f64);
             } else {
                 a += &format!(" | {} {} 场", t.label, group(t.done));
@@ -876,7 +893,7 @@ fn draw_settings(c: &mut Canvas, f: &Frame, v: &View) {
     }
     let y=3+visible;
     c.text(1,y,w.saturating_sub(2),rows[v.settings_row].2,DIM);
-    c.text(1,y+1,w.saturating_sub(2),"调度/NUMA/核心类型改动：保存后排空手头任务，自动换进程生效。",DIM);
+    c.text(1,y+1,w.saturating_sub(2),"调度/NUMA/合计内存上限改动：保存后排空手头任务，自动换进程生效。",DIM);
     c.text(1,y+2,w.saturating_sub(2),&state.message,Sty {fg:Some(80),..PLAIN});
     for (i,line) in state.topology.lines().skip(1).enumerate() {
         if y+3+i>=h-1 {break;}
@@ -900,6 +917,10 @@ fn title(c: &mut Canvas, f: &Frame) {
     let mut x = c.text(0, 0, w, &format!(" simfleet {} ", env!("CARGO_PKG_VERSION")), on(24));
     let state = if s.state.is_empty() { "启动中" } else { &s.state };
     x += c.text(x, 0, w - x, &format!(" {state} "), on(state_bg(state)));
+    if s.gpu.enabled && w.saturating_sub(x)>30 {
+        let badge=if s.gpu.rows>0 {format!(" GPU {} {}行 ",s.gpu.state,s.gpu.rows)}else{format!(" GPU {} ",s.gpu.state)};
+        x+=c.text(x,0,w-x,&badge,on(if s.gpu.rows>0 {24}else{238}));
+    }
     let clock = format!(" {} ", crate::sys::clock());
     let right = w.saturating_sub(c.tw(&clock));
     // MOST USEFUL FIRST: a narrow window cuts from the right.
@@ -1006,13 +1027,14 @@ fn task_row(c: &mut Canvas, x: usize, y: usize, w: usize, t: &TaskLine, chip: bo
     }
     let (kind, kst) = if t.riven { ("紫卡", fg(213)) } else { ("榜单", fg(117)) };
     cx += c.text(cx, y, 4, kind, kst) + 1;
-    let tail = if t.lanes == 0 { format!("  {} 等待", dur(t.secs)) } else { format!("  {} {}核", dur(t.secs), t.lanes) };
+    let tail = if t.extra=="NVIDIA GPU" {format!("  {} GPU",dur(t.secs))}
+        else if t.lanes == 0 { format!("  {} 等待", dur(t.secs)) } else { format!("  {} {}核", dur(t.secs), t.lanes) };
     let end = x + w - 1;
     let room = end.saturating_sub(cx);
     let label_w;
     if t.total > 0 {
         let frac = t.done as f64 / t.total as f64;
-        let pct = format!(" {:>3.0}%", frac * 100.0);
+        let pct = if t.extra=="NVIDIA GPU" {" GPU".into()}else{format!(" {:>3.0}%", frac * 100.0)};
         let bw = (w / 5).clamp(6, 24);
         let rw = bw + c.tw(&pct) + c.tw(&tail);
         if rw + 10 <= room {
@@ -1123,18 +1145,29 @@ fn left(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame, v: &m
     }
 }
 
+fn gpu_percent(value:Option<f64>)->String {value.map_or("--".into(),|v|format!("{:.0}%",v*100.0))}
+fn gpu_activity(g:&crate::gpu::View,up:Duration)->String {
+    if g.rows>0 {
+        let pulse=["|","/","-","\\"][(up.as_millis()/250%4) as usize];
+        format!("{pulse} {} {}行 / {}次 · {}s",g.state,g.rows,group(g.runs),g.seconds)
+    }else{format!("{} · 完成{} / 回退{}",g.state,group(g.finished),group(g.fallback))}
+}
+
 fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
     let s = f.s;
     let end = y + h;
     let mut yy = y;
-    let (rate, avg) = rates(s, f.up);
+    let (rate, avg, gpu_rate) = rates(s, f.up);
 
     header(c, x, yy, w, " 贡献 ", "", HDR);
     yy += 1;
     let mut rows: Vec<(&str, String, String)> = vec![
         ("本次", format!("{} 分", pts(points(s.session_work))), format!("  {} 个任务", group(s.session_tasks))),
-        ("速度", format!("{rate:.1} 分/分钟"), format!("  平均 {avg:.1}")),
+        ("速度", format!("{rate:.1} 分/分钟"), format!("  近10分 · 均 {avg:.1}")),
     ];
+    if s.gpu.enabled || s.computed_gpu_work > 0 {
+        rows.push(("其中GPU", format!("{gpu_rate:.1} 分/分钟"), format!("  已算 {} 分", pts(points(s.computed_gpu_work)))));
+    }
     if s.kept_rows > 0 {
         rows.push(("待交", format!("{} 分", pts(points(s.kept_work))), format!("  {} 行，随下次同步提交", group(s.kept_rows))));
     }
@@ -1164,7 +1197,8 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
     }
 
     if yy + 3 < end {
-        header(c, x, yy, w, " 资源 ", "", HDR);
+        let device=s.gpu.device.strip_prefix("NVIDIA GeForce ").unwrap_or(&s.gpu.device);
+        header(c, x, yy, w, " 资源 ", if s.gpu.enabled {device}else{""}, HDR);
         yy += 1;
         let pct = |v: Option<f64>| v.map_or("--".into(), |v| format!("{:>3.0}%", v * 100.0));
         let m = f.m;
@@ -1174,6 +1208,17 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
             bar_row(c, x, yy, w, "本程序", m.me, &pct(m.me), 31);
             yy += 1;
         }
+        if s.gpu.enabled {
+            if yy<end {kv(c,x,yy,w,"GPU状态",&gpu_activity(&s.gpu,f.up),"");yy+=1;}
+            if yy<end && !s.gpu.reason.is_empty(){kv(c,x,yy,w,"上次错误",&s.gpu.reason,"");yy+=1;}
+            if yy<end {bar_row(c,x,yy,w,"程序GPU",s.gpu.sample.utilization,&gpu_percent(s.gpu.sample.utilization),75);yy+=1;}
+            if yy<end {
+                let dedicated=s.gpu.sample.dedicated_bytes.map_or("--".into(),|n|format!("{:.2} GiB",n as f64/(1u64<<30) as f64));
+                let shared=s.gpu.sample.shared_bytes.map_or(String::new(),|n|format!(" · 共享 {:.0} MiB",n as f64/(1u64<<20) as f64));
+                kv(c,x,yy,w,"显存",&dedicated,&shared);yy+=1;
+            }
+        }
+        if yy<end && cfg!(windows) && s.compute_memory_limit_mb>0 {kv(c,x,yy,w,"总限额",&format!("{:.1} GiB",s.compute_memory_limit_mb as f64/1024.0)," CPU+GPU 提交");yy+=1;}
         if let (Some((used, all, me)), true) = (m.mem, yy < end) {
             let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
             let frac = used as f64 / all.max(1) as f64;
@@ -1313,7 +1358,7 @@ fn compact(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame, v:
     let s = f.s;
     let end = y + h;
     let mut yy = y;
-    let (rate, _) = rates(s, f.up);
+    let (rate, _, _) = rates(s, f.up);
     let mut a = format!(
         " 本次 {C_OK}{}{C_END} 分 · {} 任务 · {C_OK}{rate:.1}{C_END} 分/分钟",
         pts(points(s.session_work)),
@@ -1356,6 +1401,10 @@ fn compact(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame, v:
         yy += 1;
     }
     let budget = end.saturating_sub(yy + 3);
+    if s.gpu.enabled && yy<end {
+        c.text(x+1,yy,w.saturating_sub(2),&format!("GPU {} · 本程序 {}",gpu_activity(&s.gpu,f.up),gpu_percent(s.gpu.sample.utilization)),fg(75));yy+=1;
+    }
+    let budget=budget.min(end.saturating_sub(yy+3));
     for t in s.tasks.iter().take(budget) {
         task_row(c, x, yy, w, t, f.multi);
         yy += 1;
@@ -1377,6 +1426,24 @@ mod tests {
 
     fn text_of(c: &Canvas, y: usize) -> String {
         c.cells[y * c.w..(y + 1) * c.w].iter().filter(|x| x.ch != CONT).map(|x| x.ch).collect()
+    }
+    #[test]
+    fn gpu_resources_and_indicator_show_without_fake_progress() {
+        let ctl=Ctl::new(&crate::config::Config::fresh(16),16);let lines=VecDeque::new();
+        let mut s=Status::default();s.state="计算中".into();
+        s.gpu=crate::gpu::View{enabled:true,state:"计算".into(),device:"NVIDIA GeForce RTX 5080".into(),rows:16,runs:16000,seconds:2,finished:32,fallback:0,reason:String::new(),
+            sample:crate::gpu_meter::Sample{utilization:Some(0.87),dedicated_bytes:Some(4<<30),shared_bytes:Some(100<<20)}};
+        s.tasks.push(TaskLine{label:"fulmin_prime".into(),total:1000,extra:"NVIDIA GPU".into(),..Default::default()});
+        for (w,h) in [(150,44),(110,30),(70,24)] {
+            let f=Frame{s:&s,lines:&lines,ctl:&ctl,m:SysView::default(),up:Duration::from_secs(10),multi:false};
+            let mut c=Canvas::new(w-1,h,false);draw(&mut c,&f,&mut View::default());
+            let rendered=(0..h).map(|y|text_of(&c,y)).collect::<Vec<_>>();
+            let text=rendered.join("\n");assert!(text.contains("GPU"));assert!(text.contains("87%"));assert!(text.contains("16行"));
+            assert!(!text.contains("0%  0s GPU"));
+            for row in rendered {assert!(row.chars().map(|ch|c.cw(ch)).sum::<usize>()<w);}
+        }
+        s.gpu.sample=Default::default();s.gpu.state="故障回退 CPU".into();s.gpu.rows=0;
+        assert_eq!(gpu_percent(s.gpu.sample.utilization),"--");assert!(gpu_activity(&s.gpu,Duration::ZERO).contains("故障回退"));
     }
 
     #[test]
@@ -1479,7 +1546,7 @@ mod tests {
             held_secs: Some(34.0),
             group_views: (0..3).map(|i| GroupView { id: format!("a7i8qm{i:02}"), state: "计算中".into(), open: i < 3, tasks: 700 + i as u64, work: 7_800_000_000_000 }).collect(),
             lane_map: vec![Some(0), Some(0), Some(0), Some(0), Some(1), Some(1), Some(1), None, Some(2), None],
-            answered: [(now, 9_000_000_000)].into_iter().collect(),
+            answered: [(now, 9_000_000_000, 0)].into_iter().collect(),
             lane_kind: vec![Some('P'), Some('P'), Some('P'), Some('P'), Some('P'), Some('P'), Some('E'), None, Some('E'), None],
             core_pref: Some("自动分配"),
             lane_yield: Some(0.52),
@@ -1509,6 +1576,21 @@ mod tests {
                 println!("|{}|", t);
             }
         }
+    }
+
+    #[test]
+    fn gpu_work_is_part_of_total_speed_once_and_uses_the_same_window() {
+        let mut s = Status::default();
+        let now = Instant::now();
+        s.record_computed(now - Duration::from_secs(700), 20_000_000_000, true);
+        s.record_computed(now, 60_000_000_000, false);
+        s.record_computed(now, 30_000_000_000, true);
+        let (total, average, gpu) = rates(&s, Duration::from_secs(1200));
+        assert_eq!((total, average, gpu), (9.0, 5.5, 3.0));
+        assert_eq!(s.computed_work, 110_000_000_000);
+        assert_eq!(s.computed_gpu_work, 50_000_000_000);
+        s.record_computed(now + Duration::from_secs(201), 0, false);
+        assert_eq!(s.answered.len(), 3);
     }
 
     #[test]

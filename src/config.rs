@@ -53,6 +53,12 @@ pub struct Config {
     /// Use a native engine build from `engines/` for board orders when one
     /// matches the served engine; a validated optimizer can run riven gains too.
     pub native_engine: bool,
+    /// Optional NVIDIA preview. Only matching local GPU packages are loaded.
+    #[serde(default)]
+    pub gpu_enabled: bool,
+    /// Windows hard commit ceiling for CPU worker plus GPU subprocesses, MiB.
+    #[serde(default="default_compute_memory_limit")]
+    pub compute_memory_limit_mb:u64,
     /// Where published native engines are fetched from when `engines/` holds
     /// none (`<url>/engine-<id>/<id>-sfe<revision>.dll`); "" never downloads one.
     #[serde(default = "default_native_url")]
@@ -129,6 +135,7 @@ fn yes() -> bool {
 fn default_memory_limit_mb() -> u64 {
     2048
 }
+fn default_compute_memory_limit()->u64 {8192}
 fn default_native_wait_hours() -> u64 { 48 }
 fn default_protocol() -> u32 {
     8
@@ -158,6 +165,8 @@ impl Config {
             numa_nodes: Vec::new(),
             cpu_offset: 0,
             native_engine: true,
+            gpu_enabled: false,
+            compute_memory_limit_mb:default_compute_memory_limit(),
             native_engine_url: NATIVE_URL.into(),
             slots: 0,
             max_slots: 0,
@@ -253,8 +262,10 @@ mod tests {
     #[test]
     fn older_config_gets_wait_default_and_current_options_roundtrip() {
         let mut cfg=Config::fresh(6);cfg.placement=String::new();cfg.account.name="test user".into();cfg.extra_verifiers=vec!["another".into()];
-        let text=toml::to_string(&cfg).unwrap().lines().filter(|l|!l.starts_with("native_wait_hours")).collect::<Vec<_>>().join("\n");
+        let text=toml::to_string(&cfg).unwrap().lines().filter(|l|!l.starts_with("native_wait_hours") && !l.starts_with("gpu_enabled") && !l.starts_with("compute_memory_limit_mb")).collect::<Vec<_>>().join("\n");
         let decoded:Config=toml::from_str(&text).unwrap();assert_eq!(decoded.native_wait_hours,48);
+        assert!(!decoded.gpu_enabled);
+        assert_eq!(decoded.compute_memory_limit_mb,8192);
         assert_eq!(decoded.placement,"auto");
         assert_eq!(decoded.extra_verifiers,cfg.extra_verifiers);assert_eq!(decoded.account.name,cfg.account.name);
         let mut settings=crate::settings::Settings::from_config(&decoded);settings.native_wait_hours=0;settings.write(&mut cfg);

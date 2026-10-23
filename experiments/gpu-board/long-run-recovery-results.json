@@ -1,0 +1,514 @@
+{
+  "version": "0.9.0-preview.5",
+  "recovery": {
+    "engine": "62a82930d1d3",
+    "records": [
+      {
+        "stage": "mixed",
+        "success": 16,
+        "fallback_ids": []
+      },
+      {
+        "stage": "mixed",
+        "success": 15,
+        "fallback_ids": [
+          30
+        ]
+      },
+      {
+        "stage": "larger-budget",
+        "private_kib": 384,
+        "fallback": null
+      },
+      {
+        "stage": "same-worker-after-failure",
+        "complete_scores": 4,
+        "runs": 4000,
+        "pid": 36380
+      },
+      {
+        "stage": "1536-kib-budget",
+        "complete_scores": 2,
+        "runs": 2000,
+        "pid": 36380
+      }
+    ]
+  },
+  "restart": {
+    "engine": "62a82930d1d3",
+    "runs": [
+      {
+        "mode": "killed-gpu",
+        "complete_scores": 96,
+        "gpu_rows": 0,
+        "worker_killed": true,
+        "fallback_observed": true,
+        "worker_restarted": true,
+        "summary": "REPLAY tasks=96 lanes=1 seconds=72.687921"
+      }
+    ]
+  },
+  "job_memory": {
+    "pid": 29692,
+    "samples": [
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 7024226304,
+        "private_bytes": 2606100480,
+        "members": [
+          {
+            "pid": 29692,
+            "private_bytes": 51519488,
+            "resident_bytes": 71397376
+          },
+          {
+            "pid": 20580,
+            "private_bytes": 3850240,
+            "resident_bytes": 11042816
+          },
+          {
+            "pid": 36136,
+            "private_bytes": 2550730752,
+            "resident_bytes": 340217856
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 7024226304,
+        "private_bytes": 2608500736,
+        "members": [
+          {
+            "pid": 29692,
+            "private_bytes": 53919744,
+            "resident_bytes": 72613888
+          },
+          {
+            "pid": 20580,
+            "private_bytes": 3850240,
+            "resident_bytes": 11042816
+          },
+          {
+            "pid": 36136,
+            "private_bytes": 2550730752,
+            "resident_bytes": 340217856
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 7024226304,
+        "private_bytes": 2606305280,
+        "members": [
+          {
+            "pid": 29692,
+            "private_bytes": 51724288,
+            "resident_bytes": 71491584
+          },
+          {
+            "pid": 20580,
+            "private_bytes": 3850240,
+            "resident_bytes": 11042816
+          },
+          {
+            "pid": 36136,
+            "private_bytes": 2550730752,
+            "resident_bytes": 340217856
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 7024226304,
+        "private_bytes": 2607910912,
+        "members": [
+          {
+            "pid": 29692,
+            "private_bytes": 53329920,
+            "resident_bytes": 72216576
+          },
+          {
+            "pid": 20580,
+            "private_bytes": 3850240,
+            "resident_bytes": 11042816
+          },
+          {
+            "pid": 36136,
+            "private_bytes": 2550730752,
+            "resident_bytes": 340217856
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 7024226304,
+        "private_bytes": 2606895104,
+        "members": [
+          {
+            "pid": 29692,
+            "private_bytes": 52314112,
+            "resident_bytes": 71954432
+          },
+          {
+            "pid": 20580,
+            "private_bytes": 3850240,
+            "resident_bytes": 11042816
+          },
+          {
+            "pid": 36136,
+            "private_bytes": 2550730752,
+            "resident_bytes": 340217856
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 7024226304,
+        "private_bytes": 2606796800,
+        "members": [
+          {
+            "pid": 29692,
+            "private_bytes": 52215808,
+            "resident_bytes": 71782400
+          },
+          {
+            "pid": 20580,
+            "private_bytes": 3850240,
+            "resident_bytes": 11042816
+          },
+          {
+            "pid": 36136,
+            "private_bytes": 2550730752,
+            "resident_bytes": 340217856
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 7024226304,
+        "private_bytes": 2608926720,
+        "members": [
+          {
+            "pid": 29692,
+            "private_bytes": 54345728,
+            "resident_bytes": 72744960
+          },
+          {
+            "pid": 20580,
+            "private_bytes": 3850240,
+            "resident_bytes": 11042816
+          },
+          {
+            "pid": 36136,
+            "private_bytes": 2550730752,
+            "resident_bytes": 340217856
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 7024226304,
+        "private_bytes": 2606338048,
+        "members": [
+          {
+            "pid": 29692,
+            "private_bytes": 51757056,
+            "resident_bytes": 71385088
+          },
+          {
+            "pid": 20580,
+            "private_bytes": 3850240,
+            "resident_bytes": 11042816
+          },
+          {
+            "pid": 36136,
+            "private_bytes": 2550730752,
+            "resident_bytes": 340217856
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 7024226304,
+        "private_bytes": 2607747072,
+        "members": [
+          {
+            "pid": 29692,
+            "private_bytes": 53166080,
+            "resident_bytes": 72085504
+          },
+          {
+            "pid": 20580,
+            "private_bytes": 3850240,
+            "resident_bytes": 11042816
+          },
+          {
+            "pid": 36136,
+            "private_bytes": 2550730752,
+            "resident_bytes": 340217856
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 7024226304,
+        "private_bytes": 2606927872,
+        "members": [
+          {
+            "pid": 29692,
+            "private_bytes": 52346880,
+            "resident_bytes": 71667712
+          },
+          {
+            "pid": 20580,
+            "private_bytes": 3850240,
+            "resident_bytes": 11042816
+          },
+          {
+            "pid": 36136,
+            "private_bytes": 2550730752,
+            "resident_bytes": 340217856
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 7024226304,
+        "private_bytes": 2604994560,
+        "members": [
+          {
+            "pid": 29692,
+            "private_bytes": 50413568,
+            "resident_bytes": 70172672
+          },
+          {
+            "pid": 20580,
+            "private_bytes": 3850240,
+            "resident_bytes": 11042816
+          },
+          {
+            "pid": 36136,
+            "private_bytes": 2550730752,
+            "resident_bytes": 340217856
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 7024226304,
+        "private_bytes": 2607386624,
+        "members": [
+          {
+            "pid": 29692,
+            "private_bytes": 52805632,
+            "resident_bytes": 71573504
+          },
+          {
+            "pid": 20580,
+            "private_bytes": 3850240,
+            "resident_bytes": 11042816
+          },
+          {
+            "pid": 36136,
+            "private_bytes": 2550730752,
+            "resident_bytes": 340217856
+          }
+        ]
+      }
+    ]
+  },
+  "previous_runtime_reason": "worker absent; specific error no longer retained; lifetime restart budget defect confirmed in source",
+  "live_memory": {
+    "pid": 23628,
+    "samples": [
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 3323625472,
+        "private_bytes": 2815959040,
+        "members": [
+          {
+            "pid": 23628,
+            "private_bytes": 233287680,
+            "resident_bytes": 210616320
+          },
+          {
+            "pid": 29288,
+            "private_bytes": 3801088,
+            "resident_bytes": 11030528
+          },
+          {
+            "pid": 10700,
+            "private_bytes": 2578870272,
+            "resident_bytes": 365883392
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 3323625472,
+        "private_bytes": 2816081920,
+        "members": [
+          {
+            "pid": 23628,
+            "private_bytes": 233410560,
+            "resident_bytes": 210616320
+          },
+          {
+            "pid": 29288,
+            "private_bytes": 3801088,
+            "resident_bytes": 11030528
+          },
+          {
+            "pid": 10700,
+            "private_bytes": 2578870272,
+            "resident_bytes": 365883392
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 3323625472,
+        "private_bytes": 2815959040,
+        "members": [
+          {
+            "pid": 23628,
+            "private_bytes": 233287680,
+            "resident_bytes": 210616320
+          },
+          {
+            "pid": 29288,
+            "private_bytes": 3801088,
+            "resident_bytes": 11030528
+          },
+          {
+            "pid": 10700,
+            "private_bytes": 2578870272,
+            "resident_bytes": 365883392
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 3323625472,
+        "private_bytes": 2816020480,
+        "members": [
+          {
+            "pid": 23628,
+            "private_bytes": 233349120,
+            "resident_bytes": 210628608
+          },
+          {
+            "pid": 29288,
+            "private_bytes": 3801088,
+            "resident_bytes": 11030528
+          },
+          {
+            "pid": 10700,
+            "private_bytes": 2578870272,
+            "resident_bytes": 365883392
+          }
+        ]
+      }
+    ]
+  },
+  "live_resources": {
+    "title": " simfleet 0.9.0-preview.5  \u8bf7\u6c42\u4efb\u52a1 5s  GPU \u5f85\u673a\uff1aCPU\u6536\u5c3e   \u5df2\u8fd0\u884c 0:02:04   \u6838\u5fc3 10/16 \u7a7a\u95f2   \u5e76\u53d1 1/3   \u5168  13:08:55  ",
+    "resources": [
+      " \u8d44\u6e90                      RTX 5080",
+      " CPU                             4%",
+      " \u672c\u7a0b\u5e8f                          0%",
+      " GPU\u72b6\u6001\u5f85\u673a\uff1aCPU\u6536\u5c3e \u00b7 \u5b8c\u62100 / \u56de",
+      " \u7a0b\u5e8fGPU                         0%",
+      " \u663e\u5b58   2.07 GiB \u00b7 \u5171\u4eab 74 MiB",
+      " \u5185\u5b58\u4e0a 8.0 GiB CPU+GPU \u63d0\u4ea4",
+      " \u5185\u5b58                      15.2/47G",
+      " \u5360\u7528   201 MB  \u672c\u7a0b\u5e8f",
+      " \u5229\u7528\u7387                         60%",
+      " \u9884\u7b97   \u79bb\u5f00 10 \u6838  \u4f7f\u7528\u65f6 10 \u6838"
+    ]
+  },
+  "validation": {
+    "unit_passed": 44,
+    "unit_ignored": 7,
+    "unit_failed": 0,
+    "configured_limit_mib": 8192,
+    "actual_job_limit_mib": 8128,
+    "supervisor_reserve_mib": 64,
+    "gpu_worker_individual_limit_mib": 8192,
+    "max_private_kib": 1536
+  },
+  "deployment": {
+    "version": "0.9.0-preview.5",
+    "client_sha256": "b0f7acac6097e12cac1a37301385adcd9f0690be93b48158a6a04234de8476d5",
+    "package_sha256": "6ee31002fc8b3ca1f48f2f89587c817421baf5948d44a376a80db29c445ec7d9",
+    "changed_config_fields": [
+      "compute_memory_limit_mb"
+    ],
+    "limit_mib": 8192
+  },
+  "final_live_memory": {
+    "pid": 23864,
+    "samples": [
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 3333251072,
+        "private_bytes": 2857218048,
+        "members": [
+          {
+            "pid": 23864,
+            "private_bytes": 300998656,
+            "resident_bytes": 287895552
+          },
+          {
+            "pid": 36620,
+            "private_bytes": 3846144,
+            "resident_bytes": 11034624
+          },
+          {
+            "pid": 31544,
+            "private_bytes": 2552373248,
+            "resident_bytes": 342769664
+          }
+        ]
+      },
+      {
+        "job_limit_bytes": 8522825728,
+        "peak_job_bytes": 3333251072,
+        "private_bytes": 2856988672,
+        "members": [
+          {
+            "pid": 23864,
+            "private_bytes": 300769280,
+            "resident_bytes": 287883264
+          },
+          {
+            "pid": 36620,
+            "private_bytes": 3846144,
+            "resident_bytes": 11034624
+          },
+          {
+            "pid": 31544,
+            "private_bytes": 2552373248,
+            "resident_bytes": 342769664
+          }
+        ]
+      }
+    ]
+  },
+  "final_live_resources": {
+    "title": " simfleet 0.9.0-preview.5  \u670d\u52a1\u5668\u672a\u5206\u914d 16s  GPU \u5f85\u673a\uff1a\u7b49\u5f85\u65b0\u4efb\u52a1   \u5df2\u8fd0\u884c 0:01:02   \u6838\u5fc3 10/16 \u4f7f\u7528\u4e2d   \u5e76\u53d1 1/3   \u5168\u7ad9\u5728\u7ebf 13:21:37  ",
+    "resources": [
+      " \u8d44\u6e90                          RTX 5080",
+      " CPU                                 7%",
+      " \u672c\u7a0b\u5e8f                              0%",
+      " GPU\u72b6\u6001\u5f85\u673a\uff1a\u7b49\u5f85\u65b0\u4efb\u52a1 \u00b7 \u5b8c\u62100 / \u56de\u9000",
+      " \u7a0b\u5e8fGPU                             0%",
+      " \u663e\u5b58   2.07 GiB \u00b7 \u5171\u4eab 74 MiB",
+      " \u603b\u9650\u989d 8.0 GiB CPU+GPU \u63d0\u4ea4",
+      " \u5185\u5b58                          15.5/47G",
+      " \u5360\u7528   275 MB  \u672c\u7a0b\u5e8f",
+      " \u5229\u7528\u7387                              0%",
+      " \u9884\u7b97   \u79bb\u5f00 10 \u6838  \u4f7f\u7528\u65f6 10 \u6838"
+    ]
+  }
+}

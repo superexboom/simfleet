@@ -1,0 +1,271 @@
+[
+  {
+    "record": {
+      "arcanes": [
+        "primary_deadhead"
+      ],
+      "evolutions": [
+        "boar_prime_evo1_incarnon_form",
+        "boar_prime_reified_bane",
+        "boar_prime_ready_retaliation",
+        "boar_prime_critical_parallel"
+      ],
+      "exilus": "vigilante_supplies",
+      "mods": [
+        "primed_chilling_grasp",
+        "toxic_barrage",
+        "galvanized_hell",
+        "seeking_force",
+        "primed_ravage",
+        "critical_deceleration",
+        "shotgun_barrage",
+        "magnetic_strafe"
+      ],
+      "valence": "",
+      "weapon": "boar_prime"
+    },
+    "ruler": "standard_multi_target",
+    "mode": "base"
+  },
+  {
+    "record": {
+      "arcanes": [
+        "secondary_irradiate"
+      ],
+      "evolutions": [],
+      "exilus": "eject_magazine",
+      "mods": [
+        "primed_heated_charge",
+        "scorch",
+        "galvanized_diffusion",
+        "hornet_strike",
+        "lethal_torrent",
+        "pistol_elementalist",
+        "magnetic_might",
+        "sentient_surge"
+      ],
+      "valence": "",
+      "weapon": "ocucor"
+    },
+    "ruler": "standard_multi_target",
+    "mode": "base"
+  },
+  {
+    "record": {
+      "arcanes": [
+        "secondary_enervate"
+      ],
+      "evolutions": [],
+      "mods": [
+        "frostbite",
+        "pistol_pestilence",
+        "primed_convulsion",
+        "seeker",
+        "galvanized_diffusion",
+        "hornet_strike",
+        "lethal_torrent",
+        "pistol_elementalist"
+      ],
+      "valence": "magnetic",
+      "weapon": "kuva_nukor"
+    },
+    "ruler": "standard_multi_target",
+    "mode": "base"
+  },
+  {
+    "record": {
+      "arcanes": [
+        "primary_crux"
+      ],
+      "evolutions": [],
+      "mods": [
+        "high_voltage",
+        "malignant_force",
+        "hellfire",
+        "galvanized_chamber",
+        "heavy_caliber",
+        "critical_delay",
+        "vile_acceleration",
+        "vital_sense"
+      ],
+      "valence": "",
+      "weapon": "amprex"
+    },
+    "ruler": "standard_multi_target",
+    "mode": "base"
+  },
+  {
+    "record": {
+      "arcanes": [
+        "primary_crux"
+      ],
+      "evolutions": [],
+      "mods": [
+        "frigid_blast",
+        "toxic_barrage",
+        "incendiary_coat",
+        "blaze",
+        "galvanized_hell",
+        "primed_point_blank",
+        "galvanized_savvy",
+        "shotgun_barrage"
+      ],
+      "valence": "magnetic",
+      "weapon": "tenet_arca_plasmor"
+    },
+    "ruler": "standard_multi_target",
+    "mode": "base"
+  },
+  {
+    "record": {
+      "arcanes": [
+        "primary_debilitate"
+      ],
+      "evolutions": [],
+      "mods": [
+        "frigid_blast",
+        "toxic_barrage",
+        "primed_charged_shell",
+        "galvanized_hell",
+        "primed_point_blank",
+        "galvanized_savvy",
+        "shotgun_elementalist",
+        "magnetic_strafe"
+      ],
+      "valence": "",
+      "weapon": "phantasma_prime"
+    },
+    "ruler": "standard_multi_target",
+    "mode": "base"
+  },
+  {
+    "record": {
+      "arcanes": [
+        "primary_crux"
+      ],
+      "evolutions": [
+        "strun_prime_evo1_incarnon_form",
+        "strun_prime_blazing_barrel",
+        "strun_prime_rapid_reinforcement",
+        "strun_prime_elemental_balance"
+      ],
+      "exilus": "galvanized_acceleration",
+      "mods": [
+        "primed_charged_shell",
+        "shell_shock",
+        "galvanized_hell",
+        "primed_point_blank",
+        "primed_ravage",
+        "critical_deceleration",
+        "shotgun_barrage",
+        "shotgun_elementalist"
+      ],
+      "valence": "",
+      "weapon": "strun_prime"
+    },
+    "ruler": "standard_multi_target",
+    "mode": "cycle"
+  },
+  {
+    "record": {
+      "arcanes": [
+        "primary_compression"
+      ],
+      "evolutions": [],
+      "exilus": "ammo_drum",
+      "mods": [
+        "primed_cryo_rounds",
+        "infected_clip",
+        "heavy_caliber",
+        "primed_firestorm",
+        "critical_delay",
+        "vigilante_supplies",
+        "vile_acceleration",
+        "vital_sense"
+      ],
+      "valence": "heat",
+      "weapon": "kuva_bramma"
+    },
+    "ruler": "standard_multi_target",
+    "mode": "base"
+  },
+  {
+    "record": {
+      "arcanes": [
+        "melee_influence"
+      ],
+      "evolutions": [],
+      "exilus": "whirlwind",
+      "mods": [
+        "primed_fever_strike",
+        "lasting_sting",
+        "sacrificial_steel",
+        "primed_pressure_point",
+        "galvanized_reflex",
+        "amalgam_organ_shatter",
+        "melee_elementalist",
+        "volatile_quick_return",
+        "astral_twilight"
+      ],
+      "valence": "",
+      "weapon": "xoris"
+    },
+    "ruler": "standard_multi_target",
+    "mode": "charged_throw_detonate"
+  },
+  {
+    "record": {
+      "arcanes": [
+        "secondary_irradiate"
+      ],
+      "evolutions": [
+        "laetum_evo1_incarnon_form",
+        "laetum_rapid_wrath",
+        "laetum_lethal_rearmament",
+        "laetum_elemental_excess",
+        "laetum_devouring_attrition"
+      ],
+      "mods": [
+        "frostbite",
+        "pistol_pestilence",
+        "primed_heated_charge",
+        "galvanized_diffusion",
+        "galvanized_shot",
+        "lethal_torrent",
+        "accelerated_isotope",
+        "magnetic_might"
+      ],
+      "valence": "",
+      "weapon": "laetum"
+    },
+    "ruler": "standard_multi_target",
+    "mode": "cycle"
+  },
+  {
+    "record": {
+      "arcanes": [
+        "cascadia_flare"
+      ],
+      "evolutions": [
+        "lex_prime_evo1_incarnon_form",
+        "lex_prime_hoplite_virtue",
+        "lex_prime_lex_talionis",
+        "lex_prime_elemental_balance"
+      ],
+      "mods": [
+        "frostbite",
+        "pistol_pestilence",
+        "primed_heated_charge",
+        "galvanized_diffusion",
+        "galvanized_shot",
+        "primed_pistol_gambit",
+        "lethal_torrent",
+        "magnetic_might"
+      ],
+      "valence": "",
+      "weapon": "lex_prime"
+    },
+    "ruler": "standard_multi_target",
+    "mode": "cycle"
+  }
+]

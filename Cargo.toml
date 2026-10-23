@@ -1,6 +1,6 @@
 [package]
 name = "simfleet"
-version = "0.8.2"
+version = "0.9.0-preview.7"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 authors = ["superexboom"]
@@ -47,8 +47,11 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Kernel",
+    "Win32_System_JobObjects",
+    "Win32_Security",
     "Win32_System_LibraryLoader",
     "Win32_System_Power",
+    "Win32_System_Performance",
     "Win32_System_ProcessStatus",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",

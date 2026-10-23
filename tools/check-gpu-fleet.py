@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Replay real board inputs through Fleet; kill its GPU worker to test fallback.
+
+All tasks are synthetic offline leases. No work is claimed or submitted.
+"""
+import argparse
+import concurrent.futures
+import ctypes as c
+import importlib.util
+import json
+import pathlib
+import queue
+import re
+import subprocess
+import threading
+import time
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--client',type=pathlib.Path,required=True)
+    parser.add_argument('--native',type=pathlib.Path,required=True)
+    parser.add_argument('--orders',type=pathlib.Path,required=True)
+    parser.add_argument('--out',type=pathlib.Path,required=True)
+    parser.add_argument('--modes',default='cpu,gpu,killed-gpu')
+    parser.add_argument('--lanes',type=int,default=16)
+    parser.add_argument('--expect-restart',action='store_true')
+    parser.add_argument('--expect-evidence',action='store_true')
+    parser.add_argument('--release',type=pathlib.Path)
+    parser.add_argument('--order-index',type=int)
+    parser.add_argument('--rows',type=int,default=96)
+    parser.add_argument('--expect-no-gpu',action='store_true')
+    args=parser.parse_args();args.out.mkdir(parents=True,exist_ok=True)
+    if not 1<=args.rows<=1000:parser.error('rows must be 1..1000')
+    spec=importlib.util.spec_from_file_location('board',pathlib.Path(__file__).with_name('bench-board.py'))
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    native=module.Native(args.native)
+    orders=json.loads(args.orders.read_text());order=orders[args.order_index] if args.order_index is not None else next(o for o in orders if o['record']['weapon']=='fulmin_prime' and o['mode']=='semi_auto' and o['ruler']=='heavy_gunner')
+    req=json.loads(native.call('/api/board/order',order))['request']
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool: expected=json.loads(native.row(req,order['ruler'],pool,8))
+    paths=[]
+    for i in range(args.rows):
+        file=args.out/f'row-{i:03}.json';file.write_text(json.dumps(dict(order,kind='board',lease=f'offline-{i}',question=f'offline-{i}'))+'\n');paths.append(str(file.resolve()))
+    reports=[]
+    modes=args.modes.split(',')
+    if any(mode not in ('cpu','gpu','killed-gpu') for mode in modes):parser.error('invalid mode')
+    for mode in modes:
+        command=[str(args.client.resolve()),'replay',*paths,'--lanes',str(args.lanes)]
+        if mode!='cpu':command+=['--gpu']
+        if args.release:command+=['--release',str(args.release.resolve())]
+        proc=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf8',creationflags=0x08000000)
+        q=queue.Queue()
+        def read_output():
+            for line in proc.stdout:q.put(line)
+            q.put(None)
+        threading.Thread(target=read_output,daemon=True).start()
+        records=[];scores=[];killed=False;gpu_rows=0;deadline=time.monotonic()+240
+        try:
+            while True:
+                line=q.get(timeout=max(1,deadline-time.monotonic()))
+                if line is None:break
+                records.append(line)
+                if line.startswith('{'):
+                    v=json.loads(line)
+                    if v.get('kind')=='board': scores.append(v)
+                if '[GPU] 完成' in line:gpu_rows+=1
+                if mode=='killed-gpu' and not killed and '[GPU] 已分配' in line:
+                    query=f"Get-CimInstance Win32_Process -Filter 'ParentProcessId={proc.pid}' | Where-Object {{$_.Name -eq 'simfleet.exe'}} | Select-Object -ExpandProperty ProcessId"
+                    found=subprocess.check_output(['powershell','-NoProfile','-Command',query],text=True,creationflags=0x08000000)
+                    kernel=c.WinDLL('kernel32');kernel.OpenProcess.argtypes=[c.c_uint32,c.c_int,c.c_uint32];kernel.OpenProcess.restype=c.c_void_p
+                    kernel.TerminateProcess.argtypes=[c.c_void_p,c.c_uint];kernel.CloseHandle.argtypes=[c.c_void_p]
+                    for value in found.split():
+                        handle=kernel.OpenProcess(1,False,int(value))
+                        if handle:
+                            killed=bool(kernel.TerminateProcess(handle,93));kernel.CloseHandle(handle)
+                if time.monotonic()>deadline:raise TimeoutError('Fleet replay did not complete')
+            proc.wait(timeout=15)
+        finally:
+            if proc.poll() is None:proc.kill()
+            proc.wait(timeout=15)
+            (args.out/f'{mode}.log').write_text(''.join(records),encoding='utf8')
+        if proc.returncode or len(scores)!=args.rows:raise AssertionError(dict(mode=mode,code=proc.returncode,rows=len(scores),tail=records[-10:]))
+        for score in scores:
+            if any(score[k]!=expected[k] for k in ('score','metric','work')):raise AssertionError(dict(mode=mode,score=score,expected=expected))
+        fallback=any('任务回到 CPU' in line for line in records)
+        tally=next((re.fullmatch(r'REPLAY-WORK total=(\d+) gpu=(\d+)\s*',line) for line in records if line.startswith('REPLAY-WORK ')),None)
+        if not tally or int(tally[1])!=expected['work']*args.rows or int(tally[2])!=expected['work']*gpu_rows:
+            raise AssertionError(dict(reason='CPU/GPU contribution accounting mismatch',tally=tally.groups() if tally else None,gpu_rows=gpu_rows,work=expected['work']))
+        if mode=='gpu' and not gpu_rows and not args.expect_no_gpu:raise AssertionError('Fleet never used GPU')
+        if args.expect_no_gpu and gpu_rows:raise AssertionError('slow probe produced GPU scores')
+        if mode=='killed-gpu' and not (killed and fallback):raise AssertionError('failed GPU worker was not recovered')
+        restarted=any('重建计算进程' in line for line in records)
+        if args.expect_restart and mode=='killed-gpu' and (not restarted or sum('[GPU]' in line and '就绪' in line for line in records)<2):raise AssertionError('GPU worker did not become ready again')
+        if args.expect_evidence and mode=='killed-gpu':
+            evidence=json.loads((args.client.parent/'gpu-diagnostics/last-failure.json').read_text(encoding='utf8'))
+            assert evidence['retryable'] and evidence['requests'] and evidence['engine']==native.engine
+            assert 'GPU worker' in evidence['error']
+            assert 'account' not in evidence and 'session' not in evidence
+        report=dict(mode=mode,complete_scores=len(scores),gpu_rows=gpu_rows,total_work=int(tally[1]),gpu_work=int(tally[2]),worker_killed=killed,fallback_observed=fallback,worker_restarted=restarted,summary=next(line.strip() for line in records if line.startswith('REPLAY tasks=')))
+        reports.append(report);print(json.dumps(report),flush=True)
+    (args.out/'validation.json').write_text(json.dumps(dict(engine=native.engine,runs=reports),indent=2)+'\n')
+
+
+if __name__=='__main__':main()
