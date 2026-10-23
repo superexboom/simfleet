@@ -1,9 +1,9 @@
 # NVIDIA 测试包安装
 
-客户端：`v0.9.0-preview.11` 或更新版本。CPU 原生引擎：`engine-4296a0964da6`，Windows 为 `4296a0964da6-sfe2-v3.dll`，使用 PGO＋ThinLTO。GPU 引擎：`gpu-4296a0964da6-sfg1`。三个 Release 分开下载，不把引擎二进制塞进客户端压缩包。
+客户端：[v0.9.0-preview.11](https://github.com/superexboom/simfleet/releases/tag/v0.9.0-preview.11) 或更新版本。CPU 原生引擎：[engine-5c64c380e5f2](https://github.com/superexboom/simfleet/releases/tag/engine-5c64c380e5f2)，Windows 为 `5c64c380e5f2-sfe2-v3.dll`，使用 PGO＋ThinLTO。GPU 引擎：[gpu-5c64c380e5f2-sfg1](https://github.com/superexboom/simfleet/releases/tag/gpu-5c64c380e5f2-sfg1)。三个 Release 分开下载，不把引擎二进制塞进客户端压缩包。
 
 1. 解压 Windows 客户端包到副机独立目录。不要直接复制主机的 `simfleet.toml`、计算身份或任务日志；第一次启动按正常流程配置副机身份、账号和核心数。
-2. 按显卡架构选择套件：GTX 16 / RTX 20 系列使用 `sm75`，RTX 40 系列使用 `sm89`，RTX 50 系列使用 `sm120`。把选中的 GPU zip 解压到 `simfleet.exe` 同目录，得到 `engines/gpu/4296a0964da6-sfg1-sm89/` 等目录。包内只有三个二进制、清单、LICENSE 和 NOTICE。
+2. 按显卡架构选择套件：GTX 16 / RTX 20 系列使用 `sm75`，RTX 40 系列使用 `sm89`，RTX 50 系列使用 `sm120`。把选中的 GPU zip 解压到 `simfleet.exe` 同目录，得到 `engines/gpu/5c64c380e5f2-sfg1-sm89/` 等目录。包内只有三个二进制、清单、LICENSE 和 NOTICE。
 3. 使用可用的 NVIDIA 显卡驱动；无需另装 CUDA Toolkit、Python 或编译器。包使用 CUDA 12.9 工具链生成，需要支持该 cubin 的驱动；太旧的驱动可能加载失败。
 4. 启动客户端，等同版 PGO 原生引擎自动下载并通过参考校验。在 `S → NVIDIA GPU 预览` 开启。默认 `S → CPU+GPU上限 MiB` 为 8192；这是系统提交内存，不含显存。客户端还会根据显卡可用显存限制批量。
 5. 看“GPU状态”“程序GPU”和“贡献 → 其中GPU”。`探测计算` 只学习适用性，完成正常任务后才增加 GPU 贡献。等待、暂缓或没有同版 GPU 包时由 CPU 继续计算。

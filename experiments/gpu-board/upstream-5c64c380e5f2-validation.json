@@ -1,0 +1,302 @@
+{
+  "verified_at": "2026-10-23T14:09:57.200803+00:00",
+  "engine": "5c64c380e5f2",
+  "data": "102f454a0110",
+  "wasm": "f1be8faaaf60",
+  "upstream_commit": "e36e8563d414cff88b73e9486ea93e16b51ce503",
+  "build_commit": "8752183e0649a379592348f25856b64ddd8420be",
+  "client_version": "0.9.0-preview.11",
+  "source": {
+    "commit": "e36e8563d414cff88b73e9486ea93e16b51ce503",
+    "git_tree_api_ref": "e36e8563d414cff88b73e9486ea93e16b51ce503",
+    "files": 5587,
+    "downloaded": 156,
+    "sha256": "f8aa9bf93cf4a53d27539ca9cf85a7a954d01f368af0d1c426bb6d519a99a593",
+    "scope": "Complete engine/data/optimizer/webapi/native/wasm/workspace sources, build scripts, docs, gas tests, instructions and selected board fixtures; UI binaries/images omitted"
+  },
+  "native_action": {
+    "conclusion": "success",
+    "jobs": [
+      {
+        "completedAt": "2026-10-23T13:13:12Z",
+        "conclusion": "success",
+        "name": "check",
+        "startedAt": "2026-10-23T13:12:50Z"
+      },
+      {
+        "completedAt": "2026-10-23T13:22:45Z",
+        "conclusion": "success",
+        "name": "build (linux, ubuntu-22.04, target/release/simfleet, lib, so, baseline v3, false)",
+        "startedAt": "2026-10-23T13:13:14Z"
+      },
+      {
+        "completedAt": "2026-10-23T13:21:04Z",
+        "conclusion": "success",
+        "name": "build (macos, macos-14, target/release/simfleet, lib, dylib, baseline, false)",
+        "startedAt": "2026-10-23T13:13:14Z"
+      },
+      {
+        "completedAt": "2026-10-23T13:31:04Z",
+        "conclusion": "success",
+        "name": "build (windows, windows-latest, target/release/simfleet.exe, dll, v3, true)",
+        "startedAt": "2026-10-23T13:13:14Z"
+      },
+      {
+        "completedAt": "2026-10-23T13:31:38Z",
+        "conclusion": "success",
+        "name": "publish",
+        "startedAt": "2026-10-23T13:31:07Z"
+      }
+    ],
+    "url": "https://github.com/superexboom/simfleet/actions/runs/39959199915"
+  },
+  "published_native": [
+    {
+      "name": "5c64c380e5f2-sfe2-v3.dll",
+      "sha256": "4d956e3f4f192b4ddfa0d25dfbf8e39557d57ad2a7cba7b14fd83c201c95dd62",
+      "source": "e36e8563d414cff88b73e9486ea93e16b51ce503",
+      "patches": 6,
+      "pgo": true
+    },
+    {
+      "name": "lib5c64c380e5f2-sfe2-v3.so",
+      "sha256": "5be192b6d4c54f7d8174e1c75358450dfa2da721b7db90b67830ff8323c2afa0",
+      "source": "e36e8563d414cff88b73e9486ea93e16b51ce503",
+      "patches": 6,
+      "pgo": false
+    },
+    {
+      "name": "lib5c64c380e5f2-sfe2.dylib",
+      "sha256": "070b166563c034a532b3be09685f823caaa1eea4cf20d303f4e05670e472c6bf",
+      "source": "e36e8563d414cff88b73e9486ea93e16b51ce503",
+      "patches": 6,
+      "pgo": false
+    },
+    {
+      "name": "lib5c64c380e5f2-sfe2.so",
+      "sha256": "06567377b4ba070e359106fa39e6dd92a5249bb845181ab10888cf28f27c56a2",
+      "source": "e36e8563d414cff88b73e9486ea93e16b51ce503",
+      "patches": 6,
+      "pgo": false
+    }
+  ],
+  "native_conformance": {
+    "rows": 41,
+    "skipped": 0,
+    "score_work_gas": "bitwise equal to served WASM and data",
+    "riven": "bitwise equal",
+    "artifacts": "local PGO and downloaded CI PGO each checked"
+  },
+  "gpu_packages": [
+    {
+      "architecture": "sm75",
+      "name": "simfleet-gpu-5c64c380e5f2-sfg1-sm75-windows-x64.zip",
+      "bytes": 9583814,
+      "sha256": "7c8042de52ea6526c0c6dbfb3afb4dc77e36088948834e951a34d0a83756c583",
+      "files": 6,
+      "device_validated": false,
+      "module_sha256": "29f580a6844e77623557a21a1d3e98c19e6b9814fa72afaf27f5c3e4ec54dd5d",
+      "compile_link_seconds": 481.8372914000065
+    },
+    {
+      "architecture": "sm89",
+      "name": "simfleet-gpu-5c64c380e5f2-sfg1-sm89-windows-x64.zip",
+      "bytes": 9680013,
+      "sha256": "c021813048787ee6f593596a91e4396796669a4d7fe7161fe3643d17b71f8cff",
+      "files": 6,
+      "device_validated": false,
+      "module_sha256": "b81e44ca1ba38972300de2d5dfb418755e4f0bf4245854270cfa43a40e6fd85a",
+      "compile_link_seconds": 510.52156439999817
+    },
+    {
+      "architecture": "sm120",
+      "name": "simfleet-gpu-5c64c380e5f2-sfg1-sm120-windows-x64.zip",
+      "bytes": 13805303,
+      "sha256": "de616cb579f7d40455be381713fa6129c4755b1d7767e183a0bf5664c2d76b73",
+      "files": 6,
+      "device_validated": true,
+      "module_sha256": "f7ee70509c8af96b8afe458518fe1bc18cb554741e1920dd3ffbf1edb43ab1e6",
+      "compile_link_seconds": 738.9399580000027
+    }
+  ],
+  "gpu_reference": {
+    "engine": "5c64c380e5f2",
+    "rows": 2,
+    "runs": 128,
+    "block": 32,
+    "module_sha256": "f7ee70509c8af96b8afe458518fe1bc18cb554741e1920dd3ffbf1edb43ab1e6",
+    "samples": [
+      {
+        "compute_seconds": 0.7548139000136871,
+        "merge_seconds": 0.003264799976022914,
+        "total_seconds": 0.758352200005902,
+        "host_cpu_seconds": 0.015625,
+        "max_private_pages": 33
+      }
+    ],
+    "exact_shards": 128,
+    "exact_scores": 2,
+    "scores": [
+      {
+        "counts": {
+          "body_shots": 21312,
+          "dot_ticks": 21757,
+          "field_ticks": 0,
+          "gas": 756949559,
+          "hits": 62267,
+          "kills": 0,
+          "pellets": 40510,
+          "procs": 73669,
+          "runs": 64,
+          "shots": 21312
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16292896151383407,
+        "work": 63447477
+      },
+      {
+        "counts": {
+          "body_shots": 21312,
+          "dot_ticks": 21757,
+          "field_ticks": 0,
+          "gas": 756949559,
+          "hits": 62267,
+          "kills": 0,
+          "pellets": 40510,
+          "procs": 73669,
+          "runs": 64,
+          "shots": 21312
+        },
+        "metric": "kpm",
+        "ok": true,
+        "score": 0.16292896151383407,
+        "work": 63447477
+      }
+    ],
+    "median_seconds": 0.758352200005902
+  },
+  "fleet": {
+    "engine": "5c64c380e5f2",
+    "runs": [
+      {
+        "mode": "cpu",
+        "complete_scores": 96,
+        "gpu_rows": 0,
+        "total_work": 165618255648,
+        "gpu_work": 0,
+        "compute_memory_mib": 8192,
+        "available_memory_mib": null,
+        "job_limit_bytes": 8522825728,
+        "peak_commit_bytes": 337444864,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "cpu_rows_during_gpu_recovery": 0,
+        "summary": "REPLAY tasks=96 lanes=4 seconds=26.727738"
+      },
+      {
+        "mode": "gpu",
+        "complete_scores": 96,
+        "gpu_rows": 36,
+        "total_work": 165618255648,
+        "gpu_work": 62106845868,
+        "compute_memory_mib": 8192,
+        "available_memory_mib": null,
+        "job_limit_bytes": 8522825728,
+        "peak_commit_bytes": 6634700800,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "cpu_rows_during_gpu_recovery": 0,
+        "summary": "REPLAY tasks=96 lanes=4 seconds=20.159979"
+      },
+      {
+        "mode": "killed-gpu",
+        "complete_scores": 96,
+        "gpu_rows": 0,
+        "total_work": 165618255648,
+        "gpu_work": 0,
+        "compute_memory_mib": 8192,
+        "available_memory_mib": null,
+        "job_limit_bytes": 8522825728,
+        "peak_commit_bytes": 6610161664,
+        "worker_killed": true,
+        "fallback_observed": true,
+        "worker_restarted": true,
+        "cpu_rows_during_gpu_recovery": 63,
+        "summary": "REPLAY tasks=96 lanes=4 seconds=29.325065"
+      }
+    ]
+  },
+  "panel_allocation_probe": {
+    "mode": "runs",
+    "iterations": 100000,
+    "lanes": 1,
+    "comparison": {
+      "with": {
+        "warmup": {
+          "iteration": 10100,
+          "seconds": 5.748,
+          "private_mib": 36.36,
+          "working_set_mib": 47.87
+        },
+        "final": {
+          "iteration": 100000,
+          "seconds": 68.54,
+          "private_mib": 35.95,
+          "working_set_mib": 47.54
+        },
+        "tail_min_mib": 35.95,
+        "tail_max_mib": 36.3,
+        "growth_after_warmup_mib": -0.41
+      },
+      "without": {
+        "warmup": {
+          "iteration": 10100,
+          "seconds": 5.776,
+          "private_mib": 37.53,
+          "working_set_mib": 48.8
+        },
+        "final": {
+          "iteration": 100000,
+          "seconds": 68.306,
+          "private_mib": 48.63,
+          "working_set_mib": 59.48
+        },
+        "tail_min_mib": 47.27,
+        "tail_max_mib": 48.93,
+        "growth_after_warmup_mib": 11.1
+      }
+    }
+  },
+  "published_client": [
+    {
+      "name": "simfleet-0.9.0-preview.11-linux-x64.tar.gz",
+      "sha256": "83eeb03d42eeca53834f66c5a7f01ea990c28b51b58cefd0d513fa1d51586b35",
+      "files": 5,
+      "bytes": 4434885
+    },
+    {
+      "name": "simfleet-0.9.0-preview.11-macos-arm64.tar.gz",
+      "sha256": "48ff7b5acc9886cb7e8386c6a46566fde67b50a6463aa1847762f8af1fa9030d",
+      "files": 5,
+      "bytes": 3759175
+    },
+    {
+      "name": "simfleet-0.9.0-preview.11-windows-x64.zip",
+      "sha256": "31dd635cf2ba490134b98eb04c031bbc1ac1aae179b091cec958e4cbee1fab97",
+      "files": 5,
+      "bytes": 4611503
+    }
+  ],
+  "fixes": [
+    "Preserve static panel metadata lifetime patch despite the upstream alt_fire_toggles addition",
+    "Fail native build if the memory lifetime patch is unavailable"
+  ],
+  "limits": [
+    "sm75 and sm89 cross-compiled; no matching local device runtime validation",
+    "Memory probe covers one repeated allocation path, not a multiday soak",
+    "Remote 5090D CUDA allocation failure and its exact CPU occupancy were not reproduced"
+  ]
+}
