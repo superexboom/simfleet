@@ -5,6 +5,7 @@ import argparse,concurrent.futures,importlib.util,json,pathlib,queue,subprocess,
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('client','package','native','board','out'):p.add_argument('--'+name,type=pathlib.Path,required=True)
+    p.add_argument('--memory-mib',type=int,default=8192)
     a=p.parse_args();a.out.mkdir(parents=True,exist_ok=True)
     spec=importlib.util.spec_from_file_location('board',pathlib.Path(__file__).with_name('bench-board.py'));mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
     native=mod.Native(a.native);repo=pathlib.Path(__file__).resolve().parents[1]
@@ -20,7 +21,7 @@ def main():
         order=dict(record=record,ruler='demolisher',mode='cycle')
         req=json.loads(native.call('/api/board/order',order))['request'];req['runs']=8
         rows.append(dict(id=i+1,request=req,ruler='demolisher'))
-    proc=subprocess.Popen([str(a.client.resolve()),'gpu-worker',str(a.package.resolve()),native.engine],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf8',creationflags=0x08000000)
+    proc=subprocess.Popen([str(a.client.resolve()),'gpu-worker',str(a.package.resolve()),native.engine,'--memory-mib',str(a.memory_mib)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf8',creationflags=0x08000000)
     q=queue.Queue()
     def read():
         for line in proc.stdout:q.put(json.loads(line))
@@ -35,6 +36,8 @@ def main():
     try:
         ready=q.get(timeout=180)
         if not ready.get('ready'):raise RuntimeError(ready)
+        assert ready['memory_limit_bytes']==(a.memory_mib-64)*1024**2,ready
+        records.append(dict(stage='configured-process-limit',configured_mib=a.memory_mib,observed_bytes=ready['memory_limit_bytes']))
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
             failed=None
             for start in (0,15):

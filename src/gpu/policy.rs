@@ -131,7 +131,13 @@ impl Policy {
         let budget = [192, 384, 768, 1536]
             .into_iter()
             .find(|k| *k >= probe.max_pages.saturating_add(12) * 4)
-            .unwrap_or(1536);
+            .unwrap_or(1536)
+            .max(
+                self.saved
+                    .entries
+                    .get(&family(input))
+                    .map_or(192, |e| e.private_kib),
+            );
         let full_runs = (16000 * 192 / budget).min(16000) as f64;
         // Small samples cannot measure full occupancy. Require modest latency
         // and a conservative >one-core opportunity, then revise from full rows.
@@ -170,8 +176,40 @@ impl Policy {
                 allowed: false,
                 until: now + BAD_TTL * (failures.min(12) as u64),
                 updated: now,
-                private_kib: (budget * 2).min(1536),
+                private_kib: budget,
                 reason: reason.chars().take(200).collect(),
+                cpu_us: previous.map_or(0.0, |e| e.cpu_us),
+                gpu_ms: previous.map_or(0.0, |e| e.gpu_ms),
+                failures,
+            },
+        );
+    }
+    pub fn resource_exhausted(&mut self, input: &Input, now: u64) {
+        self.pending = None;
+        let key = family(input);
+        let previous = self.saved.entries.get(&key);
+        let current = input.private_kib.max(previous.map_or(0, |e| e.private_kib));
+        let budget = (current * 2).min(1536);
+        let allowed = budget > current && previous.is_some_and(|e| e.allowed);
+        let failures = previous.map_or(1, |e| e.failures.saturating_add(1));
+        self.store(
+            key,
+            Entry {
+                allowed,
+                until: now
+                    + if allowed {
+                        GOOD_TTL
+                    } else {
+                        BAD_TTL * failures.min(12) as u64
+                    },
+                updated: now,
+                private_kib: budget,
+                reason: if allowed {
+                    "private-page budget raised; reduce batch"
+                } else {
+                    "single-run private-page limit reached"
+                }
+                .into(),
                 cpu_us: previous.map_or(0.0, |e| e.cpu_us),
                 gpu_ms: previous.map_or(0.0, |e| e.gpu_ms),
                 failures,
@@ -282,11 +320,46 @@ mod tests {
         let e = p.classify(&a, 101).unwrap();
         assert_eq!(
             (e.failures, e.until, e.private_kib),
-            (1, 100 + BAD_TTL, 768)
+            (1, 100 + BAD_TTL, 384)
         );
         p.failed_batch(&rows, "worker closed", 200);
         let e = p.classify(&a, 201).unwrap();
         assert_eq!((e.failures, e.until), (2, 200 + 2 * BAD_TTL));
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[test]
+    fn resource_retry_keeps_its_larger_budget_after_a_small_probe() {
+        let file = std::env::temp_dir().join(format!(
+            "simfleet-resource-floor-{}.json",
+            crate::sys::random_hex(8)
+        ));
+        let mut p = Policy::open(&file, "test".into());
+        let mut row = input();
+        let sample = Probe {
+            samples: 8,
+            cpu_ms: 32.0,
+            gpu_ms: 100.0,
+            max_pages: 30,
+        };
+        assert!(p.observed(&row, &sample, 10));
+        assert_eq!(p.budget(&row, 11), 192);
+        p.resource_exhausted(&row, 20);
+        assert!(p.allowed(&row, 21));
+        assert_eq!(p.budget(&row, 21), 384);
+        // A later sample may miss the allocation-heavy seed/build again.
+        assert!(p.observed(&row, &sample, 30));
+        assert_eq!(p.budget(&row, 31), 384);
+        row.private_kib = 384;
+        p.resource_exhausted(&row, 40);
+        assert_eq!(p.budget(&row, 41), 768);
+        row.private_kib = 768;
+        p.resource_exhausted(&row, 50);
+        assert_eq!(p.budget(&row, 51), 1536);
+        row.private_kib = 1536;
+        p.resource_exhausted(&row, 60);
+        assert!(!p.allowed(&row, 61));
+        assert_eq!(p.budget(&row, 61), 1536);
         let _ = std::fs::remove_file(file);
     }
 

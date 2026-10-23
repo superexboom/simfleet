@@ -1659,7 +1659,7 @@ impl Fleet {
             if self.cfg.gpu_enabled {
                 let dir=crate::gpu::directory(&self.paths.engines,&self.rel.engine);
                 if dir.join("engine.gpu.json").is_file() {
-                    match crate::gpu::Manager::new(&dir,&self.rel.engine) {
+                    match crate::gpu::Manager::new(&dir,&self.rel.engine,self.cfg.compute_memory_limit_mb) {
                         Ok(g)=>{self.gpu=Some(g);self.ui.log(format!("{C_INFO}[GPU]{C_END} 正在加载并校验 {}",dir.file_name().unwrap_or_default().to_string_lossy()));}
                         Err(e)=>{self.ui.status(|s|s.gpu.state="启动失败，回退 CPU".into());self.ui.log(format!("{C_GO}[GPU]{C_END} 启动失败，继续 CPU：{e:#}"));}
                     }
@@ -1698,7 +1698,10 @@ impl Fleet {
                     if rows.len()>fallback {self.gpu_recovery.success(Instant::now());}
                     self.trace.event(json!({"event":"gpu_batch_finished","rows":rows.len(),"fallback":fallback,"private_kib":self.gpu.as_ref().map(|g|g.budget())}));
                     if fallback>0 {
-                        self.ui.log(format!("{C_GO}[GPU]{C_END} {fallback} 行超过资源预算，交由 CPU；对应场景暂缓并重新评估，其他场景继续"));
+                        let pages=rows.iter().filter(|r|r.fallback==Some(120)).count();
+                        let output=rows.iter().filter(|r|r.fallback==Some(2)).count();
+                        if pages>0 {self.ui.log(format!("{C_GO}[GPU]{C_END} {pages} 行单局私有页不足（120），交由 CPU；后续提高单局配额并缩批，达到上限则暂缓"));}
+                        if output>0 {self.ui.log(format!("{C_GO}[GPU]{C_END} {output} 行输出/地址范围超限（2），交由 CPU；与整机空闲内存无关"));}
                     }
                     for row in rows {
                         if let Some(probe)=&row.probe {

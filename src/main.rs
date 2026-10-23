@@ -606,7 +606,10 @@ fn main() {
     // The isolated GPU protocol never reads account/config or touches a lease.
     if args.first().is_some_and(|s|s=="gpu-worker") {
         let native=args.iter().position(|s|s=="--native").and_then(|i|args.get(i+1)).map(std::path::Path::new);
-        let result=(||->Result<()>{gpu::worker_main(std::path::Path::new(args.get(1).context("GPU package directory")?),args.get(2).context("GPU engine id")?,native)})();
+        let result=(||->Result<()>{
+            let memory_mib=args.windows(2).find(|a|a[0]=="--memory-mib").map(|a|a[1].parse::<u64>()).transpose()?.unwrap_or(8192);
+            gpu::worker_main(std::path::Path::new(args.get(1).context("GPU package directory")?),args.get(2).context("GPU engine id")?,native,memory_mib)
+        })();
         if let Err(e)=result {println!("{}",serde_json::json!({"error":format!("{e:#}")}));std::process::exit(1);}
         return;
     }

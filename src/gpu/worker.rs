@@ -401,8 +401,8 @@ impl Runtime {
     }
 }
 
-pub fn run(dir: &Path, engine_id: &str, native_path: Option<&Path>) -> Result<()> {
-    let _job = memory_job()?;
+pub fn run(dir: &Path, engine_id: &str, native_path: Option<&Path>, memory_mib: u64) -> Result<()> {
+    let (_job, memory_limit_bytes) = memory_job(memory_mib)?;
     let _device = super::driver::device_lock()?;
     let manifest = Manifest::load(dir, engine_id)?;
     ensure!(crate::work::cpu_v3(), "GPU wire requires x86-64-v3/AVX2");
@@ -422,7 +422,7 @@ pub fn run(dir: &Path, engine_id: &str, native_path: Option<&Path>) -> Result<()
     writeln!(
         stdout,
         "{}",
-        json!({"ready":true,"device":gpu.name,"architecture":manifest.architecture,"memory_free":gpu.memory_info()?.0,"engine":engine_id,"revision":manifest.revision,"driver":gpu.driver_version()?,"probe":native.is_some()})
+        json!({"ready":true,"device":gpu.name,"architecture":manifest.architecture,"memory_free":gpu.memory_info()?.0,"memory_limit_bytes":memory_limit_bytes,"engine":engine_id,"revision":manifest.revision,"driver":gpu.driver_version()?,"probe":native.is_some()})
     )?;
     stdout.flush()?;
     let mut runtime = Runtime {

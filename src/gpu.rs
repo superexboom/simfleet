@@ -282,14 +282,14 @@ fn directory_for(engines: &Path, engine: &str, architecture: &str) -> PathBuf {
         .join("gpu")
         .join(format!("{engine}-sfg1-sm{suffix}"))
 }
-pub fn worker_main(dir: &Path, engine: &str, native: Option<&Path>) -> Result<()> {
+pub fn worker_main(dir: &Path, engine: &str, native: Option<&Path>, memory_mib: u64) -> Result<()> {
     #[cfg(all(windows, target_arch = "x86_64"))]
     {
-        worker::run(dir, engine, native)
+        worker::run(dir, engine, native, memory_mib)
     }
     #[cfg(not(all(windows, target_arch = "x86_64")))]
     {
-        let _ = (dir, engine, native);
+        let _ = (dir, engine, native, memory_mib);
         anyhow::bail!("GPU preview currently requires Windows x64");
     }
 }
@@ -328,6 +328,7 @@ pub struct Manager {
     module_binding: String,
     probing: bool,
     probe_supported: bool,
+    memory_mib: u64,
 }
 #[derive(Clone, Default)]
 pub struct View {
@@ -343,14 +344,20 @@ pub struct View {
     pub sample: crate::gpu_meter::Sample,
 }
 impl Manager {
-    pub fn new(dir: &Path, engine: &str) -> Result<Self> {
-        Self::spawn(&std::env::current_exe()?, dir, engine)
+    pub fn new(dir: &Path, engine: &str, memory_mib: u64) -> Result<Self> {
+        Self::spawn(&std::env::current_exe()?, dir, engine, memory_mib)
     }
-    pub fn spawn(exe: &Path, dir: &Path, engine: &str) -> Result<Self> {
+    pub fn spawn(exe: &Path, dir: &Path, engine: &str, memory_mib: u64) -> Result<Self> {
+        ensure!(
+            (4096..=65536).contains(&memory_mib),
+            "invalid GPU memory limit"
+        );
         let mut cmd = Command::new(exe);
         cmd.arg("gpu-worker")
             .arg(dir)
             .arg(engine)
+            .arg("--memory-mib")
+            .arg(memory_mib.to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -429,6 +436,7 @@ impl Manager {
             ),
             probing: false,
             probe_supported: false,
+            memory_mib,
         })
     }
     pub fn available(&self) -> bool {
@@ -552,7 +560,7 @@ impl Manager {
         let _ = self.transient(e);
     }
     pub fn restart(&self, dir: &Path, engine: &str) -> Result<Self> {
-        let mut fresh = Self::new(dir, engine)?;
+        let mut fresh = Self::new(dir, engine, self.memory_mib)?;
         fresh.private_kib = self.private_kib;
         fresh.excluded = self.excluded.clone();
         fresh.finished = self.finished;
@@ -633,7 +641,7 @@ impl Manager {
     }
     fn persist_failure(&self, error: &str, exit: Option<&str>) {
         let report = serde_json::json!({"at_ms":crate::sys::now_ms(),"version":env!("CARGO_PKG_VERSION"),"engine":self.engine,
-            "error":error.chars().take(4096).collect::<String>(),"retryable":self.retryable,"probe_timeout":self.probe_timeout,"phase":self.phase,"exit":exit,"private_kib":self.private_kib,
+            "error":error.chars().take(4096).collect::<String>(),"retryable":self.retryable,"probe_timeout":self.probe_timeout,"phase":self.phase,"exit":exit,"private_kib":self.pending_inputs.iter().map(|r|r.private_kib).max().unwrap_or(self.private_kib),"compute_limit_mib":self.memory_mib,
             "completed_rows":self.finished,"fallback_rows":self.fallback_count,"requests":self.pending_inputs});
         if let Err(e) = (|| -> Result<()> {
             std::fs::create_dir_all(&self.report_dir)?;
@@ -669,6 +677,29 @@ impl Manager {
         }
         self.failure(e)
     }
+    fn persist_resource_fallbacks(&self, rows: &[Output]) {
+        let failed: Vec<_> = rows
+            .iter()
+            .zip(&self.pending_inputs)
+            .filter_map(|(row, input)| {
+                row.fallback
+                    .map(|code| serde_json::json!({"status":code,"input":input}))
+            })
+            .collect();
+        if failed.is_empty() {
+            return;
+        }
+        let report = serde_json::json!({"at_ms":crate::sys::now_ms(),"version":env!("CARGO_PKG_VERSION"),"engine":self.engine,"compute_limit_mib":self.memory_mib,"rows":failed});
+        let _ = (|| -> Result<()> {
+            std::fs::create_dir_all(&self.report_dir)?;
+            let bytes = serde_json::to_vec_pretty(&report)?;
+            ensure!(bytes.len() < 8 << 20, "GPU resource report too large");
+            let temp = self.report_dir.join("last-resource-fallback.tmp");
+            std::fs::write(&temp, bytes)?;
+            std::fs::rename(temp, self.report_dir.join("last-resource-fallback.json"))?;
+            Ok(())
+        })();
+    }
     pub fn poll(&mut self) -> Option<Event> {
         if self.failed {
             return None;
@@ -685,18 +716,26 @@ impl Manager {
                     });
                 }
                 if value["ready"] == true && !self.ready {
+                    if value["memory_limit_bytes"].as_u64() != Some((self.memory_mib - 64) << 20) {
+                        return Some(
+                            self.failure(
+                                "GPU worker memory limit does not match configured budget",
+                            ),
+                        );
+                    }
                     self.probe_supported = value["probe"] == true;
                     self.device_available_bytes = value["memory_free"].as_u64().unwrap_or(0);
                     self.ready = true;
                     self.phase = "待机".into();
                     self.device = value["device"].as_str().unwrap_or("NVIDIA").into();
                     let binding = format!(
-                        "adaptive-v3:{}:{}:{}:{}:{}",
+                        "adaptive-v4:{}:{}:{}:{}:{}:{}",
                         self.engine,
                         self.module_binding,
                         self.device,
                         value["driver"],
-                        std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_default()
+                        std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_default(),
+                        self.memory_mib
                     );
                     self.policy = Some(policy::Policy::open(
                         &self
@@ -753,6 +792,7 @@ impl Manager {
                             return Some(self.failure("GPU probe sample count mismatch"));
                         }
                         let now = crate::sys::now_ms();
+                        self.persist_resource_fallbacks(&rows);
                         if let Some(policy) = &mut self.policy {
                             let mut failed_families = std::collections::BTreeSet::new();
                             for (row, input) in rows.iter().zip(&self.pending_inputs) {
@@ -760,7 +800,15 @@ impl Manager {
                                     policy.observed(input, probe, now);
                                 } else if let Some(code) = row.fallback {
                                     if failed_families.insert(policy::family(input)) {
-                                        policy.failed(input, &format!("row status {code}"), now);
+                                        if code == 120 {
+                                            policy.resource_exhausted(input, now);
+                                        } else {
+                                            policy.failed(
+                                                input,
+                                                &format!("row status {code}: output/address limit"),
+                                                now,
+                                            );
+                                        }
                                     }
                                 } else {
                                     policy.completed(input, row.compute_ms, now);

@@ -230,7 +230,7 @@ impl Drop for Cuda {
 }
 
 /// Enforced before loading CUDA or WASM, including allocator and driver commit.
-pub fn memory_job() -> Result<impl Drop> {
+pub fn memory_job(mib: u64) -> Result<(impl Drop, usize)> {
     use windows_sys::Win32::{
         Foundation::CloseHandle, System::JobObjects::*, System::Threading::GetCurrentProcess,
     };
@@ -242,12 +242,18 @@ pub fn memory_job() -> Result<impl Drop> {
             }
         }
     }
+    ensure!(
+        (4096..=65536).contains(&mib),
+        "GPU memory limit must be 4096..=65536 MiB"
+    );
     unsafe {
         let job = Job(CreateJobObjectW(std::ptr::null(), std::ptr::null()));
         ensure!(!job.0.is_null(), "GPU memory job creation failed");
         let mut limit: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
         limit.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_PROCESS_MEMORY;
-        limit.ProcessMemoryLimit = 8usize << 30;
+        // The parent Job enforces the aggregate ceiling; this child must not
+        // silently keep an unrelated fixed 8-GiB cap when users raise it.
+        limit.ProcessMemoryLimit = ((mib - 64) as usize) << 20;
         if SetInformationJobObject(
             job.0,
             JobObjectExtendedLimitInformation,
@@ -258,7 +264,18 @@ pub fn memory_job() -> Result<impl Drop> {
         {
             bail!("GPU memory job: {}", std::io::Error::last_os_error());
         }
-        Ok(job)
+        let mut actual: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        ensure!(
+            QueryInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                (&mut actual as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of_val(&actual) as u32,
+                std::ptr::null_mut()
+            ) != 0,
+            "GPU memory limit query failed"
+        );
+        Ok((job, actual.ProcessMemoryLimit))
     }
 }
 
