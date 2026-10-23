@@ -99,5 +99,48 @@
     "contexts_allowed": 43,
     "fatal_gpu_errors": 0
   },
-  "preview7_defect": "One failing batch counted repeated rows as multiple failures for the same context; fixed in preview8"
+  "preview7_defect": "One failing batch counted repeated rows as multiple failures for the same context; fixed in preview8",
+  "client_preview8_validation": {
+    "engine": "4296a0964da6",
+    "runs": [
+      {
+        "mode": "gpu",
+        "complete_scores": 96,
+        "gpu_rows": 32,
+        "total_work": 164673469920,
+        "gpu_work": 54891156640,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "summary": "REPLAY tasks=96 lanes=4 seconds=23.845342"
+      },
+      {
+        "mode": "killed-gpu",
+        "complete_scores": 96,
+        "gpu_rows": 0,
+        "total_work": 164673469920,
+        "gpu_work": 0,
+        "worker_killed": true,
+        "fallback_observed": true,
+        "worker_restarted": true,
+        "summary": "REPLAY tasks=96 lanes=4 seconds=30.546630"
+      }
+    ]
+  },
+  "fixed_failure_policy": {
+    "allowed": false,
+    "until": 1792753569403,
+    "updated": 1792751769403,
+    "private_kib": 768,
+    "reason": "GPU worker closed output",
+    "cpu_us": 1097.9375,
+    "gpu_ms": 2798.685,
+    "failures": 1
+  },
+  "preview8_unit_tests": {
+    "passed": 52,
+    "ignored": 7,
+    "failed": 0
+  },
+  "preview8_replay_peak_private_bytes": 6682988544
 }
