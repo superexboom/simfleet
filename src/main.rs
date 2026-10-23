@@ -610,7 +610,7 @@ fn main() {
             let memory_mib=args.windows(2).find(|a|a[0]=="--memory-mib").map(|a|a[1].parse::<u64>()).transpose()?.unwrap_or(8192);
             gpu::worker_main(std::path::Path::new(args.get(1).context("GPU package directory")?),args.get(2).context("GPU engine id")?,native,memory_mib)
         })();
-        if let Err(e)=result {println!("{}",serde_json::json!({"error":format!("{e:#}")}));std::process::exit(1);}
+        if let Err(e)=result {println!("{}",gpu::worker_error(&e));std::process::exit(1);}
         return;
     }
     enable_vt();

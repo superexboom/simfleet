@@ -111,13 +111,17 @@ def main():
         if args.expect_no_gpu and gpu_rows:raise AssertionError('slow probe produced GPU scores')
         if mode=='killed-gpu' and not (killed and fallback):raise AssertionError('failed GPU worker was not recovered')
         restarted=any('重建计算进程' in line for line in records)
+        failure_at=next((i for i,line in enumerate(records) if '任务回到 CPU' in line),None)
+        ready_after=next((i for i,line in enumerate(records) if failure_at is not None and i>failure_at and '[GPU]' in line and '就绪' in line),None)
+        cpu_during_recovery=sum(line.startswith('{') and json.loads(line).get('kind')=='board' for line in records[failure_at+1:ready_after]) if failure_at is not None else 0
         if args.expect_restart and mode=='killed-gpu' and (not restarted or sum('[GPU]' in line and '就绪' in line for line in records)<2):raise AssertionError('GPU worker did not become ready again')
+        if args.expect_restart and mode=='killed-gpu' and not cpu_during_recovery:raise AssertionError('CPU made no progress while GPU recovered')
         if args.expect_evidence and mode=='killed-gpu':
             evidence=json.loads((args.client.parent/'gpu-diagnostics/last-failure.json').read_text(encoding='utf8'))
             assert evidence['retryable'] and evidence['requests'] and evidence['engine']==native.engine
             assert 'GPU worker' in evidence['error']
             assert 'account' not in evidence and 'session' not in evidence
-        report=dict(mode=mode,complete_scores=len(scores),gpu_rows=gpu_rows,total_work=int(tally[1]),gpu_work=int(tally[2]),compute_memory_mib=args.compute_memory_mib,available_memory_mib=args.available_memory_mib,job_limit_bytes=job_limit,peak_commit_bytes=peak_commit,worker_killed=killed,fallback_observed=fallback,worker_restarted=restarted,summary=next(line.strip() for line in records if line.startswith('REPLAY tasks=')))
+        report=dict(mode=mode,complete_scores=len(scores),gpu_rows=gpu_rows,total_work=int(tally[1]),gpu_work=int(tally[2]),compute_memory_mib=args.compute_memory_mib,available_memory_mib=args.available_memory_mib,job_limit_bytes=job_limit,peak_commit_bytes=peak_commit,worker_killed=killed,fallback_observed=fallback,worker_restarted=restarted,cpu_rows_during_gpu_recovery=cpu_during_recovery,summary=next(line.strip() for line in records if line.startswith('REPLAY tasks=')))
         reports.append(report);print(json.dumps(report),flush=True)
     (args.out/'validation.json').write_text(json.dumps(dict(engine=native.engine,runs=reports),indent=2)+'\n')
 

@@ -39,6 +39,41 @@ fn check(n: i32) -> Result<()> {
     ensure!(n == 0, "CUDA driver error {n}");
     Ok(())
 }
+#[derive(Debug)]
+pub struct DriverError {
+    pub code: i32,
+    pub operation: &'static str,
+    pub detail: String,
+}
+impl std::fmt::Display for DriverError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "CUDA driver error {}{} at {}{}",
+            self.code,
+            if self.code == 2 {
+                " (CUDA_ERROR_OUT_OF_MEMORY)"
+            } else {
+                ""
+            },
+            self.operation,
+            self.detail
+        )
+    }
+}
+impl std::error::Error for DriverError {}
+fn check_at(code: i32, operation: &'static str) -> Result<()> {
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(DriverError {
+            code,
+            operation,
+            detail: String::new(),
+        }
+        .into())
+    }
+}
 pub fn architecture() -> Result<String> {
     unsafe {
         let system = std::env::var_os("SystemRoot").context("SystemRoot")?;
@@ -125,13 +160,16 @@ impl Cuda {
                 .to_string_lossy()
                 .into_owned();
             // CU_CTX_SCHED_BLOCKING_SYNC: the CPU thread sleeps during GPU work.
-            check(create(&mut gpu.context, 4, dev))?;
+            check_at(create(&mut gpu.context, 4, dev), "cuCtxCreate_v2")?;
             let limit: unsafe extern "system" fn(i32, usize) -> i32 =
                 *gpu.lib.get(b"cuCtxSetLimit\0")?;
-            check(limit(0, 16384))?;
+            check_at(limit(0, 16384), "cuCtxSetLimit(stack)")?;
             let load: unsafe extern "system" fn(*mut Handle, *const c_void) -> i32 =
                 *gpu.lib.get(b"cuModuleLoadData\0")?;
-            check(load(&mut gpu.module, bytes.as_ptr().cast()))?;
+            check_at(
+                load(&mut gpu.module, bytes.as_ptr().cast()),
+                "cuModuleLoadData",
+            )?;
             Ok(gpu)
         }
     }
@@ -147,12 +185,17 @@ impl Cuda {
             let (old, _) = std::mem::replace(&mut self.buffers[slot], (0, 0));
             if old != 0 {
                 unsafe {
-                    check((self.free)(old))?;
+                    check_at((self.free)(old), "cuMemFree_v2")?;
                 }
             }
             let mut ptr = 0;
             unsafe {
-                check((self.alloc)(&mut ptr, bytes))?;
+                let code = (self.alloc)(&mut ptr, bytes);
+                if code != 0 {
+                    let memory = self.memory_info().ok();
+                    let retained = self.buffers.iter().map(|(_, n)| *n).sum::<usize>();
+                    return Err(DriverError{code,operation:"cuMemAlloc_v2",detail:format!("; slot={slot}, requested={bytes}, free={}, total={}, retained={retained}",memory.map_or(0,|m|m.0),memory.map_or(0,|m|m.1))}.into());
+                }
             }
             self.buffers[slot] = (ptr, bytes);
         }
@@ -160,44 +203,48 @@ impl Cuda {
     }
     pub fn upload<T>(&self, ptr: u64, data: &[T]) -> Result<()> {
         unsafe {
-            check((self.copy_up)(
-                ptr,
-                data.as_ptr().cast(),
-                std::mem::size_of_val(data),
-            ))
+            check_at(
+                (self.copy_up)(ptr, data.as_ptr().cast(), std::mem::size_of_val(data)),
+                "cuMemcpyHtoD_v2",
+            )
         }
     }
     pub fn download<T>(&self, data: &mut [T], ptr: u64) -> Result<()> {
         unsafe {
-            check((self.copy_down)(
-                data.as_mut_ptr().cast(),
-                ptr,
-                std::mem::size_of_val(data),
-            ))
+            check_at(
+                (self.copy_down)(data.as_mut_ptr().cast(), ptr, std::mem::size_of_val(data)),
+                "cuMemcpyDtoH_v2",
+            )
         }
     }
     pub fn clear(&self, ptr: u64, bytes: usize) -> Result<()> {
-        unsafe { check((self.zero)(ptr, 0, bytes)) }
+        unsafe { check_at((self.zero)(ptr, 0, bytes), "cuMemsetD8_v2") }
     }
     pub fn run(&self, name: &str, count: u32, args: &mut [Handle]) -> Result<()> {
         let name = CString::new(name)?;
         let mut fun = std::ptr::null_mut();
         unsafe {
-            check((self.function)(&mut fun, self.module, name.as_ptr()))?;
-            check((self.launch)(
-                fun,
-                count.div_ceil(32),
-                1,
-                1,
-                32,
-                1,
-                1,
-                0,
-                std::ptr::null_mut(),
-                args.as_mut_ptr(),
-                std::ptr::null_mut(),
-            ))?;
-            check((self.sync)())
+            check_at(
+                (self.function)(&mut fun, self.module, name.as_ptr()),
+                "cuModuleGetFunction",
+            )?;
+            check_at(
+                (self.launch)(
+                    fun,
+                    count.div_ceil(32),
+                    1,
+                    1,
+                    32,
+                    1,
+                    1,
+                    0,
+                    std::ptr::null_mut(),
+                    args.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                ),
+                "cuLaunchKernel",
+            )?;
+            check_at((self.sync)(), "cuCtxSynchronize")
         }
     }
 }

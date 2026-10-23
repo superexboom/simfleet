@@ -1,6 +1,6 @@
 # NVIDIA 测试包安装
 
-客户端：`v0.9.0-preview.10` 或更新版本。CPU 原生引擎：`engine-4296a0964da6`，Windows 为 `4296a0964da6-sfe2-v3.dll`，使用 PGO＋ThinLTO。GPU 引擎：`gpu-4296a0964da6-sfg1`。三个 Release 分开下载，不把引擎二进制塞进客户端压缩包。
+客户端：`v0.9.0-preview.11` 或更新版本。CPU 原生引擎：`engine-4296a0964da6`，Windows 为 `4296a0964da6-sfe2-v3.dll`，使用 PGO＋ThinLTO。GPU 引擎：`gpu-4296a0964da6-sfg1`。三个 Release 分开下载，不把引擎二进制塞进客户端压缩包。
 
 1. 解压 Windows 客户端包到副机独立目录。不要直接复制主机的 `simfleet.toml`、计算身份或任务日志；第一次启动按正常流程配置副机身份、账号和核心数。
 2. 按显卡架构选择套件：GTX 16 / RTX 20 系列使用 `sm75`，RTX 40 系列使用 `sm89`，RTX 50 系列使用 `sm120`。把选中的 GPU zip 解压到 `simfleet.exe` 同目录，得到 `engines/gpu/4296a0964da6-sfg1-sm89/` 等目录。包内只有三个二进制、清单、LICENSE 和 NOTICE。
@@ -27,3 +27,5 @@ GPU 架构和上游引擎都必须匹配。程序会自动从已安装的包中�
 贡献统计的口径：总“速度”按本机 CPU＋GPU 最近十分钟已完成工作量计算；“其中GPU”是同一窗口里的 GPU 部分，“平均”包含本次运行的启动和等待时间。账号榜单旁的速度是最近约半小时入账增量，可能包含多台设备并滞后于本机完成时间。
 
 preview.10 起，GPU 子进程限制随配置总限额调整；父 Job 仍负责 CPU＋GPU 合计硬上限。设置 65536 MiB 不会改变探测 8 秒、完整批次 30 秒的时间限制，也不等于给每局模拟分配 64 GiB。状态 120 表示单局私有页不足，后续会提高该场景配额并缩批；状态 2 表示输出或地址范围限制。资源回退详情保存在 `gpu-diagnostics/last-resource-fallback.json`，超时详情仍在 `last-failure.json`。
+
+preview.11 将 CUDA 驱动内存分配失败单独分类：完整批次失败后降低 GPU 批量上限并重建，保留可用场景；GPU 退出等待在后台进行，CPU 继续计算。`CUDA driver error 2` 不能与单局输出回退码 2 混同。诊断会记录失败 API 和分配信息；“上次错”是历史记录，当前状态需看 GPU 状态行。

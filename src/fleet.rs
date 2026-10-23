@@ -1628,6 +1628,8 @@ impl Fleet {
     /// Fill every free lane: the oldest task with a job for it, honouring
     /// leaders; lanes still free start a pack's next row.
     fn dispatch(&mut self) {
+        // Keep ready CPU work moving before GPU polling/preparation/cleanup.
+        self.fill_lanes(false);
         self.dispatch_gpu();
         for _ in 0..16 {
             if self.fill_lanes(false) == 0 || !self.start_row() {
@@ -1666,7 +1668,7 @@ impl Fleet {
                 } else {self.ui.log(format!("{C_GO}[GPU]{C_END} {} 没有匹配的 GPU 包，继续 CPU",self.rel.engine));}
             }
         }
-        if self.gpu_restart.is_some_and(|at|Instant::now()>=at) {
+        if self.gpu_restart.is_some_and(|at|Instant::now()>=at) && self.gpu.as_ref().is_none_or(|g|g.cleanup_finished()) {
             self.gpu_restart=None;self.gpu_restarts=self.gpu_restarts.saturating_add(1);
             let dir=crate::gpu::directory(&self.paths.engines,&self.rel.engine);
             if let Some(old)=self.gpu.take(){
@@ -1687,10 +1689,12 @@ impl Fleet {
                 crate::gpu::Event::Failed(e)=>{
                     let retry=self.gpu.as_ref().is_some_and(|g|g.retryable);
                     let probe_timeout=self.gpu.as_ref().is_some_and(|g|g.probe_timeout);
+                    let allocation=self.gpu.as_ref().is_some_and(|g|g.allocation_failure);
                     let delay=if retry {self.gpu_recovery.failure(probe_timeout).as_secs()}else{0};
                     if retry {self.gpu_restart=Some(Instant::now()+Duration::from_secs(delay));}
-                    self.trace.event(json!({"event":"gpu_failure","engine":self.rel.engine,"error":e,"retryable":retry,"probe_timeout":probe_timeout,"retry_secs":delay,"restarts":self.gpu_restarts}));
+                    self.trace.event(json!({"event":"gpu_failure","engine":self.rel.engine,"error":e,"retryable":retry,"probe_timeout":probe_timeout,"allocation_failure":allocation,"batch_limit":self.gpu.as_ref().map(|g|g.batch_limit()),"retry_secs":delay,"restarts":self.gpu_restarts}));
                     self.release_gpu_rows();self.ui.log(if probe_timeout {format!("{C_INFO}[GPU探测]{C_END} 场景超时暂缓，任务回到 CPU；{delay} 秒后重建 GPU，其他已学会场景优先")}else{format!("{C_GO}[GPU]{C_END} 任务回到 CPU：{e}{}",if retry{format!("；{delay} 秒后恢复 GPU")}else{"；本次停用 GPU".into()})});
+                    if allocation {self.ui.log(format!("{C_INFO}[GPU]{C_END} 驱动分配失败；后续批量上限 {} 局，保留已学会场景，CPU 继续计算",self.gpu.as_ref().map_or(0,|g|g.batch_limit())));}
                     let label=crate::work::backend_label(self.pool.code());self.ui.status(|s|s.backend=label.into());
                 }
                 crate::gpu::Event::Finished(rows)=>{
@@ -1723,7 +1727,7 @@ impl Fleet {
         }
         if let Some(g)=&self.gpu {
             let mut view=g.view();let idle=g.available();
-            if let Some(at)=self.gpu_restart{view.state=format!("恢复等待 {}s",at.saturating_duration_since(Instant::now()).as_secs()+1);}
+            if let Some(at)=self.gpu_restart{view.state=if !g.cleanup_finished(){"回收 GPU 资源，CPU 继续".into()}else{format!("恢复等待 {}s",at.saturating_duration_since(Instant::now()).as_secs()+1)};}
             self.ui.status(|s|{if idle && s.gpu.state.starts_with("待机："){view.state=s.gpu.state.clone();}s.gpu=view;});
         }
         if self.gpu_restart.is_some(){return;}

@@ -52,6 +52,21 @@ pub fn system_run_limit(available_bytes: u64, total_bytes: u64, private_kib: u32
     let affordable = remaining / ((u64::from(private_kib) + 128) * 1024);
     ((affordable.min(MAX_RUNS as u64) / 1000) * 1000) as usize
 }
+fn reduced_batch_limit(current: usize, failed_runs: u64, probing: bool) -> usize {
+    if probing || failed_runs == 0 {
+        return current;
+    }
+    current.min(((failed_runs as usize / 2 / 1000) * 1000).max(1000))
+}
+pub fn worker_error(error: &anyhow::Error) -> Value {
+    let mut value = serde_json::json!({"error":format!("{error:#}")});
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    if let Some(e) = error.downcast_ref::<driver::DriverError>() {
+        value["cuda_code"] = serde_json::json!(e.code);
+        value["cuda_operation"] = serde_json::json!(e.operation);
+    }
+    value
+}
 /// Temporary failures back off without permanently disabling a long run.
 /// Only a minute and eight successful batches reset an accumulated streak.
 #[derive(Default)]
@@ -301,7 +316,8 @@ pub enum Event {
     Failed(String),
 }
 pub struct Manager {
-    child: Child,
+    child: Option<Child>,
+    cleanup: Option<std::thread::JoinHandle<()>>,
     input: ChildStdin,
     rx: mpsc::Receiver<Result<Value>>,
     ready: bool,
@@ -329,6 +345,9 @@ pub struct Manager {
     probing: bool,
     probe_supported: bool,
     memory_mib: u64,
+    pub allocation_failure: bool,
+    batch_limit: usize,
+    driver_error: Value,
 }
 #[derive(Clone, Default)]
 pub struct View {
@@ -348,11 +367,19 @@ impl Manager {
         Self::spawn(&std::env::current_exe()?, dir, engine, memory_mib)
     }
     pub fn spawn(exe: &Path, dir: &Path, engine: &str, memory_mib: u64) -> Result<Self> {
+        Self::spawn_command(Command::new(exe), exe, dir, engine, memory_mib)
+    }
+    fn spawn_command(
+        mut cmd: Command,
+        exe: &Path,
+        dir: &Path,
+        engine: &str,
+        memory_mib: u64,
+    ) -> Result<Self> {
         ensure!(
             (4096..=65536).contains(&memory_mib),
             "invalid GPU memory limit"
         );
-        let mut cmd = Command::new(exe);
         cmd.arg("gpu-worker")
             .arg(dir)
             .arg(engine)
@@ -402,7 +429,8 @@ impl Manager {
             })?;
         let meter = Some(crate::gpu_meter::Monitor::new(child.id()));
         Ok(Self {
-            child,
+            child: Some(child),
+            cleanup: None,
             input,
             rx,
             ready: false,
@@ -437,6 +465,9 @@ impl Manager {
             probing: false,
             probe_supported: false,
             memory_mib,
+            allocation_failure: false,
+            batch_limit: MAX_RUNS,
+            driver_error: Value::Null,
         })
     }
     pub fn available(&self) -> bool {
@@ -552,6 +583,24 @@ impl Manager {
     pub fn max_runs_for(&self, private_kib: u32) -> usize {
         (MAX_RUNS * 192 / private_kib as usize)
             .min(device_run_limit(self.device_available_bytes, private_kib))
+            .min(self.batch_limit)
+    }
+    pub fn batch_limit(&self) -> usize {
+        self.batch_limit
+    }
+    pub fn cleanup_finished(&self) -> bool {
+        self.cleanup.as_ref().is_none_or(|h| h.is_finished())
+    }
+    fn retire_child(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            self.cleanup = std::thread::Builder::new()
+                .name("gpu-reap".into())
+                .spawn(move || {
+                    let _ = child.wait();
+                })
+                .ok();
+        }
     }
     pub fn budget(&self) -> u32 {
         self.private_kib
@@ -566,6 +615,7 @@ impl Manager {
         fresh.finished = self.finished;
         fresh.fallback_count = self.fallback_count;
         fresh.last_error = self.last_error.clone();
+        fresh.batch_limit = self.batch_limit;
         Ok(fresh)
     }
     pub fn submit(&mut self, inputs: &[Input]) -> Result<()> {
@@ -621,7 +671,11 @@ impl Manager {
             .filter(|c| !c.is_control())
             .take(300)
             .collect();
-        let exit = self.child.try_wait().ok().flatten().map(|s| s.to_string());
+        let exit = self
+            .child
+            .as_mut()
+            .and_then(|c| c.try_wait().ok().flatten())
+            .map(|s| s.to_string());
         self.persist_failure(&error, exit.as_deref());
         self.failed = true;
         self.ready = false;
@@ -634,15 +688,14 @@ impl Manager {
         }
         .into();
         self.meter = None;
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.retire_child();
         self.pending_inputs.clear();
         Event::Failed(error)
     }
     fn persist_failure(&self, error: &str, exit: Option<&str>) {
         let report = serde_json::json!({"at_ms":crate::sys::now_ms(),"version":env!("CARGO_PKG_VERSION"),"engine":self.engine,
             "error":error.chars().take(4096).collect::<String>(),"retryable":self.retryable,"probe_timeout":self.probe_timeout,"phase":self.phase,"exit":exit,"private_kib":self.pending_inputs.iter().map(|r|r.private_kib).max().unwrap_or(self.private_kib),"compute_limit_mib":self.memory_mib,
-            "completed_rows":self.finished,"fallback_rows":self.fallback_count,"requests":self.pending_inputs});
+            "completed_rows":self.finished,"fallback_rows":self.fallback_count,"requests":self.pending_inputs,"allocation_failure":self.allocation_failure,"batch_limit":self.batch_limit,"cuda":self.driver_error});
         if let Err(e) = (|| -> Result<()> {
             std::fs::create_dir_all(&self.report_dir)?;
             let path = self.report_dir.join("last-failure.json");
@@ -665,7 +718,10 @@ impl Manager {
     }
     fn transient(&mut self, e: impl std::fmt::Display) -> Event {
         self.retryable = true;
-        if let Some(policy) = &mut self.policy {
+        if self.allocation_failure {
+            self.batch_limit =
+                reduced_batch_limit(self.batch_limit, self.pending_runs, self.probing);
+        } else if let Some(policy) = &mut self.policy {
             policy.failed_batch(&self.pending_inputs, &e.to_string(), crate::sys::now_ms());
         }
         for key in &self.pending_keys {
@@ -707,6 +763,10 @@ impl Manager {
         match self.rx.try_recv() {
             Ok(Ok(value)) => {
                 if let Some(error) = value["error"].as_str() {
+                    self.allocation_failure = value["cuda_code"] == 2;
+                    if value["cuda_code"].is_number() {
+                        self.driver_error = value.clone();
+                    }
                     let transient = error.starts_with("CUDA driver error")
                         || error.contains("another simfleet already owns GPU");
                     return Some(if transient {
@@ -867,14 +927,97 @@ impl Manager {
 }
 impl Drop for Manager {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.retire_child();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn allocation_pressure_reduces_full_batches_without_rejecting_probes() {
+        assert_eq!(reduced_batch_limit(16000, 8000, false), 4000);
+        assert_eq!(reduced_batch_limit(4000, 4000, false), 2000);
+        assert_eq!(reduced_batch_limit(2000, 2000, false), 1000);
+        assert_eq!(reduced_batch_limit(1000, 1000, false), 1000);
+        assert_eq!(reduced_batch_limit(16000, 8, true), 16000);
+        assert_eq!(reduced_batch_limit(16000, 0, false), 16000);
+    }
+    #[test]
+    fn allocation_error_keeps_learned_context_and_releases_owned_rows() {
+        let dir =
+            std::env::temp_dir().join(format!("simfleet-oom-test-{}", crate::sys::random_hex(8)));
+        std::fs::create_dir(&dir).unwrap();
+        let script = r#"import sys,json,time
+print(json.dumps(dict(ready=True,device='test GPU',engine='test',revision=1,driver=12090,probe=True,memory_free=17179869184,memory_limit_bytes=8522825728)),flush=True)
+json.loads(sys.stdin.readline())
+print(json.dumps(dict(error='CUDA driver error 2 (CUDA_ERROR_OUT_OF_MEMORY) at cuMemAlloc_v2',cuda_code=2,cuda_operation='cuMemAlloc_v2')),flush=True)
+time.sleep(5)
+"#;
+        let mut cmd = Command::new(if cfg!(windows) { "python" } else { "python3" });
+        cmd.arg("-u").arg("-c").arg(script);
+        let mut m = Manager::spawn_command(cmd, &dir.join("client"), &dir, "test", 8192).unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        while !m.available() {
+            if let Some(Event::Failed(e)) = m.poll() {
+                panic!("mock ready failed: {e}");
+            }
+            assert!(Instant::now() < until, "mock ready timeout");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let row = Input {
+            id: 1,
+            request: serde_json::json!({"weapon":"test","runs":1000,"duration":180,"seed":1}),
+            ruler: "test".into(),
+            private_kib: 192,
+            probe: false,
+        };
+        assert!(m.policy.as_mut().unwrap().observed(
+            &row,
+            &Probe {
+                samples: 8,
+                cpu_ms: 8.0,
+                gpu_ms: 10.0,
+                max_pages: 30
+            },
+            crate::sys::now_ms()
+        ));
+        let rows: Vec<_> = (0..8)
+            .map(|i| {
+                let mut r = row.clone();
+                r.id = i + 1;
+                r.request["seed"] = serde_json::json!(i);
+                r
+            })
+            .collect();
+        m.submit(&rows).unwrap();
+        loop {
+            if let Some(Event::Failed(_)) = m.poll() {
+                break;
+            }
+            assert!(Instant::now() < until, "mock failure timeout");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(m.allocation_failure && m.retryable && m.pending.is_empty());
+        assert_eq!(m.batch_limit(), 4000);
+        assert_eq!(m.max_runs_for(192), 4000);
+        assert!(m
+            .policy
+            .as_ref()
+            .unwrap()
+            .allowed(&row, crate::sys::now_ms()));
+        let report: Value = serde_json::from_slice(
+            &std::fs::read(dir.join("gpu-diagnostics/last-failure.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["cuda"]["cuda_operation"], "cuMemAlloc_v2");
+        while !m.cleanup_finished() {
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        drop(m);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn temporary_failures_keep_retrying_and_stable_success_resets_backoff() {
         let mut recovery = Recovery::default();
