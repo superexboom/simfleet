@@ -34,6 +34,12 @@ $revision = (Get-Content -Raw -LiteralPath (Join-Path $root 'native-engine/revis
 if ($revision -notmatch '^[0-9]+$') { throw 'Invalid native build revision' }
 $python = if ($win) { "python" } else { "python3" }
 function Write-Utf8($path, $text) { [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding $false)) }
+function Source-Hash($path) {
+    $stream = [IO.File]::OpenRead([IO.Path]::GetFullPath($path))
+    $digest = [Security.Cryptography.SHA256]::Create()
+    try { ([BitConverter]::ToString($digest.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() }
+    finally { $stream.Dispose(); $digest.Dispose() }
+}
 if (-not $Out) { $Out = Join-Path $root "target/release/engines" }
 if (-not $Engine) { $Engine = (Invoke-RestMethod "$Server/release.json" -Headers @{"Cache-Control"="no-store"}).engine }
 if ($Engine -notmatch '^[A-Za-z0-9._-]{1,40}$' -or $Engine -in @('.', '..')) { throw "Invalid engine id" }
@@ -160,8 +166,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'PGO changed a full board answer' }
         $pgoInfo = @{
             lto='thin'; training_runs=$TrainingRuns; training_lanes=$TrainingLanes
-            orders_sha256=(Get-FileHash -LiteralPath $TrainingOrders -Algorithm SHA256).Hash.ToLower()
-            profile_sha256=(Get-FileHash -LiteralPath $profile -Algorithm SHA256).Hash.ToLower()
+            orders_sha256=(Source-Hash $TrainingOrders)
+            profile_sha256=(Source-Hash $profile)
             training_result=$trainingResult; rustc=($rustDetails -join "`n")
         }
     } else {
@@ -175,7 +181,7 @@ try {
         else { 'libsimfleet_native_engine.so', "lib$stem$suffix.so" }
     $destination = Join-Path $Out $name
     Copy-Item -LiteralPath (Join-Path $target "release/$lib") -Destination $destination -Force
-    $hash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLower()
+    $hash = Source-Hash $destination
     Write-Utf8 ($destination + '.sha256') ($hash + '  ' + $name + "`n")
     Write-Utf8 (Join-Path $Out "$Engine.commit") ($found + "`n")
     Write-Utf8 (Join-Path $Out "$stem$suffix.patches") (($applied -join "`n") + "`n")
@@ -183,14 +189,14 @@ try {
     if (Test-Path -LiteralPath (Join-Path $root '.git')) { $wrapperCommit = (git -C $root rev-parse HEAD).Trim() }
     $sourceHashes = @{}
     foreach ($file in @(Get-Item (Join-Path $root 'native-engine/Cargo.toml')) + @(Get-ChildItem (Join-Path $root 'native-engine/src') -Filter '*.rs') + @(Get-Item (Join-Path $root 'src/json_numbers.rs'))) {
-        $sourceHashes[$file.FullName.Substring($root.Length + 1)] = (Get-FileHash -LiteralPath $file.FullName).Hash.ToLower()
+        $sourceHashes[$file.FullName.Substring($root.Length + 1)] = Source-Hash $file.FullName
     }
     $patchHashes = @{}
     foreach ($patchName in $applied) {
-        $patchHashes[$patchName] = (Get-FileHash -LiteralPath (Join-Path $root "native-engine/patches/$patchName")).Hash.ToLower()
+        $patchHashes[$patchName] = Source-Hash (Join-Path $root "native-engine/patches/$patchName")
     }
     $provenance = @{ engine=$Engine; revision=$revision; source=$found; wrapper=$wrapperCommit; wrapper_files=$sourceHashes; patch_files=$patchHashes; cpu=$Cpu; sha256=$hash; patches=$applied }
-    if ($Archive) { $provenance.archive_sha256 = (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLower() }
+    if ($Archive) { $provenance.archive_sha256 = Source-Hash $Archive }
     if ($pgoInfo) { $provenance.pgo = $pgoInfo }
     Write-Utf8 ($destination + '.build.json') ($provenance | ConvertTo-Json -Depth 5)
     Write-Output "Built $destination; run check-native before use. Source retained at $src"
