@@ -103,7 +103,7 @@ $names = @('SFE_ENGINE_ID','SFE_INLINE_OPTIMIZER','CARGO_TARGET_DIR','RUSTFLAGS'
 $previous = @{}
 foreach ($name in $names) { $previous[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
 try {
-    [Environment]::SetEnvironmentVariable('CARGO_ENCODED_RUSTFLAGS',$null,'Process')
+    Remove-Item -LiteralPath Env:CARGO_ENCODED_RUSTFLAGS -ErrorAction SilentlyContinue
     $env:SFE_ENGINE_ID = $Engine
     $env:SFE_INLINE_OPTIMIZER = if ($applied -contains '002-single-worker.patch') { '1' } else { '0' }
     $target = Join-Path $root 'target/native-engine'
@@ -139,7 +139,7 @@ try {
         # Encoded flags preserve paths containing spaces in both build phases.
         # Give the DLL an explicit profile path; do not rely on the host's CRT
         # environment/exit hooks to discover LLVM_PROFILE_FILE.
-        [Environment]::SetEnvironmentVariable('LLVM_PROFILE_FILE',$null,'Process')
+        Remove-Item -LiteralPath Env:LLVM_PROFILE_FILE -ErrorAction SilentlyContinue
         $encoded = @()
         foreach ($flag in $flags) { $encoded += ($flag -split ' ', 2) }
         $env:CARGO_ENCODED_RUSTFLAGS = ($encoded + @('-C', "profile-generate=$profiles")) -join [char]31
@@ -195,5 +195,8 @@ try {
     Write-Utf8 ($destination + '.build.json') ($provenance | ConvertTo-Json -Depth 5)
     Write-Output "Built $destination; run check-native before use. Source retained at $src"
 } finally {
-    foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name,$previous[$name],'Process') }
+    foreach ($name in $names) {
+        if ($null -eq $previous[$name]) { Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue }
+        else { [Environment]::SetEnvironmentVariable($name,$previous[$name],'Process') }
+    }
 }
