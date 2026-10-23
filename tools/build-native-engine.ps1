@@ -91,6 +91,8 @@ if (-not $NoPatch) {
             git -C $src apply -- $patch.FullName
             if ($LASTEXITCODE -ne 0) { throw "Patch failed: $($patch.Name)" }
             $applied += $patch.Name
+        } elseif ($patch.Name -eq '003-static-panel-metadata.patch') {
+            throw "Required memory-lifetime patch $($patch.Name) does not apply to $found; refusing a build that can leak per panel"
         } else { Write-Warning "Patch $($patch.Name) does not apply to $found; disabled" }
     }
 }

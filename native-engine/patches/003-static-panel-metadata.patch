@@ -13,7 +13,7 @@ diff --git a/engine/src/data/weapons/panel.rs b/engine/src/data/weapons/panel.rs
 index 5b5f1e1f60..10d7154a74 100644
 --- a/engine/src/data/weapons/panel.rs
 +++ b/engine/src/data/weapons/panel.rs
-@@ -452,25 +452,25 @@ pub fn base_panel_assembled(
+@@ -452,23 +452,23 @@ pub fn base_panel_assembled(
          melee_incarnon: None,
          // LEAKED ONCE so the panel can answer "what is this" and "what does it
          // draw" without a lookup — the two questions the Amp auras ask.
@@ -47,5 +47,3 @@ index 5b5f1e1f60..10d7154a74 100644
 +            })
 +        },
          form: FormKind::parse(&s.form),
-         // Empty until an evolution writes into it (data::evolutions::apply).
-         indirect: Vec::new(),
