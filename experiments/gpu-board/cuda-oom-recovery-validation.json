@@ -1,0 +1,53 @@
+{
+  "unit_tests": {
+    "passed": 57,
+    "ignored": 7,
+    "failed": 0
+  },
+  "oom_injection": {
+    "source": "protocol worker error 2 injection; not deliberate physical GPU exhaustion",
+    "failed_runs": 8000,
+    "next_run_limit": 4000,
+    "learned_context_preserved": true,
+    "pending_rows_released": true
+  },
+  "fleet": {
+    "engine": "4296a0964da6",
+    "runs": [
+      {
+        "mode": "gpu",
+        "complete_scores": 96,
+        "gpu_rows": 39,
+        "total_work": 164673469920,
+        "gpu_work": 66898597155,
+        "compute_memory_mib": 32768,
+        "available_memory_mib": null,
+        "job_limit_bytes": 34292629504,
+        "peak_commit_bytes": 6652194816,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "cpu_rows_during_gpu_recovery": 0,
+        "summary": "REPLAY tasks=96 lanes=4 seconds=20.203410"
+      },
+      {
+        "mode": "killed-gpu",
+        "complete_scores": 96,
+        "gpu_rows": 0,
+        "total_work": 164673469920,
+        "gpu_work": 0,
+        "compute_memory_mib": 32768,
+        "available_memory_mib": null,
+        "job_limit_bytes": 34292629504,
+        "peak_commit_bytes": 6620422144,
+        "worker_killed": true,
+        "fallback_observed": true,
+        "worker_restarted": true,
+        "cpu_rows_during_gpu_recovery": 59,
+        "summary": "REPLAY tasks=96 lanes=4 seconds=30.650701"
+      }
+    ]
+  },
+  "research_peak_private_bytes": 6705926144,
+  "limitation": "Validated on the local GPU. The remote 5090D driver allocation failure and exact CPU occupancy drop were not reproduced."
+}
