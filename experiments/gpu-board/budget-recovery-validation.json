@@ -1,0 +1,105 @@
+{
+  "unit_tests": {
+    "passed": 55,
+    "ignored": 7,
+    "failed": 0
+  },
+  "fleet": [
+    {
+      "engine": "4296a0964da6",
+      "runs": [
+        {
+          "mode": "gpu",
+          "complete_scores": 96,
+          "gpu_rows": 38,
+          "total_work": 164673469920,
+          "gpu_work": 65183248510,
+          "compute_memory_mib": 65536,
+          "available_memory_mib": null,
+          "job_limit_bytes": 68652367872,
+          "peak_commit_bytes": 6546001920,
+          "worker_killed": false,
+          "fallback_observed": false,
+          "worker_restarted": false,
+          "summary": "REPLAY tasks=96 lanes=4 seconds=20.260583"
+        },
+        {
+          "mode": "killed-gpu",
+          "complete_scores": 96,
+          "gpu_rows": 0,
+          "total_work": 164673469920,
+          "gpu_work": 0,
+          "compute_memory_mib": 65536,
+          "available_memory_mib": null,
+          "job_limit_bytes": 68652367872,
+          "peak_commit_bytes": 6508199936,
+          "worker_killed": true,
+          "fallback_observed": true,
+          "worker_restarted": true,
+          "summary": "REPLAY tasks=96 lanes=4 seconds=29.964176"
+        }
+      ]
+    },
+    {
+      "engine": "4296a0964da6",
+      "runs": [
+        {
+          "mode": "gpu",
+          "complete_scores": 48,
+          "gpu_rows": 1,
+          "total_work": 82336734960,
+          "gpu_work": 1715348645,
+          "compute_memory_mib": 4096,
+          "available_memory_mib": null,
+          "job_limit_bytes": 4227858432,
+          "peak_commit_bytes": 3410288640,
+          "worker_killed": false,
+          "fallback_observed": false,
+          "worker_restarted": false,
+          "summary": "REPLAY tasks=48 lanes=4 seconds=16.068177"
+        }
+      ]
+    }
+  ],
+  "resource_recovery": {
+    "engine": "4296a0964da6",
+    "records": [
+      {
+        "stage": "configured-process-limit",
+        "configured_mib": 65536,
+        "observed_bytes": 68652367872
+      },
+      {
+        "stage": "mixed",
+        "success": 16,
+        "fallback_ids": []
+      },
+      {
+        "stage": "mixed",
+        "success": 15,
+        "fallback_ids": [
+          30
+        ]
+      },
+      {
+        "stage": "larger-budget",
+        "private_kib": 384,
+        "fallback": null
+      },
+      {
+        "stage": "same-worker-after-failure",
+        "complete_scores": 4,
+        "runs": 4000,
+        "pid": 36056
+      },
+      {
+        "stage": "1536-kib-budget",
+        "complete_scores": 2,
+        "runs": 2000,
+        "pid": 36056
+      }
+    ]
+  },
+  "research_process_family_peak_private_bytes": 6679937024,
+  "note": "65536 MiB validates configured and OS-reported ceilings, not a 64 GiB allocation. Independent research Job capped physical execution to 8 GiB."
+}
