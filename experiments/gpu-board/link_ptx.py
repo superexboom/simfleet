@@ -19,6 +19,11 @@ p.add_argument("--architecture", choices=["sm_75", "sm_89", "sm_120"], default="
 p.add_argument("--max-registers", type=int, help="cap registers per thread to trade spills for resident warps")
 args = p.parse_args()
 lib = c.CDLL(str(args.library.resolve()))
+major, minor = c.c_uint(), c.c_uint()
+lib.nvJitLinkVersion.argtypes = [c.POINTER(c.c_uint), c.POINTER(c.c_uint)]
+if lib.nvJitLinkVersion(c.byref(major), c.byref(minor)):
+    raise RuntimeError("cannot read nvJitLink version")
+api_version = f"{major.value}_{minor.value}"
 functions = {}
 for name, params in [
     ("Create", [c.POINTER(c.c_void_p), c.c_uint, c.POINTER(c.c_char_p)]),
@@ -32,7 +37,7 @@ for name, params in [
     ("GetInfoLogSize", [c.c_void_p, c.POINTER(c.c_size_t)]),
     ("GetInfoLog", [c.c_void_p, c.c_void_p]),
 ]:
-    fn = getattr(lib, f"__nvJitLink{name}_12_9")
+    fn = getattr(lib, f"__nvJitLink{name}_{api_version}")
     fn.argtypes, fn.restype = params, c.c_int
     functions[name] = fn
 handle = c.c_void_p()
@@ -73,7 +78,7 @@ try:
     check(functions["GetLinkedCubin"](handle, data))
     args.out.write_bytes(data.raw)
     args.out.with_suffix(".info.log").write_text(log("Info"))
-    record = dict(units=len(paths), seconds=time.perf_counter()-start, cubin_bytes=size.value,
+    record = dict(units=len(paths), seconds=time.perf_counter()-start, cubin_bytes=size.value, linker_version=api_version,
                   sha256=hashlib.sha256(data.raw).hexdigest(), options=[x.decode() for x in options])
     args.out.with_suffix(".build.json").write_text(json.dumps(record, indent=2))
     print(json.dumps(record), flush=True)

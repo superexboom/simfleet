@@ -101,6 +101,12 @@ __device__ void wasm_rt_trap(int code) {
     asm volatile("exit;");
 }
 #ifdef SF_COW
+// Preserve the bits of cached 64-bit WASM loads/stores without byte-wise
+// memcpy lowering. Only the floating-point overload reinterprets the bits.
+template<class T> __device__ __forceinline__ T sf_gas_value(u64 bits) { return (T)bits; }
+template<> __device__ __forceinline__ f64 sf_gas_value<f64>(u64 bits) { return __longlong_as_double(bits); }
+template<class T> __device__ __forceinline__ u64 sf_gas_bits(T value) { return (u64)value; }
+template<> __device__ __forceinline__ u64 sf_gas_bits<f64>(f64 value) { return __double_as_longlong(value); }
 // Each warp stores the same 8-byte word of its 32 instances consecutively.
 // Immutable pages remain shared; only written 4 KiB pages get private storage.
 __device__ __forceinline__ u8* sf_private(wasm_rt_memory_t* m, u32 slot, u32 offset) {

@@ -34,6 +34,7 @@ def main():
     p.add_argument("--offline", action="store_true")
     p.add_argument("--architecture", choices=["75", "89", "120"], default="120")
     p.add_argument("--max-registers", type=int, help="optional register cap for the CUDA linker")
+    p.add_argument("--word-gas", action="store_true", help="experimental typed cached-gas access path")
     p.add_argument("--revision", type=int, choices=[1, 2], default=1)
     p.add_argument("--block", type=int, choices=[8, 16, 32, 64, 128, 256], default=32)
     p.add_argument("--reuse-from", type=pathlib.Path, help="reuse matching bridge/wire binaries for another GPU architecture")
@@ -109,7 +110,7 @@ codegen-units=1
     proof=json.loads((out/"proof/snapshot.json").read_text())
     generated=out/"generated"
     execute("wasm2c",[args.wasm2c.resolve(),wasm,"--no-debug-names","-n","sf","-o",generated/"sf.c"])
-    execute("retarget",[sys.executable,here/"retarget.py",generated/"sf.c",generated/"sf.cu","--cow","--gas-address",proof["gas_address"]])
+    execute("retarget",[sys.executable,here/"retarget.py",generated/"sf.c",generated/"sf.cu","--cow","--gas-address",proof["gas_address"],*(["--word-gas"] if args.word_gas else [])])
     execute("cuda",[sys.executable,here/"compile_cuda.py",generated/"sf.cu",generated/"sf.ptx","--nvrtc-dir",args.nvrtc_dir.resolve(),"--architecture","compute_"+args.architecture])
     execute("split",[sys.executable,here/"split_ptx.py",generated/"sf.ptx",out/"units"])
     execute("packed-entry",[sys.executable,here/"packed_kernel.py","--cuda",generated/"sf.cu","--ptx",generated/"sf.ptx","--out",generated/"packed.cu"])

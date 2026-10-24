@@ -1,0 +1,273 @@
+{
+  "engine": "5c64c380e5f2",
+  "device": "NVIDIA GeForce RTX 5080",
+  "production_client": "0.9.0-preview.13",
+  "deployed_this_round": false,
+  "profiling_scope": "One sampled lane in the first warp of a 1000-run batch; inclusive device clock cycles include children and SIMT waiting, so percentages must not be added. Instrumented output remains exact.",
+  "profiles": {
+    "burston": [
+      {
+        "symbol": "_RNvNtNtCs77DgFF9Mytm_12wfsim_engine5fight6flight13land_the_shot",
+        "calls": 3015,
+        "inclusive_fraction": 0.8007385471619477
+      },
+      {
+        "symbol": "_RNvNtNtCs77DgFF9Mytm_12wfsim_engine5fight5ticks13process_ticks",
+        "calls": 3739,
+        "inclusive_fraction": 0.10116812155496745
+      },
+      {
+        "symbol": "_RNvNtNtCs77DgFF9Mytm_12wfsim_engine5fight5procs12settle_procs",
+        "calls": 9888,
+        "inclusive_fraction": 0.07561138633634597
+      },
+      {
+        "symbol": "_RNvMs0_NtCsgis5MWNmFLl_8dlmalloc8dlmallocINtB5_8DlmallocNtNtB7_3sys6SystemE6mallocCsdl5sGgnNXvY_3std.llvm.2257014895971362088",
+        "calls": 6273,
+        "inclusive_fraction": 0.003244085271499934
+      },
+      {
+        "symbol": "_RNCNvNtNtCs77DgFF9Mytm_12wfsim_engine5fight5procs12settle_procss3_0B7_",
+        "calls": 365,
+        "inclusive_fraction": 0.001461124364217307
+      }
+    ],
+    "furis": [
+      {
+        "symbol": "_RNvNtNtCs77DgFF9Mytm_12wfsim_engine5fight6flight13land_the_shot",
+        "calls": 4307,
+        "inclusive_fraction": 0.7971450865612839
+      },
+      {
+        "symbol": "_RNvNtNtCs77DgFF9Mytm_12wfsim_engine5fight5procs12settle_procs",
+        "calls": 4046,
+        "inclusive_fraction": 0.16400393121977286
+      },
+      {
+        "symbol": "_RNvNtNtCs77DgFF9Mytm_12wfsim_engine5fight5ticks13process_ticks",
+        "calls": 4308,
+        "inclusive_fraction": 0.06040628036391193
+      },
+      {
+        "symbol": "_RNvMs0_NtCsgis5MWNmFLl_8dlmalloc8dlmallocINtB5_8DlmallocNtNtB7_3sys6SystemE6mallocCsdl5sGgnNXvY_3std.llvm.2257014895971362088",
+        "calls": 7161,
+        "inclusive_fraction": 0.0021227194774768665
+      },
+      {
+        "symbol": "_RNCNvNtNtCs77DgFF9Mytm_12wfsim_engine5fight5procs12settle_procss3_0B7_",
+        "calls": 20,
+        "inclusive_fraction": 5.815191613781286e-05
+      }
+    ]
+  },
+  "static_code": {
+    "old_ptx_bytes": 82261307,
+    "new_ptx_bytes": 67935724,
+    "hot_units": [
+      {
+        "wasm_function": 1445,
+        "unit_bytes": 5676489,
+        "local_byte_loads": 0,
+        "local_byte_stores": 0,
+        "local_word_loads": 6733,
+        "local_word_stores": 1179
+      },
+      {
+        "wasm_function": 1463,
+        "unit_bytes": 7082046,
+        "local_byte_loads": 0,
+        "local_byte_stores": 0,
+        "local_word_loads": 5982,
+        "local_word_stores": 910
+      }
+    ]
+  },
+  "byte_instruction_comparison": [
+    {
+      "function": 1445,
+      "before": {
+        "unit_bytes": 7252808,
+        "local_byte_loads": 9880,
+        "local_byte_stores": 10864
+      },
+      "after": {
+        "unit_bytes": 5676489,
+        "local_byte_loads": 0,
+        "local_byte_stores": 0
+      }
+    },
+    {
+      "function": 1463,
+      "before": {
+        "unit_bytes": 8903647,
+        "local_byte_loads": 11848,
+        "local_byte_stores": 9688
+      },
+      "after": {
+        "unit_bytes": 7082046,
+        "local_byte_loads": 0,
+        "local_byte_stores": 0
+      }
+    }
+  ],
+  "kernel_results": {
+    "baseline": {
+      "module_sha256": "d5921a62d57d25bf29b5e7b1b5d9026be11f9d588bfb3784f54e10e05ec52031",
+      "rows": 4,
+      "runs": 4000,
+      "block": 32,
+      "median_seconds": 12.72248209999998,
+      "exact_shards": 4000,
+      "exact_scores": 4
+    },
+    "word_gas_cuda129": {
+      "module_sha256": "1c7f6f4cff28ae3f59d2048ddbfb86a2893b6209a627026454144030041ae3f7",
+      "rows": 4,
+      "runs": 4000,
+      "block": 32,
+      "median_seconds": 12.16624469999988,
+      "exact_shards": 4000,
+      "exact_scores": 4
+    },
+    "word_gas_cuda134": {
+      "module_sha256": "713ed4bf03a9e04bda7bb1fda5c077e01a90872312ff8371a07166b69f413ec3",
+      "rows": 4,
+      "runs": 4000,
+      "block": 32,
+      "median_seconds": 12.03302629999962,
+      "exact_shards": 4000,
+      "exact_scores": 4
+    },
+    "outlined_pellet": {
+      "module_sha256": "074eb9aa26cf3d08157c8e0d76e69c9d0786ad319a30b86b4ac24ea7441f949b",
+      "rows": 4,
+      "runs": 4000,
+      "block": 32,
+      "median_seconds": 12.015731299999743,
+      "exact_shards": 4000,
+      "exact_scores": 4
+    }
+  },
+  "matched_fleet_after_reboot": {
+    "settings": {
+      "rows": 180,
+      "lanes": 12,
+      "compute_memory_mib": 8192,
+      "policy": "empty",
+      "client": "0.9.0-preview.13"
+    },
+    "control": {
+      "mode": "gpu",
+      "complete_scores": 180,
+      "gpu_rows": 39,
+      "total_work": 1477082727900,
+      "gpu_work": 221834788996,
+      "compute_memory_mib": 8192,
+      "available_memory_mib": null,
+      "job_limit_bytes": 8522825728,
+      "peak_commit_bytes": 6798807040,
+      "worker_killed": false,
+      "fallback_observed": false,
+      "worker_restarted": false,
+      "cpu_rows_during_gpu_recovery": 0,
+      "summary": "REPLAY tasks=180 lanes=12 seconds=63.210837"
+    },
+    "word_gas": {
+      "mode": "gpu",
+      "complete_scores": 180,
+      "gpu_rows": 39,
+      "total_work": 1477082727900,
+      "gpu_work": 267029345975,
+      "compute_memory_mib": 8192,
+      "available_memory_mib": null,
+      "job_limit_bytes": 8522825728,
+      "peak_commit_bytes": 6786486272,
+      "worker_killed": false,
+      "fallback_observed": false,
+      "worker_restarted": false,
+      "cpu_rows_during_gpu_recovery": 0,
+      "summary": "REPLAY tasks=180 lanes=12 seconds=62.938155"
+    }
+  },
+  "other_observations": {
+    "word_gas_before_reboot": {
+      "mode": "gpu",
+      "complete_scores": 180,
+      "gpu_rows": 40,
+      "total_work": 1477082727900,
+      "gpu_work": 225817334756,
+      "compute_memory_mib": 8192,
+      "available_memory_mib": null,
+      "job_limit_bytes": 8522825728,
+      "peak_commit_bytes": 6728482816,
+      "worker_killed": false,
+      "fallback_observed": false,
+      "worker_restarted": false,
+      "cpu_rows_during_gpu_recovery": 0,
+      "summary": "REPLAY tasks=180 lanes=12 seconds=69.105848"
+    },
+    "tail_probe_candidate": {
+      "mode": "gpu",
+      "complete_scores": 180,
+      "gpu_rows": 40,
+      "total_work": 1477082727900,
+      "gpu_work": 244441839308,
+      "compute_memory_mib": 8192,
+      "available_memory_mib": null,
+      "job_limit_bytes": 8522825728,
+      "peak_commit_bytes": 6795309056,
+      "worker_killed": false,
+      "fallback_observed": false,
+      "worker_restarted": false,
+      "cpu_rows_during_gpu_recovery": 0,
+      "summary": "REPLAY tasks=180 lanes=12 seconds=66.186666"
+    },
+    "note": "Pre/post reboot CPU timings differed 8-12%; not directly comparable. Tail scheduling candidate was not faster and was reverted."
+  },
+  "decisions": {
+    "word_gas": "Exact and ~4.6% faster in fixed kernel test; whole-fleet gain ~0.4% is inconclusive. Kept behind explicit --word-gas, not deployed.",
+    "cuda134": "Only ~1.1% faster than 12.9 in one bounded test; not selected.",
+    "outlined_pellet": "Only ~1.3% faster than word-gas; bridge replacement not justified. Source change remains isolated.",
+    "tail_probing": "Removed tail probes, but 66.187 s did not improve overall throughput. Candidate client archived, source reverted."
+  },
+  "validation": {
+    "cuda_memory": {
+      "cases": 64,
+      "operations_per_case": 1024,
+      "checks": [
+        {
+          "block": 8,
+          "capacity": 32,
+          "all_bytes_equal": true
+        },
+        {
+          "block": 32,
+          "capacity": 32,
+          "all_bytes_equal": true
+        },
+        {
+          "block": 32,
+          "capacity": 4,
+          "overflow_rejected": true
+        }
+      ]
+    },
+    "full_rust_suite_run": false,
+    "new_test_files": 0,
+    "candidate_results": "Full original shard, gas and score equality; 1000 runs per row",
+    "repeated_checks": "Only the full Fleet candidate repeated after unexpected reboot invalidated the timing comparison."
+  },
+  "recovery": {
+    "boot": "2026-10-24 12:02:48 Asia/Shanghai",
+    "unexpected_shutdown_reported": "2026-10-24 11:35:01 Asia/Shanghai",
+    "learning_entries_restored": 284,
+    "shutdown_cause": "Not established by generic Kernel-Power 41 / EventLog 6008 events."
+  },
+  "production_final": {
+    "main_pid": 17780,
+    "client_sha256": "48ac3f4a65b0b2adc32482c684ff46703a162add448e1e9cbe4d71256cb14412",
+    "running": true,
+    "gpu_pending_rows": 4,
+    "memory_limit_mib": 8192
+  }
+}

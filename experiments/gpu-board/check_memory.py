@@ -47,6 +47,11 @@ extern "C" __global__ void check(const u8* image, const Op* ops, u8* private_pag
     u32 i=blockIdx.x*blockDim.x+threadIdx.x;
     if(i>=64) return;
     status[i]=1;
+    // Cached i64/f64 accesses must preserve every bit, including NaN payloads.
+    u64 gas_bits = i & 1 ? 0x7ff8000000001234ULL : 0xfedcba9876543210ULL;
+    if (sf_gas_value<u64>(gas_bits) != gas_bits || sf_gas_bits(sf_gas_value<f64>(gas_bits)) != gas_bits) {
+        status[i]=3; return;
+    }
     wasm_rt_memory_t mem={(u8*)image,(u8*)image+65536,65536,1,2,65536,false,
         private_pages+(u64)(i/32)*capacity*4096*32,
         page_map+(u64)(i/32)*32*32,capacity,0,i%32,65536,*(const u64*)(image+64)};

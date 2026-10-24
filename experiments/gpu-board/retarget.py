@@ -32,6 +32,7 @@ def main():
     p.add_argument("out", type=pathlib.Path)
     p.add_argument("--cow", action="store_true", help="share immutable pages and transpose private pages across each warp")
     p.add_argument("--gas-address", type=int, help="counter address proven by the CPU bridge probe")
+    p.add_argument("--word-gas", action="store_true", help="experimental typed cached-gas accesses; preserves bits and metering")
     args = p.parse_args()
     if args.gas_address is not None and (not args.cow or args.gas_address % 8):
         p.error("gas cache requires COW and an aligned address")
@@ -151,14 +152,16 @@ extern "C" __global__ void sf_board(u8* snapshot, u8* private_pages, u32* page_m
     defines = "#define SF_COW 1\n" if args.cow else ""
     if args.gas_address is not None:
         defines += f"#define SF_GAS_ADDRESS {args.gas_address}ULL\n"
-        source = source.replace("result = sf_load<t1>(mem, addr);", "if (sizeof(t1) == 8 && addr == SF_GAS_ADDRESS) memcpy(&result, &mem->cached_gas, 8); else result = sf_load<t1>(mem, addr);")
-        source = source.replace("sf_store<t1>(mem, addr, wrapped);", "if (sizeof(t1) == 8 && addr == SF_GAS_ADDRESS) memcpy(&mem->cached_gas, &wrapped, 8); else sf_store<t1>(mem, addr, wrapped);")
+        load = "result = sf_gas_value<t1>(mem->cached_gas);" if args.word_gas else "memcpy(&result, &mem->cached_gas, 8);"
+        store = "mem->cached_gas = sf_gas_bits(wrapped);" if args.word_gas else "memcpy(&mem->cached_gas, &wrapped, 8);"
+        source = source.replace("result = sf_load<t1>(mem, addr);", f"if (sizeof(t1) == 8 && addr == SF_GAS_ADDRESS) {load} else result = sf_load<t1>(mem, addr);")
+        source = source.replace("sf_store<t1>(mem, addr, wrapped);", f"if (sizeof(t1) == 8 && addr == SF_GAS_ADDRESS) {store} else sf_store<t1>(mem, addr, wrapped);")
         kernel = kernel.replace("u64 answer = w2c_sf_sf_run", "instance.w2c_memory.cached_gas = *(const u64*)(snapshot + SF_GAS_ADDRESS);\n    u64 answer = w2c_sf_sf_run")
     result = defines + runtime + "\n" + instance + "\n" + source + "\n" + kernel
     args.out.write_text(result, newline="\n")
     meta = dict(source_sha256=hashlib.sha256(args.source.read_bytes()).hexdigest(),
                 cuda_sha256=hashlib.sha256(result.encode()).hexdigest(), table_entries=size,
-                removed_data_segments=segments, source_bytes=len(original), cuda_bytes=len(result), cow=args.cow, gas_address=args.gas_address)
+                removed_data_segments=segments, source_bytes=len(original), cuda_bytes=len(result), cow=args.cow, gas_address=args.gas_address, word_gas=args.word_gas)
     args.out.with_suffix(".json").write_text(json.dumps(meta, indent=2))
     print(json.dumps(meta))
 
