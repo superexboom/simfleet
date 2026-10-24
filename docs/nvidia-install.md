@@ -1,5 +1,7 @@
 # NVIDIA 测试包安装
 
+preview.14 增加 `sfg3`：更细的私有页和 16 位索引，在相同预算下运行更大批量。sfg3 必须配合 preview.14 或更新客户端；不要把其清单或内核覆盖进 sfg1/2 目录。解压后应形成 `engines/gpu/<引擎ID>-sfg3-sm120/` 等独立目录。客户端优先选择同引擎、同架构的 sfg3，再回落 sfg2/sfg1。当前本地套件为 `dac6ecbaf97e` / sm120，其他架构需要对应套件。性能与验证边界见 [私有页优化](gpu-private-pages.md)。
+
 本地吞吐测试版 preview.12 可使用独立的 `sfg2` 套件，并兼容下面列出的 `sfg1`。优先选择同引擎、同架构的 `sfg2`；探测上限为 12 秒，完整批次仍为 30 秒。实测范围和本地版变动见 [GPU 吞吐优化](gpu-throughput.md)。
 
 客户端：[v0.9.0-preview.11](https://github.com/superexboom/simfleet/releases/tag/v0.9.0-preview.11) 或更新版本。CPU 原生引擎：[engine-5c64c380e5f2](https://github.com/superexboom/simfleet/releases/tag/engine-5c64c380e5f2)，Windows 为 `5c64c380e5f2-sfe2-v3.dll`，使用 PGO＋ThinLTO。GPU 引擎：[gpu-5c64c380e5f2-sfg1](https://github.com/superexboom/simfleet/releases/tag/gpu-5c64c380e5f2-sfg1)。三个 Release 分开下载，不把引擎二进制塞进客户端压缩包。

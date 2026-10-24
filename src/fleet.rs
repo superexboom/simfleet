@@ -1747,8 +1747,9 @@ impl Fleet {
         });
         // Inspect only a bounded window of already leased work, leaving CPU
         // lanes free to take the rest. Never ask for artificial/duplicate rows.
-        for _ in 0..crate::gpu::MAX_ROWS {
-            if self.tasks.len()>=crate::gpu::MAX_ROWS*4+self.lanes()*2 || !self.start_row(){break;}
+        let gpu_rows=self.gpu.as_ref().expect("available").max_rows();
+        for _ in 0..gpu_rows {
+            if self.tasks.len()>=gpu_rows*4+self.lanes()*2 || !self.start_row(){break;}
         }
         let manager=self.gpu.as_ref().expect("available");
         let cpu_bytes=sys::process_memory().unwrap_or(0);

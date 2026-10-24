@@ -37,6 +37,7 @@ pub struct Policy {
     dirty: bool,
     save_at: u64,
     notice: Option<String>,
+    layout: super::MemoryLayout,
 }
 pub fn family(input: &Input) -> String {
     let r = &input.request;
@@ -106,7 +107,13 @@ impl Policy {
             dirty: false,
             save_at: 0,
             notice,
+            layout: super::MemoryLayout::default(),
         }
+    }
+    pub fn with_layout(mut self, layout:super::MemoryLayout)->Self {
+        self.layout=layout;
+        self.saved.entries.retain(|_,e|e.private_kib>=layout.minimum_kib());
+        self
     }
     pub fn classify(&self, input: &Input, now: u64) -> Option<&Entry> {
         self.saved
@@ -131,7 +138,7 @@ impl Policy {
         let previous = self.saved.entries.get(&family(input));
         self.store(family(input), Entry {
             allowed:false, until:now+BAD_TTL, updated:now,
-            private_kib:previous.map_or(192,|e|e.private_kib),
+            private_kib:previous.map_or(self.layout.minimum_kib(),|e|e.private_kib),
             reason:"probe interrupted before a result".into(),
             cpu_us:previous.map_or(0.0,|e|e.cpu_us),gpu_ms:previous.map_or(0.0,|e|e.gpu_ms),
             failures:previous.map_or(0,|e|e.failures),
@@ -156,22 +163,24 @@ impl Policy {
     }
     pub fn observed(&mut self, input: &Input, probe: &Probe, now: u64) -> bool {
         self.pending = None;
+        let used_kib=probe.max_pages.saturating_mul(self.layout.page_bytes as u32)/1024;
+        let headroom=if self.layout.compact(){12.max(used_kib/8)}else{48};
         let budget = super::PRIVATE_BUDGETS
             .into_iter()
-            .find(|k| *k >= probe.max_pages.saturating_add(12) * 4)
+            .find(|k| *k >= used_kib.saturating_add(headroom) && *k >= self.layout.minimum_kib())
             .unwrap_or(1536)
             .max(
                 self.saved
                     .entries
                     .get(&family(input))
-                    .map_or(192, |e| e.private_kib),
+                    .map_or(self.layout.minimum_kib(), |e| e.private_kib),
             );
-        let full_runs = (16000 * 192 / budget).min(16000) as f64;
+        let full_runs = self.layout.run_limit(budget) as f64;
         // Small samples cannot measure full occupancy. Require modest latency
         // and a conservative >one-core opportunity, then revise from full rows.
         let cpu_us = probe.cpu_ms * 1000.0 / probe.samples.max(1) as f64;
         let equivalent = cpu_us * full_runs / (probe.gpu_ms.max(1.0) * 2.0 * 1000.0);
-        let allowed = probe.gpu_ms <= 6000.0 && equivalent >= 1.0 && probe.max_pages <= 372;
+        let allowed = probe.gpu_ms <= 6000.0 && equivalent >= 1.0 && used_kib.saturating_add(headroom) <= 1536;
         let reason = if allowed {
             "probe passed"
         } else {
@@ -220,7 +229,8 @@ impl Policy {
         let key = family(input);
         let previous = self.saved.entries.get(&key);
         let current = input.private_kib.max(previous.map_or(0, |e| e.private_kib));
-        let budget = super::PRIVATE_BUDGETS.into_iter().find(|k| *k >= (current * 2).min(1536)).unwrap_or(1536);
+        let next = if self.layout.compact() { current + current/2 } else { current*2 };
+        let budget = super::PRIVATE_BUDGETS.into_iter().find(|k| *k >= next.min(1536)).unwrap_or(1536);
         let allowed = budget > current && previous.is_some_and(|e| e.allowed);
         let failures = previous.map_or(1, |e| e.failures.saturating_add(1));
         self.store(
@@ -479,6 +489,14 @@ mod tests {
         ));
         assert_eq!(p.classify(&input,31).unwrap().failures,2);
         assert_eq!(p.classify(&input,31).unwrap().until,30+BAD_TTL*2);
+        let mut compact=Policy::open(&file,"compact".into()).with_layout(super::super::MemoryLayout::checked(3,1024,2).unwrap());
+        assert!(compact.observed(&input,&Probe{samples:8,cpu_ms:32.0,gpu_ms:4500.0,max_pages:70},40));
+        assert_eq!(compact.budget(&input,41),96);
+        let mut expanded=input.clone();expanded.private_kib=96;
+        compact.resource_exhausted(&expanded,42);
+        assert_eq!(compact.budget(&input,43),160);
+        assert!(compact.observed(&input,&Probe{samples:8,cpu_ms:32.0,gpu_ms:4500.0,max_pages:70},44));
+        assert_eq!(compact.budget(&input,45),160);
         let _ = std::fs::remove_file(file);
     }
 }

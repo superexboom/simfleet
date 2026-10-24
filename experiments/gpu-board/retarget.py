@@ -33,7 +33,10 @@ def main():
     p.add_argument("--cow", action="store_true", help="share immutable pages and transpose private pages across each warp")
     p.add_argument("--gas-address", type=int, help="counter address proven by the CPU bridge probe")
     p.add_argument("--word-gas", action="store_true", help="experimental typed cached-gas accesses; preserves bits and metering")
+    p.add_argument("--cow-page-bytes", type=int, choices=[1024, 4096], default=4096)
+    p.add_argument("--sparse-page-map",action="store_true",help="allocate 64-entry page-map leaves in the private arena")
     args = p.parse_args()
+    if args.sparse_page_map and (not args.cow or args.cow_page_bytes!=1024):p.error("sparse maps require 1024-byte COW pages")
     if args.gas_address is not None and (not args.cow or args.gas_address % 8):
         p.error("gas cache requires COW and an aligned address")
     source = args.source.read_text()
@@ -124,7 +127,7 @@ extern "C" __global__ void sf_setup(u32* statuses) {{
     sf_shared_table[0] = wasm_rt_funcref_null_value;
     funcref_table_init(&table, {segment}, {entries}, {offset}, 0, {count}, NULL);
 }}
-extern "C" __global__ void sf_board(u8* snapshot, u8* private_pages, u32* page_map,
+extern "C" __global__ void sf_board(u8* snapshot, u8* private_pages, sf_page_index_t* page_map,
                                     u64 capacity, u64 snapshot_bytes, u32 private_capacity,
                                     u32 virtual_pages, u32 stack, u32 handle,
                                     u32 from, u32 count, u8* outputs, u32 output_stride,
@@ -136,7 +139,7 @@ extern "C" __global__ void sf_board(u8* snapshot, u8* private_pages, u32* page_m
     instance.w2c_0x5F_stack_pointer = stack;
     instance.w2c_memory = {{snapshot, snapshot + snapshot_bytes, 65536,
         snapshot_bytes/65536, capacity/65536, snapshot_bytes, false,
-        private_pages + (u64)(i/32)*private_capacity*4096*32,
+        private_pages + (u64)(i/32)*private_capacity*SF_COW_PAGE_BYTES*32,
         page_map + (u64)(i/32)*virtual_pages*32, private_capacity, 0, i%32, snapshot_bytes}};
     instance.w2c_T0 = {{sf_shared_table, {size}, {size}}};
     u64 answer = w2c_sf_sf_run(&instance, handle, from + i);
@@ -150,6 +153,8 @@ extern "C" __global__ void sf_board(u8* snapshot, u8* private_pages, u32* page_m
 '''
     runtime = pathlib.Path(__file__).with_name("runtime.cuh").read_text()
     defines = "#define SF_COW 1\n" if args.cow else ""
+    defines += f"#define SF_COW_PAGE_SHIFT {args.cow_page_bytes.bit_length()-1}\n"
+    if args.sparse_page_map:defines+="#define SF_COW_SPARSE_MAP 1\n"
     if args.gas_address is not None:
         defines += f"#define SF_GAS_ADDRESS {args.gas_address}ULL\n"
         load = "result = sf_gas_value<t1>(mem->cached_gas);" if args.word_gas else "memcpy(&result, &mem->cached_gas, 8);"
@@ -161,7 +166,9 @@ extern "C" __global__ void sf_board(u8* snapshot, u8* private_pages, u32* page_m
     args.out.write_text(result, newline="\n")
     meta = dict(source_sha256=hashlib.sha256(args.source.read_bytes()).hexdigest(),
                 cuda_sha256=hashlib.sha256(result.encode()).hexdigest(), table_entries=size,
-                removed_data_segments=segments, source_bytes=len(original), cuda_bytes=len(result), cow=args.cow, gas_address=args.gas_address, word_gas=args.word_gas)
+                removed_data_segments=segments, source_bytes=len(original), cuda_bytes=len(result), cow=args.cow, gas_address=args.gas_address, word_gas=args.word_gas,
+                cow_page_bytes=args.cow_page_bytes, page_index_bytes=2 if args.cow_page_bytes==1024 else 4,
+                page_map_region_bytes=65536 if args.sparse_page_map else args.cow_page_bytes)
     args.out.with_suffix(".json").write_text(json.dumps(meta, indent=2))
     print(json.dumps(meta))
 

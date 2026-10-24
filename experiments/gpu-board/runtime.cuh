@@ -12,6 +12,23 @@ typedef unsigned long long uintptr_t;
 typedef uint8_t u8; typedef int8_t s8; typedef uint16_t u16; typedef int16_t s16;
 typedef uint32_t u32; typedef int32_t s32; typedef uint64_t u64; typedef int64_t s64;
 typedef float f32; typedef double f64;
+#ifndef SF_COW_PAGE_SHIFT
+#define SF_COW_PAGE_SHIFT 12
+#endif
+#define SF_COW_PAGE_BYTES (1u << SF_COW_PAGE_SHIFT)
+#define SF_COW_PAGE_MASK (SF_COW_PAGE_BYTES - 1)
+#ifdef SF_COW_SPARSE_MAP
+#define SF_COW_MAP_SHIFT 16
+#else
+#define SF_COW_MAP_SHIFT SF_COW_PAGE_SHIFT
+#endif
+#if SF_COW_PAGE_SHIFT == 10
+typedef u16 sf_page_index_t;
+#elif SF_COW_PAGE_SHIFT == 12
+typedef u32 sf_page_index_t;
+#else
+#error Unsupported copy-on-write page layout
+#endif
 #define WASM_RT_CORE_TYPES_DEFINED
 #define WABT_BIG_ENDIAN 0
 #define WASM_RT_USE_SEGUE 0
@@ -69,7 +86,7 @@ struct wasm_rt_memory_t {
     bool is64;
 #ifdef SF_COW
     u8* private_pages;
-    u32* page_map;
+    sf_page_index_t* page_map;
     u32 private_capacity, used_pages, lane;
     u64 snapshot_bytes;
 #ifdef SF_GAS_ADDRESS
@@ -108,17 +125,38 @@ template<> __device__ __forceinline__ f64 sf_gas_value<f64>(u64 bits) { return _
 template<class T> __device__ __forceinline__ u64 sf_gas_bits(T value) { return (u64)value; }
 template<> __device__ __forceinline__ u64 sf_gas_bits<f64>(f64 value) { return __double_as_longlong(value); }
 // Each warp stores the same 8-byte word of its 32 instances consecutively.
-// Immutable pages remain shared; only written 4 KiB pages get private storage.
+// Immutable pages remain shared; only written pages get private storage.
 __device__ __forceinline__ u8* sf_private(wasm_rt_memory_t* m, u32 slot, u32 offset) {
-    return m->private_pages + (((u64)slot * 512 + offset / 8) * 32 + m->lane) * 8 + offset % 8;
+    return m->private_pages + (((u64)slot * (SF_COW_PAGE_BYTES / 8) + offset / 8) * 32 + m->lane) * 8 + offset % 8;
+}
+__device__ __forceinline__ u32 sf_mapped(wasm_rt_memory_t* m, u32 page) {
+#ifdef SF_COW_SPARSE_MAP
+    u32 directory = m->page_map[(u64)(page >> 6) * 32 + m->lane];
+    return directory ? *(sf_page_index_t*)sf_private(m,directory-1,(page & 63)*sizeof(sf_page_index_t)) : 0;
+#else
+    return m->page_map[(u64)page * 32 + m->lane];
+#endif
 }
 __device__ __noinline__ u32 sf_make_private(wasm_rt_memory_t* m, u32 page) {
-    u32& mapped = m->page_map[(u64)page * 32 + m->lane];
+#ifdef SF_COW_SPARSE_MAP
+    sf_page_index_t& directory=m->page_map[(u64)(page >> 6)*32+m->lane];
+    if (!directory) {
+        if (m->used_pages>=m->private_capacity || m->used_pages >= (sf_page_index_t)~0u) wasm_rt_trap(20);
+        u32 slot=m->used_pages++;
+        // The 64-entry leaf lives in the same bounded private arena. Untouched
+        // 64-KiB regions require only a zero directory entry, no leaf storage.
+        for (u32 off=0;off<64*sizeof(sf_page_index_t);off+=8) *(u64*)sf_private(m,slot,off)=0;
+        directory=slot+1;
+    }
+    sf_page_index_t& mapped=*(sf_page_index_t*)sf_private(m,directory-1,(page & 63)*sizeof(sf_page_index_t));
+#else
+    sf_page_index_t& mapped = m->page_map[(u64)page * 32 + m->lane];
+#endif
     if (mapped) return mapped - 1;
-    if (m->used_pages >= m->private_capacity) wasm_rt_trap(20);
+    if (m->used_pages >= m->private_capacity || m->used_pages >= (sf_page_index_t)~0u) wasm_rt_trap(20);
     u32 slot = m->used_pages++;
-    u64 base = (u64)page * 4096;
-    for (u32 off = 0; off < 4096; off += 8) {
+    u64 base = (u64)page * SF_COW_PAGE_BYTES;
+    for (u32 off = 0; off < SF_COW_PAGE_BYTES; off += 8) {
         u64 value = base + off < m->snapshot_bytes ? *(const u64*)(m->data + base + off) : 0;
         *(u64*)sf_private(m, slot, off) = value;
     }
@@ -130,8 +168,8 @@ __device__ __forceinline__ u8 sf_read_byte(wasm_rt_memory_t* m, u64 address) {
     if (address >= SF_GAS_ADDRESS && address < SF_GAS_ADDRESS + 8)
         return (u8)(m->cached_gas >> ((address - SF_GAS_ADDRESS) * 8));
 #endif
-    u32 page = address >> 12, offset = address & 4095;
-    u32 mapped = m->page_map[(u64)page * 32 + m->lane];
+    u32 page = address >> SF_COW_PAGE_SHIFT, offset = address & SF_COW_PAGE_MASK;
+    u32 mapped = sf_mapped(m,page);
     return mapped ? *sf_private(m, mapped - 1, offset) : address < m->snapshot_bytes ? m->data[address] : 0;
 }
 __device__ __forceinline__ void sf_write_byte(wasm_rt_memory_t* m, u64 address, u8 value) {
@@ -142,8 +180,8 @@ __device__ __forceinline__ void sf_write_byte(wasm_rt_memory_t* m, u64 address, 
         return;
     }
 #endif
-    u32 page = address >> 12, offset = address & 4095;
-    u32 slot = m->page_map[(u64)page * 32 + m->lane];
+    u32 page = address >> SF_COW_PAGE_SHIFT, offset = address & SF_COW_PAGE_MASK;
+    u32 slot = sf_mapped(m,page);
     if (!slot) slot = sf_make_private(m, page) + 1;
     *sf_private(m, slot - 1, offset) = value;
 }
@@ -154,8 +192,8 @@ __device__ __forceinline__ void sf_read(wasm_rt_memory_t* m, u64 address, void* 
         memcpy(out, &value, n); return;
     }
 #endif
-    u32 page = address >> 12, offset = address & 4095;
-    u32 mapped = m->page_map[(u64)page * 32 + m->lane];
+    u32 page = address >> SF_COW_PAGE_SHIFT, offset = address & SF_COW_PAGE_MASK;
+    u32 mapped = sf_mapped(m,page);
     if ((offset & 7) + n <= 8) {
         if (mapped) memcpy(out, sf_private(m, mapped - 1, offset), n);
         else if (address < m->snapshot_bytes) memcpy(out, m->data + address, n);
@@ -173,9 +211,9 @@ __device__ __forceinline__ void sf_write(wasm_rt_memory_t* m, u64 address, const
         return;
     }
 #endif
-    u32 page = address >> 12, offset = address & 4095;
+    u32 page = address >> SF_COW_PAGE_SHIFT, offset = address & SF_COW_PAGE_MASK;
     if ((offset & 7) + n <= 8) {
-        u32 slot = m->page_map[(u64)page * 32 + m->lane];
+        u32 slot = sf_mapped(m,page);
         if (!slot) slot = sf_make_private(m, page) + 1;
         memcpy(sf_private(m, slot - 1, offset), in, n);
     } else {
@@ -191,8 +229,8 @@ template<class T> __device__ __noinline__ T sf_load(wasm_rt_memory_t* m, u64 add
         && !(address < SF_GAS_ADDRESS + 8 && address + sizeof(T) > SF_GAS_ADDRESS)
 #endif
     ) {
-        u32 mapped = m->page_map[(address >> 12) * 32 + m->lane];
-        if (mapped) return *(const T*)sf_private(m, mapped - 1, address & 4095);
+        u32 mapped = sf_mapped(m,address >> SF_COW_PAGE_SHIFT);
+        if (mapped) return *(const T*)sf_private(m, mapped - 1, address & SF_COW_PAGE_MASK);
         if (address < m->snapshot_bytes) return *(const T*)(m->data + address);
         return T(0);
     }
@@ -204,10 +242,10 @@ template<class T> __device__ __noinline__ void sf_store(wasm_rt_memory_t* m, u64
         && !(address < SF_GAS_ADDRESS + 8 && address + sizeof(T) > SF_GAS_ADDRESS)
 #endif
     ) {
-        u32 page = address >> 12;
-        u32 mapped = m->page_map[(u64)page * 32 + m->lane];
+        u32 page = address >> SF_COW_PAGE_SHIFT;
+        u32 mapped = sf_mapped(m,page);
         if (!mapped) mapped = sf_make_private(m, page) + 1;
-        *(T*)sf_private(m, mapped - 1, address & 4095) = value;
+        *(T*)sf_private(m, mapped - 1, address & SF_COW_PAGE_MASK) = value;
         return;
     }
     sf_write(m, address, &value, sizeof(T));

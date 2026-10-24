@@ -1,0 +1,218 @@
+{
+  "measured_date": "2026-10-24",
+  "timezone": "Asia/Shanghai",
+  "device": "NVIDIA GeForce RTX 5080",
+  "benchmark_engine": "5c64c380e5f2",
+  "selected_layout": "flat 1024-byte COW pages, 16-bit indices",
+  "kernel_comparisons": {
+    "sfg2": {
+      "engine": "5c64c380e5f2",
+      "rows": 12,
+      "runs": 12000,
+      "block": 32,
+      "module_sha256": "d5921a62d57d25bf29b5e7b1b5d9026be11f9d588bfb3784f54e10e05ec52031",
+      "samples": [
+        {
+          "compute_seconds": 16.511792599999353,
+          "merge_seconds": 0.09208739999940008,
+          "total_seconds": 16.608361599999625,
+          "host_cpu_seconds": 0.09375,
+          "max_private_pages": 46,
+          "max_private_bytes": 188416
+        }
+      ],
+      "exact_shards": 12000,
+      "exact_scores": 12,
+      "cow_page_bytes": 4096,
+      "page_index_bytes": 4,
+      "allocated_private_kib": 256,
+      "page_map_region_bytes": 4096,
+      "page_map_bytes": 330240000,
+      "median_seconds": 16.608361599999625
+    },
+    "sfg3_flat": {
+      "engine": "5c64c380e5f2",
+      "rows": 18,
+      "runs": 18000,
+      "block": 32,
+      "module_sha256": "023ddfd5b8ec73dc59eca956e3a70e26cbfb6bd4d5a3817e3994e8ee1bc8dfab",
+      "samples": [
+        {
+          "compute_seconds": 19.181593199999952,
+          "merge_seconds": 0.13939790000040375,
+          "total_seconds": 19.327608099999452,
+          "host_cpu_seconds": 0.140625,
+          "max_private_pages": 119,
+          "max_private_bytes": 121856
+        }
+      ],
+      "exact_shards": 18000,
+      "exact_scores": 18,
+      "cow_page_bytes": 1024,
+      "page_index_bytes": 2,
+      "allocated_private_kib": 160,
+      "page_map_region_bytes": 1024,
+      "page_map_bytes": 991600640,
+      "median_seconds": 19.327608099999452
+    },
+    "sfg3_sparse": {
+      "engine": "5c64c380e5f2",
+      "rows": 18,
+      "runs": 18000,
+      "block": 32,
+      "module_sha256": "e75027527cd685a9b5ac6070e57b0acd2e90a043d89b33be4cbf3ae5bb57142f",
+      "samples": [
+        {
+          "compute_seconds": 22.72702509999999,
+          "merge_seconds": 0.13747679999960383,
+          "total_seconds": 22.872062199999164,
+          "host_cpu_seconds": 0.140625,
+          "max_private_pages": 127,
+          "max_private_bytes": 130048
+        }
+      ],
+      "exact_shards": 18000,
+      "exact_scores": 18,
+      "cow_page_bytes": 1024,
+      "page_index_bytes": 2,
+      "allocated_private_kib": 160,
+      "page_map_region_bytes": 65536,
+      "page_map_bytes": 15493760,
+      "median_seconds": 22.872062199999164
+    }
+  },
+  "fleet_comparison": {
+    "cpu_lanes": 8,
+    "rows": 240,
+    "runs_per_row": 1000,
+    "orders_sha256": "c9c5e2e7c1664842c1005b3399395ce4ed2519f9f1ffe43418ab05fc46491987",
+    "learning": "empty for each run",
+    "baseline": {
+      "seconds": 129.52964,
+      "complete_scores": 240,
+      "gpu_rows": 60,
+      "total_work": 1969443637200,
+      "gpu_work": 435956033652,
+      "compute_memory_mib": 8192,
+      "peak_commit_bytes": 6770601984,
+      "fallback_observed": false,
+      "worker_restarted": false
+    },
+    "candidate": {
+      "seconds": 111.304712,
+      "complete_scores": 240,
+      "gpu_rows": 87,
+      "total_work": 1969443637200,
+      "gpu_work": 534194489682,
+      "compute_memory_mib": 8192,
+      "peak_commit_bytes": 7640338432,
+      "fallback_observed": false,
+      "worker_restarted": false
+    },
+    "total_throughput_ratio": 1.16373905176629,
+    "gpu_work_per_wall_second_ratio": 1.4259763391130118,
+    "gpu_to_cpu_work_ratio": 0.37219634695884773,
+    "client_sha256": {
+      "old": "48ac3f4a65b0b2adc32482c684ff46703a162add448e1e9cbe4d71256cb14412",
+      "new": "2150876b0333cebc38fd87fcf1d7bc3800514613cd067966e6cc26ce1138ced1"
+    }
+  },
+  "limitations": [
+    "Single sequential old/new replay of a fixed mixed task queue; not an online score-rate guarantee.",
+    "Performance baseline uses engine 5c64c380e5f2. Current engine dac6ecbaf97e compatibility is validated separately.",
+    "Only RTX 5080 / sm120 runtime was exercised; other GPU architectures need their own build and validation."
+  ],
+  "cpu": "AMD Ryzen 7 9700X",
+  "driver": "616.92",
+  "verification": {
+    "existing_rust_cases": [
+      "gpu::tests::selection_and_bounds",
+      "gpu::tests::total_budget_sizes_batches_before_the_job_limit_is_hit",
+      "gpu::policy::tests::expensive_cpu_work_can_justify_a_slower_probe",
+      "gpu::tests::workload_timeouts_do_not_extend_or_reset_fault_backoff"
+    ],
+    "cuda_memory": "Existing differential checker passed for flat and sparse 1024-byte pages, including boundary access and bounded-arena exhaustion.",
+    "fleet": "Each replay checked all 240 final scores against the native reference; cross-replay total work and score/metric/work multiset matched.",
+    "full_suite_run": false
+  },
+  "final_client_sha256": "f0532b2dd150749a0e1e62897086a2bac4d2f67f1dbfc9a2d9bf3b7cfee67bf0",
+  "current_engine": {
+    "engine": "dac6ecbaf97e",
+    "source_revision": "4af28da691a2615831432e56af6319dcff9ab800",
+    "native_sha256": "612dda640bbd1b0b06e1f372ac958ed8b3206750e52b3bae5f932c000b9311a9",
+    "module": {
+      "engine": "dac6ecbaf97e",
+      "wasm_sha256": "4057c9774d7a083d208e250ad1a295f42115b97c2c3980ce676bf2d1eb7c46b5",
+      "wire_format": 1,
+      "gas_address": 6542280,
+      "schema": 1,
+      "revision": 3,
+      "block_threads": 32,
+      "host": "windows-x64-v3",
+      "module_sha256": "a3f3a4caf6b9b50512621098ff400dd9bc2d2d0bb4f28e8a348435868f9a8e9e",
+      "architecture": "compute_120",
+      "entrypoints": [
+        "sf_setup",
+        "sf_board",
+        "sf_board_packed"
+      ],
+      "wire_sha256": "e822169c5756c82d0263b5d559fe236855bc3e7e0f67a05d34ae88768e89a45f",
+      "device_validated": true,
+      "cow_page_bytes": 1024,
+      "page_index_bytes": 2,
+      "page_map_region_bytes": 1024,
+      "files": {
+        "engine.cubin": "a3f3a4caf6b9b50512621098ff400dd9bc2d2d0bb4f28e8a348435868f9a8e9e",
+        "bridge.wasm": "4057c9774d7a083d208e250ad1a295f42115b97c2c3980ce676bf2d1eb7c46b5",
+        "wire.dll": "e822169c5756c82d0263b5d559fe236855bc3e7e0f67a05d34ae88768e89a45f"
+      }
+    },
+    "initial_fleet_issue": "18,000-run batch was terminated at the old fixed 30-second deadline; sfg3 now scales the bounded deadline to 67.5 seconds for this batch. The failed replay returned correct CPU results but had no completed GPU rows.",
+    "fleet_validation": {
+      "engine": "dac6ecbaf97e",
+      "runs": [
+        {
+          "mode": "gpu",
+          "complete_scores": 96,
+          "gpu_rows": 18,
+          "total_work": 698164331904,
+          "gpu_work": 115601318604,
+          "compute_memory_mib": 8192,
+          "available_memory_mib": null,
+          "job_limit_bytes": 8522825728,
+          "peak_commit_bytes": 6891827200,
+          "worker_killed": false,
+          "fallback_observed": false,
+          "worker_restarted": false,
+          "cpu_rows_during_gpu_recovery": 0,
+          "summary": "REPLAY tasks=96 lanes=8 seconds=45.375525"
+        }
+      ]
+    }
+  },
+  "deployment": {
+    "client_sha256": "f0532b2dd150749a0e1e62897086a2bac4d2f67f1dbfc9a2d9bf3b7cfee67bf0",
+    "config_unchanged": true,
+    "version": "0.9.0-preview.14",
+    "running": true,
+    "engine": "dac6ecbaf97e",
+    "live_gpu_completion_observed": true,
+    "observed_weapon": "ocucor",
+    "observed_batch_rows": [
+      14,
+      11
+    ],
+    "observed_peak_job_bytes": 7031939072,
+    "observation": "Short live acceptance: GPU completed board rows and continued taking later batches while CPU ran. No online speedup percentage is inferred."
+  },
+  "packages": {
+    "simfleet-0.9.0-preview.14-windows-x64.zip": {
+      "bytes": 4495603,
+      "sha256": "cf47f050b5326de3e07d089cb42ad3519405ae66afd955a1a590538f56e56158"
+    },
+    "simfleet-gpu-dac6ecbaf97e-sfg3-sm120-windows-x64.zip": {
+      "bytes": 14274603,
+      "sha256": "2d446cac64759c999f058b8b4dd37e448f466a3266e615952d89b89ced646b9b"
+    }
+  }
+}

@@ -222,6 +222,7 @@ struct Runtime {
     wire: Wire,
     native: Option<super::native_probe::Native>,
     block_threads: u32,
+    layout: super::MemoryLayout,
 }
 impl Runtime {
     fn batch(
@@ -229,7 +230,7 @@ impl Runtime {
         inputs: &[Input],
         progress: &mut dyn FnMut(&str) -> Result<()>,
     ) -> Result<(Vec<Output>, super::BatchTiming)> {
-        super::validate_inputs(inputs)?;
+        self.layout.inputs(inputs)?;
         let began = Instant::now();
         progress("prepare")?;
         let mut jobs = Vec::new();
@@ -288,28 +289,30 @@ impl Runtime {
         ensure!(count <= MAX_RUNS, "GPU batch too large");
         let rounded = count.div_ceil(32) * 32;
         let capacity = maximum + 8 * 1024 * 1024;
-        let virtual_pages = capacity / 4096;
-        // Fixed slots 0..16 are snapshots, 16..24 are the bounded shared workspace.
+        let virtual_pages = capacity / self.layout.map_region_bytes;
+        let map_bytes = rounded * virtual_pages * self.layout.index_bytes;
+        // Snapshot and workspace slots never overlap, including 32-row batches.
+        let workspace = MAX_ROWS;
         let mut djobs = self
             .gpu
-            .buffer(16, std::mem::size_of_val(jobs.as_slice()))?;
+            .buffer(workspace, std::mem::size_of_val(jobs.as_slice()))?;
         self.gpu.upload(djobs, &jobs)?;
-        let mut downers = self.gpu.buffer(17, count * 4)?;
+        let mut downers = self.gpu.buffer(workspace+1, count * 4)?;
         self.gpu.upload(downers, &owners)?;
-        let mut dindices = self.gpu.buffer(18, count * 4)?;
+        let mut dindices = self.gpu.buffer(workspace+2, count * 4)?;
         self.gpu.upload(dindices, &indices)?;
         let private_kib = inputs.iter().map(|i| i.private_kib).max().unwrap_or(192);
-        let mut private = self.gpu.buffer(19, rounded * private_kib as usize * 1024)?;
-        let mut map = self.gpu.buffer(20, rounded * virtual_pages * 4)?;
-        self.gpu.clear(map, rounded * virtual_pages * 4)?;
-        let mut outputs = self.gpu.buffer(21, count * 8192)?;
-        let mut sizes = self.gpu.buffer(22, count * 4)?;
-        let mut pages = self.gpu.buffer(23, count * 4)?;
-        let mut statuses = self.gpu.buffer(24, count * 4)?;
+        let mut private = self.gpu.buffer(workspace+3, rounded * private_kib as usize * 1024)?;
+        let mut map = self.gpu.buffer(workspace+4, map_bytes)?;
+        self.gpu.clear(map, map_bytes)?;
+        let mut outputs = self.gpu.buffer(workspace+5, count * 8192)?;
+        let mut sizes = self.gpu.buffer(workspace+6, count * 4)?;
+        let mut pages = self.gpu.buffer(workspace+7, count * 4)?;
+        let mut statuses = self.gpu.buffer(workspace+8, count * 4)?;
         self.gpu
             .run("sf_setup", 1, 32, &mut [parameter(&mut statuses)])?;
         let mut cap = capacity as u64;
-        let mut private_pages = private_kib / 4;
+        let mut private_pages = (private_kib as usize * 1024 / self.layout.page_bytes) as u32;
         let mut vpages = virtual_pages as u32;
         let mut n = count as u32;
         let mut stride = 8192u32;
@@ -449,7 +452,7 @@ pub fn run(dir: &Path, engine_id: &str, native_path: Option<&Path>, memory_mib: 
     writeln!(
         stdout,
         "{}",
-        json!({"ready":true,"device":gpu.name,"architecture":manifest.architecture,"memory_free":gpu.memory_info()?.0,"memory_limit_bytes":memory_limit_bytes,"base_commit_bytes":crate::sys::process_memory(),"engine":engine_id,"revision":manifest.revision,"driver":gpu.driver_version()?,"probe":native.is_some()})
+        json!({"ready":true,"device":gpu.name,"architecture":manifest.architecture,"memory_free":gpu.memory_info()?.0,"memory_limit_bytes":memory_limit_bytes,"base_commit_bytes":crate::sys::process_memory(),"engine":engine_id,"revision":manifest.revision,"driver":gpu.driver_version()?,"probe":native.is_some(),"cow_page_bytes":manifest.cow_page_bytes,"page_index_bytes":manifest.page_index_bytes,"page_map_region_bytes":manifest.layout()?.map_region_bytes})
     )?;
     stdout.flush()?;
     let mut runtime = Runtime {
@@ -458,6 +461,7 @@ pub fn run(dir: &Path, engine_id: &str, native_path: Option<&Path>, memory_mib: 
         wire,
         native,
         block_threads: manifest.block_threads,
+        layout: manifest.layout()?,
     };
     let mut reader = std::io::stdin().lock();
     let mut line = String::new();

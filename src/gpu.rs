@@ -20,9 +20,43 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const MAX_ROWS: usize = 16;
-pub const MAX_RUNS: usize = 16_000;
-const PRIVATE_BUDGETS: [u32; 6] = [192, 256, 384, 512, 768, 1536];
+pub const MAX_ROWS: usize = 32;
+pub const MAX_RUNS: usize = 32_000;
+const PRIVATE_ARENA_KIB: usize = 16_000 * 192;
+const PRIVATE_BUDGETS: [u32; 10] = [64, 96, 128, 160, 192, 256, 384, 512, 768, 1536];
+
+#[derive(Clone, Copy, Debug)]
+pub struct MemoryLayout { pub page_bytes: usize, pub index_bytes: usize, pub map_region_bytes:usize }
+impl Default for MemoryLayout { fn default() -> Self { Self { page_bytes:4096,index_bytes:4,map_region_bytes:4096 } } }
+impl MemoryLayout {
+    fn checked(revision:u32,page_bytes:usize,index_bytes:usize)->Result<Self> {
+        ensure!(matches!((revision,page_bytes,index_bytes),(1|2,4096,4)|(3,1024,2)),"unsupported GPU memory layout");
+        Ok(Self{page_bytes,index_bytes,map_region_bytes:page_bytes})
+    }
+    fn with_regions(mut self,region_bytes:usize)->Result<Self> {
+        ensure!(region_bytes==self.page_bytes || (self.compact() && region_bytes==65536),"unsupported GPU page-map directory");
+        self.map_region_bytes=region_bytes;Ok(self)
+    }
+    fn compact(self)->bool { self.page_bytes==1024 }
+    fn max_runs(self)->usize { if self.compact(){MAX_RUNS}else{16_000} }
+    fn max_rows(self)->usize { if self.compact(){MAX_ROWS}else{16} }
+    fn minimum_kib(self)->u32 { if self.compact(){64}else{192} }
+    fn run_limit(self,kib:u32)->usize { self.max_runs().min(PRIVATE_ARENA_KIB/kib as usize) }
+    fn timeout(self,runs:u64,probe:bool)->Duration {
+        if probe { return Duration::from_secs(12); }
+        // Larger sfg3 batches need time to finish additional waves. Keep a
+        // hard bound, including preparation/merge, without relaxing probes.
+        let millis=if self.compact() {(runs.saturating_mul(30_000)/8_000).clamp(30_000,120_000)}else{30_000};
+        Duration::from_millis(millis)
+    }
+    fn inputs(self,inputs:&[Input])->Result<()> {
+        validate_inputs(inputs)?;
+        ensure!(inputs.len()<=self.max_rows() && inputs.iter().all(|r|r.private_kib>=self.minimum_kib()),"GPU batch incompatible with package layout");
+        let runs:usize=inputs.iter().map(|r|if r.probe{8}else{r.request["runs"].as_u64().unwrap_or(0) as usize}).sum();
+        ensure!(runs<=self.max_runs(),"GPU batch exceeds package run limit");
+        Ok(())
+    }
+}
 fn architecture_suffix(architecture: &str) -> Option<&str> {
     architecture.strip_prefix("compute_").filter(|suffix| {
         (2..=3).contains(&suffix.len()) && suffix.bytes().all(|b| b.is_ascii_digit())
@@ -39,10 +73,13 @@ pub fn memory_run_limit(total_mib: u64, cpu_bytes: u64, private_kib: u32) -> usi
     memory_run_limit_reserved(total_mib, cpu_bytes, 3072 << 20, private_kib)
 }
 fn memory_run_limit_reserved(total_mib: u64, cpu_bytes: u64, worker_reserve: u64, private_kib: u32) -> usize {
+    memory_run_limit_overhead(total_mib,cpu_bytes,worker_reserve,private_kib,64)
+}
+fn memory_run_limit_overhead(total_mib:u64,cpu_bytes:u64,worker_reserve:u64,private_kib:u32,overhead_kib:u64)->usize {
     let remaining =
         (total_mib << 20).saturating_sub(cpu_bytes.max(512 << 20).saturating_add(worker_reserve));
-    let affordable = (remaining / (u64::from(private_kib) + 64) / 1024) as usize;
-    (affordable.min(MAX_RUNS * 192 / private_kib as usize) / 1000) * 1000
+    let affordable = (remaining / (u64::from(private_kib) + overhead_kib) / 1024) as usize;
+    (affordable.min(MAX_RUNS).min(PRIVATE_ARENA_KIB / private_kib as usize) / 1000) * 1000
 }
 /// Physical availability is separate from the user's process commit ceiling.
 /// CUDA/WASM are already loaded when dispatch samples this value; only reserve
@@ -116,15 +153,25 @@ pub struct Manifest {
     pub files: BTreeMap<String, String>,
     #[serde(default = "default_block_threads")]
     pub block_threads: u32,
+    #[serde(default = "default_page_bytes")]
+    pub cow_page_bytes: usize,
+    #[serde(default = "default_index_bytes")]
+    pub page_index_bytes: usize,
+    #[serde(default)]
+    pub page_map_region_bytes: Option<usize>,
 }
 fn default_block_threads() -> u32 { 32 }
+fn default_page_bytes()->usize {4096}
+fn default_index_bytes()->usize {4}
 impl Manifest {
+    pub fn layout(&self)->Result<MemoryLayout> {MemoryLayout::checked(self.revision,self.cow_page_bytes,self.page_index_bytes)?.with_regions(self.page_map_region_bytes.unwrap_or(self.cow_page_bytes))}
     pub fn load(dir: &Path, engine: &str) -> Result<Self> {
         let m: Self = serde_json::from_slice(&std::fs::read(dir.join("engine.gpu.json"))?)?;
         ensure!(
-            m.schema == 1 && matches!(m.revision, 1 | 2) && m.wire_format == 1,
+            m.schema == 1 && matches!(m.revision, 1 | 2 | 3) && m.wire_format == 1,
             "unsupported GPU package ABI"
         );
+        m.layout()?;
         ensure!([8, 16, 32, 64, 128, 256].contains(&m.block_threads), "unsupported GPU block size");
         ensure!(
             m.engine == engine && m.host == "windows-x64-v3",
@@ -171,17 +218,18 @@ fn default_private_kib() -> u32 {
 fn fullest_batch<'a>(
     candidates: impl Iterator<Item = (&'a Input, String, u32)>,
     run_limit: &impl Fn(u32) -> usize,
+    max_rows: usize,
 ) -> Vec<Input> {
     let mut groups: Vec<(String, Vec<&Input>, usize, u32)> = Vec::new();
     for (row, key, budget) in candidates {
         let index = groups.iter().position(|g| g.0 == key).unwrap_or_else(|| {
-            groups.push((key, Vec::new(), 0, 192));
+            groups.push((key, Vec::new(), 0, 0));
             groups.len() - 1
         });
         let (_, rows, count, current_budget) = &mut groups[index];
         let next_budget = (*current_budget).max(budget);
         let runs = row.request["runs"].as_u64().unwrap_or(0) as usize;
-        if rows.len() < MAX_ROWS && *count + runs <= run_limit(next_budget) {
+        if rows.len() < max_rows && *count + runs <= run_limit(next_budget) {
             rows.push(row);
             *count += runs;
             *current_budget = next_budget;
@@ -277,7 +325,7 @@ pub fn validate_inputs(inputs: &[Input]) -> Result<()> {
     }
     let kib = inputs.iter().map(|i| i.private_kib).max().unwrap_or(192) as usize;
     ensure!(
-        runs <= MAX_RUNS && runs * kib <= MAX_RUNS * 192,
+        runs <= MAX_RUNS && runs * kib <= PRIVATE_ARENA_KIB,
         "GPU run budget exceeded"
     );
     Ok(())
@@ -314,7 +362,7 @@ fn validate_outputs(value: &Value, pending: &[u64]) -> Result<Vec<Output>> {
                     && probe.cpu_ms > 0.0
                     && probe.gpu_ms.is_finite()
                     && probe.gpu_ms >= 0.0
-                    && probe.max_pages <= 384,
+                    && probe.max_pages <= 1536,
                 "invalid GPU probe response"
             );
         } else if let Some(code) = row.fallback {
@@ -340,8 +388,10 @@ pub fn directory(engines: &Path, engine: &str) -> PathBuf {
 }
 fn directory_for(engines: &Path, engine: &str, architecture: &str) -> PathBuf {
     let suffix = architecture_suffix(architecture).unwrap_or("unsupported");
-    let tuned = engines.join("gpu").join(format!("{engine}-sfg2-sm{suffix}"));
-    if tuned.join("engine.gpu.json").is_file() { return tuned; }
+    for revision in [3,2] {
+        let tuned = engines.join("gpu").join(format!("{engine}-sfg{revision}-sm{suffix}"));
+        if tuned.join("engine.gpu.json").is_file() { return tuned; }
+    }
     engines
         .join("gpu")
         .join(format!("{engine}-sfg1-sm{suffix}"))
@@ -401,6 +451,7 @@ pub struct Manager {
     driver_error: Value,
     pub last_timing: Option<BatchTiming>,
     worker_base_commit: Option<u64>,
+    layout: MemoryLayout,
 }
 #[derive(Clone, Default)]
 pub struct View {
@@ -520,10 +571,11 @@ impl Manager {
             probe_supported: false,
             memory_mib,
             allocation_failure: false,
-            batch_limit: MAX_RUNS,
+            batch_limit: 16_000,
             driver_error: Value::Null,
             last_timing: None,
             worker_base_commit: None,
+            layout: MemoryLayout::default(),
         })
     }
     pub fn available(&self) -> bool {
@@ -585,8 +637,9 @@ impl Manager {
             candidates.iter().filter(|i| self.accepts(i))
                 .map(|row| (row, policy::family(row), policy.budget(row, now))),
             &|budget| run_limit(budget)
-                .min(MAX_RUNS * 192 / budget as usize)
+                .min(self.layout.run_limit(budget))
                 .min(device_run_limit(self.device_available_bytes, budget)),
+            self.layout.max_rows(),
         );
         let count: usize = full.iter().map(|row| row.request["runs"].as_u64().unwrap_or(0) as usize).sum();
         let budget = full.first().map_or(192, |row| row.private_kib);
@@ -595,7 +648,7 @@ impl Manager {
         if count
             >= 4000
                 .min(run_limit(budget))
-                .min(MAX_RUNS * 192 / budget as usize)
+                .min(self.layout.run_limit(budget))
                 .min(device_run_limit(self.device_available_bytes, budget))
             && !full.is_empty()
         {
@@ -625,6 +678,10 @@ impl Manager {
     pub fn memory_runs(&self, cpu_bytes: u64, private_kib: u32) -> usize {
         // Driver stack/module storage scales with the device. Leave a GiB for
         // snapshots, lazy tables and host output beyond the measured base.
+        if self.layout.compact() {
+            let reserve=self.worker_base_commit.map_or(3072<<20,|b|b.saturating_add(1024<<20).max(2048<<20));
+            return memory_run_limit_overhead(self.memory_mib,cpu_bytes,reserve,private_kib,if self.layout.map_region_bytes==65536 {64}else{96});
+        }
         match self.worker_base_commit {
             Some(bytes) => memory_run_limit_reserved(self.memory_mib, cpu_bytes,
                 bytes.saturating_add(1024 << 20).max(2048 << 20), private_kib),
@@ -632,10 +689,11 @@ impl Manager {
         }
     }
     pub fn max_runs_for(&self, private_kib: u32) -> usize {
-        (MAX_RUNS * 192 / private_kib as usize)
+        self.layout.run_limit(private_kib)
             .min(device_run_limit(self.device_available_bytes, private_kib))
             .min(self.batch_limit)
     }
+    pub fn max_rows(&self)->usize {self.layout.max_rows()}
     pub fn batch_limit(&self) -> usize {
         self.batch_limit
     }
@@ -681,7 +739,7 @@ impl Manager {
                 i
             })
             .collect();
-        validate_inputs(&inputs)?;
+        self.layout.inputs(&inputs)?;
         self.probing = inputs[0].probe;
         if self.probing {
             if let Some(p) = &mut self.policy {
@@ -838,6 +896,15 @@ impl Manager {
                             ),
                         );
                     }
+                    self.layout = match MemoryLayout::checked(value["revision"].as_u64().unwrap_or(1) as u32,
+                        value["cow_page_bytes"].as_u64().unwrap_or(4096) as usize,
+                        value["page_index_bytes"].as_u64().unwrap_or(4) as usize)
+                        .and_then(|l|l.with_regions(value["page_map_region_bytes"].as_u64().unwrap_or(l.page_bytes as u64) as usize)) {
+                        Ok(layout)=>layout, Err(e)=>return Some(self.failure(e)),
+                    };
+                    self.private_kib=self.layout.minimum_kib();
+                    self.batch_limit=self.batch_limit.min(self.layout.max_runs());
+                    if self.finished==0 && self.fallback_count==0 && self.last_error.is_empty(){self.batch_limit=self.layout.max_runs();}
                     self.probe_supported = value["probe"] == true;
                     self.worker_base_commit = value["base_commit_bytes"].as_u64().filter(|n| *n > 0);
                     self.device_available_bytes = value["memory_free"].as_u64().unwrap_or(0);
@@ -860,7 +927,7 @@ impl Manager {
                             .unwrap_or(&self.report_dir)
                             .join("gpu-policy.json"),
                         binding,
-                    ));
+                    ).with_layout(self.layout));
                     self.since = Instant::now();
                     return Some(Event::Ready(
                         value["device"].as_str().unwrap_or("NVIDIA").into(),
@@ -964,7 +1031,7 @@ impl Manager {
             }
             Err(mpsc::TryRecvError::Empty) => {
                 let limit = if self.ready {
-                    Duration::from_secs(if self.probing { 12 } else { 30 })
+                    self.layout.timeout(self.pending_runs,self.probing)
                 } else {
                     Duration::from_secs(180)
                 };
@@ -1093,6 +1160,12 @@ time.sleep(5)
     }
     #[test]
     fn workload_timeouts_do_not_extend_or_reset_fault_backoff() {
+        let compact=MemoryLayout::checked(3,1024,2).unwrap();
+        assert_eq!(compact.timeout(8,true),Duration::from_secs(12));
+        assert_eq!(compact.timeout(8000,false),Duration::from_secs(30));
+        assert_eq!(compact.timeout(18000,false),Duration::from_millis(67500));
+        assert_eq!(compact.timeout(32000,false),Duration::from_secs(120));
+        assert_eq!(MemoryLayout::default().timeout(16000,false),Duration::from_secs(30));
         let mut recovery = Recovery::default();
         assert_eq!(recovery.failure(false), Duration::from_secs(15));
         for _ in 0..20 {
@@ -1102,6 +1175,12 @@ time.sleep(5)
     }
     #[test]
     fn total_budget_sizes_batches_before_the_job_limit_is_hit() {
+        let sparse=MemoryLayout::checked(3,1024,2).unwrap().with_regions(65536).unwrap();
+        assert!(MemoryLayout::default().with_regions(65536).is_err());
+        assert_eq!(sparse.map_region_bytes,65536);
+        let small=memory_run_limit_overhead(8192,512<<20,4096<<20,96,64);
+        let flat=memory_run_limit_overhead(8192,512<<20,4096<<20,96,96);
+        assert!(small>flat && small<=MAX_RUNS);
         // A small card with <=1 GiB of loaded driver/module storage can use
         // four 256-KiB rows under the user's 4-GiB ceiling, not just one.
         assert_eq!(memory_run_limit_reserved(4096, 256 << 20, 2048 << 20, 256), 4000);
@@ -1198,11 +1277,19 @@ time.sleep(5)
     fn selection_and_bounds() {
         let candidates: Vec<_> = (0..5).map(row).collect();
         let select = |limit| fullest_batch(candidates.iter().map(|r|
-            (r, if r.id == 0 { "old-short" } else { "ready" }.into(), 384)), &|_| limit);
+            (r, if r.id == 0 { "old-short" } else { "ready" }.into(), 384)), &|_| limit,16);
         let batch = select(8000);
         assert_eq!(batch.iter().map(|r| r.id).collect::<Vec<_>>(), [1, 2, 3, 4]);
         assert!(batch.iter().all(|r| r.private_kib == 384));
         assert_eq!(select(2000).len(), 2);
+        let compact=MemoryLayout::checked(3,1024,2).unwrap();
+        let rows:Vec<_>=(0..32).map(|i|{let mut r=row(i);r.private_kib=96;r}).collect();
+        assert!(compact.inputs(&rows).is_ok());
+        assert!(MemoryLayout::default().inputs(&rows).is_err());
+        assert!(MemoryLayout::checked(2,1024,2).is_err());
+        assert_eq!(fullest_batch(rows.iter().map(|r|(r,"same".into(),96)),&|k|compact.run_limit(k),compact.max_rows()).len(),32);
+        assert!(compact.run_limit(96)>MemoryLayout::default().run_limit(192));
+        assert!(memory_run_limit_reserved(8192,512<<20,4096<<20,96)<32000);
         assert!(validate_inputs(&[row(1)]).is_ok());
         assert!(validate_inputs(&[]).is_err());
         assert!(validate_inputs(&[row(1), row(1)]).is_err());

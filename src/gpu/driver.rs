@@ -176,7 +176,7 @@ impl Cuda {
     /// A fixed number of slots retain their bounded maximum, never one allocation per row.
     pub fn buffer(&mut self, slot: usize, bytes: usize) -> Result<u64> {
         ensure!(
-            slot < 32 && bytes > 0 && bytes <= 4usize << 30,
+            slot < super::MAX_ROWS + 9 && bytes > 0 && bytes <= 4usize << 30,
             "GPU allocation outside budget"
         );
         self.buffers

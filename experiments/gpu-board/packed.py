@@ -53,6 +53,12 @@ def main():
     if len({(m["engine"], m["wasm_sha256"], m["gas_address"]) for m, _ in entries}) != 1:
         raise ValueError("incompatible snapshots")
     module_info = validate_module(args.module, [m for m, _ in entries], "sf_board_packed", args.wire_library)
+    page_bytes = module_info.get("cow_page_bytes", 4096)
+    index_bytes = module_info.get("page_index_bytes", 4)
+    map_region_bytes=module_info.get("page_map_region_bytes",page_bytes)
+    if (page_bytes, index_bytes) not in [(4096, 4), (1024, 2)]:
+        raise ValueError("unsupported COW layout")
+    if map_region_bytes not in (page_bytes,65536) or (map_region_bytes==65536 and page_bytes!=1024):raise ValueError("unsupported COW map")
     rows = [index for _ in range(args.copies) for index in range(len(entries))]
     count = sum(entries[i][0]["request"]["runs"] for i in rows)
     if count > 65536: p.error("batch exceeds 65,536-run bound")
@@ -83,9 +89,9 @@ def main():
         gpu.upload(downers, own); gpu.upload(dindices, ind)
         rounded = (count + 31) // 32 * 32
         capacity = max(len(blob) for _, blob in entries) + 8 * 1024**2
-        virtual_pages = capacity // 4096
+        virtual_pages = capacity // map_region_bytes
         private = gpu.allocate(rounded * args.private_kib * 1024)
-        page_map = gpu.allocate(rounded * virtual_pages * 4)
+        page_map = gpu.allocate(rounded * virtual_pages * index_bytes)
         stride = 8192
         outputs = gpu.allocate(count * stride)
         lengths = gpu.allocate(count * 4); statuses = gpu.allocate(count * 4); pages = gpu.allocate(count * 4)
@@ -94,7 +100,7 @@ def main():
         gpu.driver.cuMemsetD8_v2.argtypes = [c.c_uint64, c.c_ubyte, c.c_size_t]
         gpu.launch("sf_setup", 1, [statuses])
         parameters = [djobs, downers, dindices, private, page_map, c.c_uint64(capacity),
-                      c.c_uint(args.private_kib//4), c.c_uint(virtual_pages), c.c_uint(count),
+                      c.c_uint(args.private_kib*1024//page_bytes), c.c_uint(virtual_pages), c.c_uint(count),
                       outputs, c.c_uint(stride), lengths, pages, statuses]
         expected_scores = []
         for meta, _ in entries:
@@ -112,7 +118,7 @@ def main():
                     baseline_seconds = time.perf_counter() - started
                 mixed_start = time.perf_counter(); cpu_future = control.submit(cpu_rows, args.cpu_rows)
             started = time.perf_counter(); cpu_started = time.thread_time()
-            gpu.check(gpu.driver.cuMemsetD8_v2(page_map, 0, rounded*virtual_pages*4))
+            gpu.check(gpu.driver.cuMemsetD8_v2(page_map, 0, rounded*virtual_pages*index_bytes))
             gpu.launch("sf_board_packed", count, parameters, block_size=args.block)
             gpu.synchronize()
             compute = time.perf_counter()-started
@@ -130,7 +136,7 @@ def main():
                 scores.append(score)
             merged = time.perf_counter()-merge_started
             sample = dict(compute_seconds=compute, merge_seconds=merged, total_seconds=time.perf_counter()-started,
-                          host_cpu_seconds=time.thread_time()-cpu_started, max_private_pages=max(used))
+                          host_cpu_seconds=time.thread_time()-cpu_started, max_private_pages=max(used), max_private_bytes=max(used)*page_bytes)
             if trial: record["samples"].append(sample)
             print(json.dumps(dict(trial=trial, **sample)), flush=True)
         if cpu_future:
@@ -156,6 +162,9 @@ def main():
                     if sizes[a] != sizes[b] or view[a*stride:a*stride+sizes[a]] != view[b*stride:b*stride+sizes[b]]:
                         raise AssertionError("repeated task shard changed")
         record.update(exact_shards=count, exact_scores=len(rows), scores=scores,
+                      cow_page_bytes=page_bytes, page_index_bytes=index_bytes, allocated_private_kib=args.private_kib,
+                      page_map_region_bytes=map_region_bytes,
+                      page_map_bytes=rounded*virtual_pages*index_bytes,
                       median_seconds=statistics.median(x["total_seconds"] for x in record["samples"]))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(record,indent=2)+"\n")

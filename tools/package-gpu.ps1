@@ -4,10 +4,11 @@ $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 $src=(Resolve-Path -LiteralPath $Source).Path
 $info=Get-Content -Raw -LiteralPath (Join-Path $src 'engine.gpu.json') | ConvertFrom-Json
-if ($info.schema -ne 1 -or $info.revision -notin @(1,2) -or $info.host -ne 'windows-x64-v3' -or $info.architecture -notmatch '^compute_[0-9]{2,3}$' -or $info.engine -notmatch '^[a-f0-9]{12}$') {throw 'Unsupported GPU package identity'}
+if ($info.schema -ne 1 -or $info.revision -notin @(1,2,3) -or $info.host -ne 'windows-x64-v3' -or $info.architecture -notmatch '^compute_[0-9]{2,3}$' -or $info.engine -notmatch '^[a-f0-9]{12}$') {throw 'Unsupported GPU package identity'}
+if ($info.revision -eq 3 -and ($info.cow_page_bytes -ne 1024 -or $info.page_index_bytes -ne 2)) {throw 'Unsupported sfg3 memory layout'}
 $sm = $info.architecture -replace '^compute_', 'sm'
 $validation = if ($info.device_validated -eq $false) { 'Cross-compiled only; target GPU runtime validation is still required. Automatic per-task WASM checks remain enabled.' } else { 'Validated on the matching local GPU; each task retains its WASM correctness check.' }
-$minimumClient = if ($info.revision -eq 2) { '0.9.0-preview.12' } else { '0.9.0-preview.7' }
+$minimumClient = if ($info.revision -eq 3) { '0.9.0-preview.14' } elseif ($info.revision -eq 2) { '0.9.0-preview.12' } else { '0.9.0-preview.7' }
 foreach($name in @('engine.cubin','bridge.wasm','wire.dll')) {
     $actual=(Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $src $name)).Hash.ToLowerInvariant()
     if ($actual -ne $info.files.$name) {throw "GPU hash mismatch: $name"}

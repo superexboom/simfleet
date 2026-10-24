@@ -81,10 +81,14 @@ def main():
         dimage = gpu.allocate(len(snapshot))
         rounded_count = (args.count + 31) // 32 * 32
         capacity = len(snapshot) + 8 * 1024**2
-        virtual_pages = capacity // 4096
-        private_pages = args.private_kib // 4
+        page_bytes=module_info.get("cow_page_bytes",4096)
+        index_bytes=module_info.get("page_index_bytes",4)
+        map_region_bytes=module_info.get("page_map_region_bytes",page_bytes)
+        if (page_bytes,index_bytes,map_region_bytes) not in [(4096,4,4096),(1024,2,1024),(1024,2,65536)]:raise ValueError("unsupported COW layout")
+        virtual_pages = capacity // map_region_bytes
+        private_pages = args.private_kib * 1024 // page_bytes
         memories = gpu.allocate(args.private_kib * 1024 * rounded_count if args.cow else len(snapshot) * args.count)
-        page_map = gpu.allocate(virtual_pages * rounded_count * 4) if args.cow else None
+        page_map = gpu.allocate(virtual_pages * rounded_count * index_bytes) if args.cow else None
         pages_used = gpu.allocate(args.count * 4) if args.cow else None
         outputs = gpu.allocate(output_stride * args.count)
         lengths = gpu.allocate(args.count * 4)
@@ -122,7 +126,7 @@ def main():
                 cpu_future = control.submit(cpu_rows, args.cpu_rows)
             started = time.perf_counter()
             if args.cow:
-                gpu.check(gpu.driver.cuMemsetD8_v2(page_map, 0, virtual_pages * rounded_count * 4))
+                gpu.check(gpu.driver.cuMemsetD8_v2(page_map, 0, virtual_pages * rounded_count * index_bytes))
             else:
                 gpu.launch("sf_clone", min(len(snapshot) * args.count, 65536),
                            [dimage, memories, c.c_uint64(len(snapshot)), c.c_uint(args.count)])
@@ -170,7 +174,7 @@ def main():
         if args.cow and not any(status):
             used = (c.c_uint * args.count)()
             gpu.download(used, pages_used)
-            report["private_pages"] = dict(limit=private_pages, min=min(used), max=max(used))
+            report["private_pages"] = dict(limit=private_pages, min=min(used), max=max(used),page_bytes=page_bytes)
         report["statuses"] = list(status)
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(report, indent=2))
