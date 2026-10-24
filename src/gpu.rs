@@ -785,6 +785,7 @@ impl Manager {
             .as_mut()
             .and_then(|c| c.try_wait().ok().flatten())
             .map(|s| s.to_string());
+        self.fallback_count+=self.pending_inputs.iter().filter(|i|!i.probe).count() as u64;
         self.persist_failure(&error, exit.as_deref());
         self.failed = true;
         self.ready = false;
@@ -1077,7 +1078,7 @@ mod tests {
 print(json.dumps(dict(ready=True,device='test GPU',engine='test',revision=1,driver=12090,probe=True,memory_free=17179869184,memory_limit_bytes=8522825728)),flush=True)
 json.loads(sys.stdin.readline())
 print(json.dumps(dict(error='CUDA driver error 2 (CUDA_ERROR_OUT_OF_MEMORY) at cuMemAlloc_v2',cuda_code=2,cuda_operation='cuMemAlloc_v2')),flush=True)
-time.sleep(5)
+sys.stdin.read()
 "#;
         let mut cmd = Command::new(if cfg!(windows) { "python" } else { "python3" });
         cmd.arg("-u").arg("-c").arg(script);
@@ -1115,6 +1116,8 @@ time.sleep(5)
                 r
             })
             .collect();
+        assert!(!m.policy.as_ref().unwrap().can_probe(crate::sys::now_ms()));
+        assert_eq!(m.select(&rows,&|_|16000).len(),8);
         m.submit(&rows).unwrap();
         loop {
             if let Some(Event::Failed(_)) = m.poll() {
@@ -1124,6 +1127,7 @@ time.sleep(5)
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(m.allocation_failure && m.retryable && m.pending.is_empty());
+        assert_eq!(m.view().fallback,8);
         assert_eq!(m.batch_limit(), 4000);
         assert_eq!(m.max_runs_for(192), 4000);
         assert!(m

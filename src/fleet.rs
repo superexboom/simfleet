@@ -1629,9 +1629,12 @@ impl Fleet {
     /// Fill every free lane: the oldest task with a job for it, honouring
     /// leaders; lanes still free start a pack's next row.
     fn dispatch(&mut self) {
+        let began=Instant::now();
         // Keep ready CPU work moving before GPU polling/preparation/cleanup.
         self.fill_lanes(false);
+        let before_gpu=began.elapsed().as_millis();
         self.dispatch_gpu();
+        let after_gpu=began.elapsed().as_millis();
         for _ in 0..16 {
             if self.fill_lanes(false) == 0 || !self.start_row() {
                 break;
@@ -1641,6 +1644,9 @@ impl Fleet {
         // would otherwise idle. A single task can still use the full budget.
         if crate::placement::active() { self.fill_lanes(true); }
         self.ui.status(|s| s.activity(Instant::now(), self.pool.computing(), self.gpu.as_ref().is_some_and(|g|g.computing())));
+        if began.elapsed()>=Duration::from_millis(200) {
+            self.trace.event(json!({"event":"dispatch_slow","elapsed_ms":began.elapsed().as_millis(),"cpu_fill_ms":before_gpu,"gpu_dispatch_ms":after_gpu-before_gpu,"lanes":self.lanes(),"cpu_pending_lanes":(0..self.lanes()).filter(|l|self.pool.pending(*l)>0).count(),"active_tasks":self.tasks.len(),"held_rows":self.packs.iter().map(|p|p.rows.len()).sum::<usize>()}));
+        }
     }
 
     fn release_gpu_rows(&mut self) {
@@ -1780,7 +1786,7 @@ impl Fleet {
         if rows.is_empty() || selected<required {self.ui.status(|s|s.gpu.state=if held==0{"待机：等待新任务".into()}else if held<=32{"待机：CPU收尾".into()}else if selected==0{"待机：暂缓场景或探测间隔".into()}else{format!("待机：合适任务 {selected}/{required}次")});return;}
         match self.gpu.as_mut().expect("available").submit(&rows) {
             Ok(())=>{
-                self.trace.event(json!({"event":"gpu_dispatch","probe":probing,"rows":rows.len(),"runs":selected,"private_kib":budget,"allowed_runs":allowed,"compute_limit_mib":self.cfg.compute_memory_limit_mb,"system_available_bytes":memory.map(|m|m.0),"system_reserve_bytes":memory.map(|m|crate::gpu::system_memory_reserve(m.1)),"contexts":rows.iter().map(|r|json!([r.request["weapon"],r.ruler,r.request["mode"]])).collect::<Vec<_>>()}));
+                self.trace.event(json!({"event":"gpu_dispatch","probe":probing,"rows":rows.len(),"runs":if probing{selected.min(8)}else{selected},"private_kib":budget,"allowed_runs":allowed,"compute_limit_mib":self.cfg.compute_memory_limit_mb,"system_available_bytes":memory.map(|m|m.0),"system_reserve_bytes":memory.map(|m|crate::gpu::system_memory_reserve(m.1)),"contexts":rows.iter().map(|r|json!([r.request["weapon"],r.ruler,r.request["mode"]])).collect::<Vec<_>>()}));
                 if !probing {for t in &mut self.tasks {if rows.iter().any(|r|r.id==t.id) {if let Runner::Board(b)=&mut t.runner {b.gpu_pending=true;t.last_ran=Instant::now();}}}}
                 if probing {self.ui.log(format!("{C_INFO}[GPU]{C_END} 探测 {} / {}，CPU 同时正常计算",rows[0].request["weapon"].as_str().unwrap_or("?"),rows[0].ruler));}
                 else{self.ui.log(format!("{C_INFO}[GPU]{C_END} 已分配 {} 条独立榜单任务",rows.len()));}
@@ -2375,6 +2381,10 @@ impl Fleet {
         self.yield_seen = (now, cpu, wall);
         let (dc, dw) = (cpu.saturating_sub(cpu0) as f64, wall.saturating_sub(wall0) as f64);
         let lanes = self.lanes();
+        let cores=dc/span.max(1.0);
+        if cores<(lanes as f64)*0.5 && self.held_why().is_none() && !self.tasks.is_empty() {
+            self.trace.event(json!({"event":"cpu_underfilled","span_ms":span/1000.0,"effective_cores":cores,"lanes":lanes,"cpu_pending_lanes":(0..lanes).filter(|l|self.pool.pending(*l)>0).count(),"active_tasks":self.tasks.len(),"gpu_pending_rows":self.tasks.iter().filter(|t|matches!(&t.runner,Runner::Board(b) if b.gpu_pending)).count(),"held_rows":self.packs.iter().map(|p|p.rows.len()).sum::<usize>(),"syncing_groups":self.groups.iter().filter(|g|g.syncing.is_some()).count(),"placement":self.cfg.placement}));
+        }
         if dw < 1e6 {
             self.ui.status(|s| {
                 s.lane_yield = None;

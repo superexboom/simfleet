@@ -1,6 +1,6 @@
 [package]
 name = "simfleet"
-version = "0.9.0-preview.14"
+version = "0.9.0-preview.15"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 authors = ["superexboom"]

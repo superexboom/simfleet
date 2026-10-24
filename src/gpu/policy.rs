@@ -28,12 +28,13 @@ pub struct Entry {
 struct Saved {
     binding: String,
     entries: BTreeMap<String, Entry>,
+    #[serde(default)]
+    next_probe: u64,
 }
 pub struct Policy {
     saved: Saved,
     path: PathBuf,
     pending: Option<String>,
-    next_probe: u64,
     dirty: bool,
     save_at: u64,
     notice: Option<String>,
@@ -91,6 +92,7 @@ impl Policy {
         let mut saved = (if recovered {secondary} else {primary}).unwrap_or_else(|| Saved {
                 binding: binding.clone(),
                 entries: BTreeMap::new(),
+                next_probe: 0,
             });
         // The memory ceiling changes batch size, not result correctness. Keep
         // measurements for the same engine/device instead of discarding them.
@@ -103,7 +105,6 @@ impl Policy {
             saved,
             path: path.to_owned(),
             pending: None,
-            next_probe: 0,
             dirty: false,
             save_at: 0,
             notice,
@@ -128,11 +129,11 @@ impl Policy {
         self.classify(input, now).map_or(384, |e| e.private_kib)
     }
     pub fn can_probe(&self, now: u64) -> bool {
-        self.pending.is_none() && now >= self.next_probe
+        self.pending.is_none() && now >= self.saved.next_probe
     }
     pub fn begin_probe(&mut self, input: &Input, now: u64) {
         self.pending = Some(family(input));
-        self.next_probe = now + 15_000;
+        self.saved.next_probe = now + 15_000;
         // Write before launching: a killed process must not retry the same
         // possibly fatal scene forever, nor lose other completed observations.
         let previous = self.saved.entries.get(&family(input));
@@ -186,9 +187,15 @@ impl Policy {
         } else {
             "probe too costly"
         };
-        let failures = if allowed { 0 } else {
+        // An eight-run sample does not prove a full batch has recovered. Only
+        // productive full rows clear the history of slow/failed batches.
+        let failures = if allowed { self.saved.entries.get(&family(input)).map_or(0,|e|e.failures) } else {
             self.saved.entries.get(&family(input)).map_or(1, |e| e.failures.saturating_add(1))
         };
+        // Bound exploration overhead even across worker restarts. Learned
+        // batches bypass this cooldown and can run immediately.
+        let pause=(probe.gpu_ms*4.0) as u64;
+        self.saved.next_probe=now+pause.clamp(if allowed {15_000}else{60_000},120_000);
         self.store(
             family(input),
             Entry {
@@ -210,6 +217,7 @@ impl Policy {
         let previous = self.saved.entries.get(&key);
         let failures = previous.map_or(1, |e| e.failures.saturating_add(1));
         let budget = previous.map_or(384, |e| e.private_kib);
+        if input.probe { self.saved.next_probe=now+(30_000*u64::from(failures)).clamp(60_000,120_000); }
         self.store(
             key,
             Entry {
@@ -270,15 +278,20 @@ impl Policy {
         let Some(mut entry) = self.saved.entries.get(&key).cloned() else {
             return;
         };
+        // Every row of one batch reports the same amortized time. Once its
+        // family is deferred, the remaining rows must not count as retries.
+        if !entry.allowed { return; }
         // Reject a full GPU row that costs longer than one CPU core would take.
         let cpu_ms = entry.cpu_us * input.request["runs"].as_u64().unwrap_or(0) as f64 / 1000.0;
         if ms as f64 > cpu_ms * 1.25 && ms > 100 {
             entry.allowed = false;
-            entry.until = now + BAD_TTL;
+            entry.failures=entry.failures.saturating_add(1);
+            entry.until = now + BAD_TTL*u64::from(entry.failures.min(12));
             entry.reason = "full batch slower than useful CPU overlap".into();
             entry.updated = now;
             self.store(key, entry);
-        } else if now.saturating_sub(entry.updated) >= 5 * 60_000 && entry.allowed {
+        } else if entry.allowed && (entry.failures>0 || now.saturating_sub(entry.updated) >= 5 * 60_000) {
+            entry.failures=0;
             entry.updated = now;
             entry.until = now + GOOD_TTL;
             self.store(key,entry);
@@ -385,10 +398,16 @@ mod tests {
         let mut other=input.clone();other.request["enemy"]=json!("another_enemy");
         recovered.begin_probe(&other,300);
         let reopened=Policy::open(&file,binding.into());
+        assert!(!reopened.can_probe(301));
         assert_eq!(reopened.classify(&other,301).unwrap().reason,"probe interrupted before a result");
         assert!(reopened.classify(&input,301).is_some());
         assert!(recovered.observed(&other,&Probe{samples:8,cpu_ms:8.0,gpu_ms:100.0,max_pages:30},302));
         assert_eq!(recovered.budget(&other,303),192);
+        let mut costly=other.clone();costly.probe=true;
+        recovered.failed(&costly,"GPU probe timed out",400);
+        let reopened=Policy::open(&file,binding.into());
+        assert!(!reopened.can_probe(59_999));
+        assert!(reopened.can_probe(60_400));
         let _ = std::fs::remove_file(file.with_extension("json.bak"));
         let _ = std::fs::remove_file(file);
     }
@@ -410,6 +429,16 @@ mod tests {
         p.failed_batch(&rows, "worker closed", 200);
         let e = p.classify(&a, 201).unwrap();
         assert_eq!((e.failures, e.until), (2, 200 + 2 * BAD_TTL));
+        assert!(p.observed(&a,&Probe{samples:8,cpu_ms:32.0,gpu_ms:100.0,max_pages:30},300));
+        assert_eq!(p.classify(&a,301).unwrap().failures,2);
+        p.failed_batch(&rows,"GPU timed out",400);
+        assert_eq!(p.classify(&a,401).unwrap().until,400+3*BAD_TTL);
+        assert!(p.observed(&a,&Probe{samples:8,cpu_ms:32.0,gpu_ms:100.0,max_pages:30},500));
+        p.completed(&a,1000,501);
+        assert_eq!(p.classify(&a,502).unwrap().failures,0);
+        p.completed(&a,10_000,503);
+        p.completed(&a,10_000,504);
+        assert_eq!((p.classify(&a,505).unwrap().failures,p.classify(&a,505).unwrap().until),(1,503+BAD_TTL));
         let _ = std::fs::remove_file(file);
     }
 
