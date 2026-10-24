@@ -1,0 +1,271 @@
+{
+  "engine": "5c64c380e5f2",
+  "client": "0.9.0-preview.13",
+  "production_log_window": {
+    "window_seconds": 2956.372,
+    "counts": {
+      "probe_ok": 84,
+      "probe_failed": 6,
+      "full_failed": 4,
+      "full_ok": 198
+    },
+    "seconds": {
+      "probe_ok": 282.1989999999999,
+      "probe_failed": 72.136,
+      "recovery_minimum": 150,
+      "full_failed": 120.038,
+      "full_ok": 1132.4370000000004
+    },
+    "rows": 1049,
+    "mean_rows": 5.297979797979798,
+    "mean_batch_seconds": 5.719378787878788,
+    "row_histogram": {
+      "6": 34,
+      "5": 48,
+      "4": 78,
+      "8": 14,
+      "7": 19,
+      "10": 3,
+      "9": 2
+    }
+  },
+  "kernel_candidates": [
+    {
+      "rows": 4,
+      "runs": 4000,
+      "block": 32,
+      "module_sha256": "d5921a62d57d25bf29b5e7b1b5d9026be11f9d588bfb3784f54e10e05ec52031",
+      "median_seconds": 12.72248209999998,
+      "exact_shards": 4000,
+      "exact_scores": 4,
+      "candidate": "old"
+    },
+    {
+      "rows": 4,
+      "runs": 4000,
+      "block": 1,
+      "module_sha256": "d5921a62d57d25bf29b5e7b1b5d9026be11f9d588bfb3784f54e10e05ec52031",
+      "median_seconds": 48.97722669999985,
+      "exact_shards": 4000,
+      "exact_scores": 4,
+      "candidate": "independent"
+    },
+    {
+      "rows": 4,
+      "runs": 4000,
+      "block": 32,
+      "module_sha256": "4805f13465f64a14391ea147449cbe5c4a8e8025103a6345fb867fccfc802d4c",
+      "median_seconds": 12.624617200000102,
+      "exact_shards": 4000,
+      "exact_scores": 4,
+      "candidate": "copy"
+    }
+  ],
+  "profiler": {
+    "version": "2026.3.1",
+    "status": "ERR_NVGPUCTRPERM",
+    "installed_system_wide": false
+  },
+  "copy_memory_check": {
+    "cases": 64,
+    "operations_per_case": 1024,
+    "checks": [
+      {
+        "block": 8,
+        "capacity": 32,
+        "all_bytes_equal": true
+      },
+      {
+        "block": 32,
+        "capacity": 32,
+        "all_bytes_equal": true
+      },
+      {
+        "block": 32,
+        "capacity": 4,
+        "overflow_rejected": true
+      }
+    ]
+  },
+  "copy_candidate_patch_sha256": "7cb69574c2c5c655e2aaf8a4a52f6d301eb88655df75c2252fd8a695030f60ed",
+  "kernel_decision": "Keep existing sfg2; one-thread blocks regressed; copy candidate <1% gain in one bounded comparison does not establish a material win.",
+  "fleet_before": {
+    "engine": "5c64c380e5f2",
+    "runs": [
+      {
+        "mode": "gpu",
+        "complete_scores": 180,
+        "gpu_rows": 35,
+        "total_work": 1477082727900,
+        "gpu_work": 234664778579,
+        "compute_memory_mib": 8192,
+        "available_memory_mib": null,
+        "job_limit_bytes": 8522825728,
+        "peak_commit_bytes": 6795743232,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "cpu_rows_during_gpu_recovery": 0,
+        "summary": "REPLAY tasks=180 lanes=12 seconds=67.023606"
+      }
+    ]
+  },
+  "rejected_initial_client": {
+    "engine": "5c64c380e5f2",
+    "runs": [
+      {
+        "mode": "gpu",
+        "complete_scores": 180,
+        "gpu_rows": 28,
+        "total_work": 1477082727900,
+        "gpu_work": 178026785636,
+        "compute_memory_mib": 8192,
+        "available_memory_mib": null,
+        "job_limit_bytes": 8522825728,
+        "peak_commit_bytes": 6602838016,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "cpu_rows_during_gpu_recovery": 0,
+        "summary": "REPLAY tasks=180 lanes=12 seconds=68.637232"
+      }
+    ]
+  },
+  "rejected_initial_reason": "Pending probe marker incorrectly raised new context memory floor to 384 KiB; corrected to 192 KiB before deployment.",
+  "measurement_note": "The initial CPU-only control overlapped final-client compilation and is excluded from timing conclusions. Only that invalid control is rerun after compilation.",
+  "rejected_corrected_client": {
+    "engine": "5c64c380e5f2",
+    "runs": [
+      {
+        "mode": "gpu",
+        "complete_scores": 180,
+        "gpu_rows": 28,
+        "total_work": 1477082727900,
+        "gpu_work": 178026785636,
+        "compute_memory_mib": 8192,
+        "available_memory_mib": null,
+        "job_limit_bytes": 8522825728,
+        "peak_commit_bytes": 6810017792,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "cpu_rows_during_gpu_recovery": 0,
+        "summary": "REPLAY tasks=180 lanes=12 seconds=68.599610"
+      },
+      {
+        "mode": "cpu",
+        "complete_scores": 180,
+        "gpu_rows": 0,
+        "total_work": 1477082727900,
+        "gpu_work": 0,
+        "compute_memory_mib": 8192,
+        "available_memory_mib": null,
+        "job_limit_bytes": 8522825728,
+        "peak_commit_bytes": 336654336,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "cpu_rows_during_gpu_recovery": 0,
+        "summary": "REPLAY tasks=180 lanes=12 seconds=79.288467"
+      }
+    ]
+  },
+  "cpu_control": {
+    "engine": "5c64c380e5f2",
+    "runs": [
+      {
+        "mode": "cpu",
+        "complete_scores": 180,
+        "gpu_rows": 0,
+        "total_work": 1477082727900,
+        "gpu_work": 0,
+        "compute_memory_mib": 8192,
+        "available_memory_mib": null,
+        "job_limit_bytes": 8522825728,
+        "peak_commit_bytes": 336916480,
+        "worker_killed": false,
+        "fallback_observed": false,
+        "worker_restarted": false,
+        "cpu_rows_during_gpu_recovery": 0,
+        "summary": "REPLAY tasks=180 lanes=12 seconds=78.860498"
+      }
+    ]
+  },
+  "observed_baseline": {
+    "cpu_only_seconds": 78.860498,
+    "existing_cpu_gpu_seconds": 67.023606,
+    "existing_cpu_gpu_vs_cpu_only_speedup": 1.1766078059124423,
+    "gpu_work_per_wall_minute": 210.0735480382837,
+    "cpu_only_work_per_wall_minute": 1123.8194777060626,
+    "gpu_share_relative_to_cpu_only": 0.186928196392436
+  },
+  "shipping": "Existing sfg2 and existing selection retained; preview13 ships active clocks, display settings, durable policy and additional telemetry.",
+  "checks": {
+    "direct_rust_cases": 6,
+    "full_rust_suite": false,
+    "memory_copy_candidate": "existing differential harness passed; candidate rejected on performance",
+    "candidate_correctness": "180 complete scores and identical work for each Fleet run; 4000 exact shards for each kernel candidate"
+  },
+  "deployment": {
+    "destination": "C:\\Users\\SuperExboom\\Desktop\\新建文件夹 (3)\\simfleet",
+    "backup": "C:\\Users\\SuperExboom\\Documents\\simfleet\\.bench-gpu-followup\\deployment-backup",
+    "client_sha256": "48ac3f4a65b0b2adc32482c684ff46703a162add448e1e9cbe4d71256cb14412",
+    "config_unchanged": true
+  },
+  "package": {
+    "name": "simfleet-0.9.0-preview.13-windows-x64.zip",
+    "sha256": "36564929bcde36e347854430b935ee5fece3eca26099ad5942d1708f20b64d70",
+    "files": [
+      "simfleet.exe",
+      "README.md",
+      "LICENSE",
+      "NOTICE.md",
+      "THIRD-PARTY-LICENSES.md"
+    ]
+  },
+  "live_acceptance": {
+    "client_sha256": "48ac3f4a65b0b2adc32482c684ff46703a162add448e1e9cbe4d71256cb14412",
+    "startup_loaded_entries": 142,
+    "policy_primary_backup_equal": true,
+    "memory": {
+      "pid": 11924,
+      "samples": [
+        {
+          "job_limit_bytes": 8522825728,
+          "peak_job_bytes": 3142430720,
+          "private_bytes": 3091496960,
+          "members": [
+            {
+              "pid": 11924,
+              "private_bytes": 393375744,
+              "resident_bytes": 325681152
+            },
+            {
+              "pid": 27756,
+              "private_bytes": 2904064,
+              "resident_bytes": 10801152
+            },
+            {
+              "pid": 18612,
+              "private_bytes": 2695217152,
+              "resident_bytes": 355999744
+            }
+          ]
+        }
+      ]
+    },
+    "contribution": {
+      "title": " simfleet 0.9.0-preview.13  请求任务 2s   已运行 0:01:06                                                      10:15:28  ",
+      "resources": [
+        " 本次   0.0 分  0 个任务",
+        " 速度   522.4 分/分钟  均 522.4 ·",
+        " CPU速  951.4 分/分钟  计时暂停",
+        " GPU速  0.0 分/分钟  计时暂停 · 已",
+        " 待交   162.1 分  18 行，随下次同步",
+        " GPU状态待机：等待新任务 · 完成0 /",
+        " 程序GPU                         0%"
+      ]
+    },
+    "note": "Production resumed; native CPU has completed rows; current GPU work includes checked probes; counters freeze during no-work intervals. No multiday soak claim."
+  }
+}

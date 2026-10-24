@@ -6,6 +6,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -33,6 +34,9 @@ pub struct Policy {
     path: PathBuf,
     pending: Option<String>,
     next_probe: u64,
+    dirty: bool,
+    save_at: u64,
+    notice: Option<String>,
 }
 pub fn family(input: &Input) -> String {
     let r = &input.request;
@@ -71,25 +75,37 @@ fn valid(e: &Entry) -> bool {
 }
 impl Policy {
     pub fn open(path: &Path, binding: String) -> Self {
-        let saved = std::fs::metadata(path)
-            .ok()
-            .filter(|m| m.len() < 512 << 10)
-            .and_then(|_| std::fs::read(path).ok())
-            .and_then(|b| serde_json::from_slice::<Saved>(&b).ok())
-            .filter(|s| {
-                s.binding == binding
-                    && s.entries.len() <= KEEP
-                    && s.entries.iter().all(|(k, e)| k.len() == 64 && valid(e))
-            })
-            .unwrap_or_else(|| Saved {
-                binding,
+        let backup = path.with_extension("json.bak");
+        let load = |p: &Path| {
+            std::fs::metadata(p).ok().filter(|m|m.len() < 512 << 10)
+                .and_then(|_|std::fs::read(p).ok())
+                .and_then(|b|serde_json::from_slice::<Saved>(&b).ok())
+                .filter(|s| compatible_binding(&s.binding,&binding) && s.entries.len()<=KEEP
+                    && s.entries.iter().all(|(k,e)|k.len()==64 && valid(e)))
+        };
+        let primary = load(path);
+        let secondary = load(&backup);
+        let updated = |s: &Saved| s.entries.values().map(|e|e.updated).max().unwrap_or(0);
+        let recovered = secondary.as_ref().is_some_and(|b|primary.as_ref().is_none_or(|a|updated(b)>updated(a)));
+        let mut saved = (if recovered {secondary} else {primary}).unwrap_or_else(|| Saved {
+                binding: binding.clone(),
                 entries: BTreeMap::new(),
             });
+        // The memory ceiling changes batch size, not result correctness. Keep
+        // measurements for the same engine/device instead of discarding them.
+        let notice = if recovered { Some(format!("已从备份恢复 {} 项 GPU 学习记录",saved.entries.len())) }
+            else if saved.entries.is_empty() && path.exists() { Some("GPU 学习缓存不兼容或损坏，重新学习；引擎/设备变更会使旧记录失效".into()) }
+            else { Some(format!("已读取 {} 项 GPU 学习记录",saved.entries.len())) };
+        // Keep the persisted identity consistent after a memory-budget change.
+        saved.binding = binding;
         Self {
             saved,
             path: path.to_owned(),
             pending: None,
             next_probe: 0,
+            dirty: false,
+            save_at: 0,
+            notice,
         }
     }
     pub fn classify(&self, input: &Input, now: u64) -> Option<&Entry> {
@@ -110,6 +126,16 @@ impl Policy {
     pub fn begin_probe(&mut self, input: &Input, now: u64) {
         self.pending = Some(family(input));
         self.next_probe = now + 15_000;
+        // Write before launching: a killed process must not retry the same
+        // possibly fatal scene forever, nor lose other completed observations.
+        let previous = self.saved.entries.get(&family(input));
+        self.store(family(input), Entry {
+            allowed:false, until:now+BAD_TTL, updated:now,
+            private_kib:previous.map_or(192,|e|e.private_kib),
+            reason:"probe interrupted before a result".into(),
+            cpu_us:previous.map_or(0.0,|e|e.cpu_us),gpu_ms:previous.map_or(0.0,|e|e.gpu_ms),
+            failures:previous.map_or(0,|e|e.failures),
+        });
     }
     fn store(&mut self, key: String, entry: Entry) {
         if self.saved.entries.len() >= KEEP && !self.saved.entries.contains_key(&key) {
@@ -124,7 +150,9 @@ impl Policy {
             }
         }
         self.saved.entries.insert(key, entry);
-        self.save();
+        self.dirty = true;
+        self.save_at = 0;
+        self.flush(crate::sys::now_ms());
     }
     pub fn observed(&mut self, input: &Input, probe: &Probe, now: u64) -> bool {
         self.pending = None;
@@ -240,6 +268,10 @@ impl Policy {
             entry.reason = "full batch slower than useful CPU overlap".into();
             entry.updated = now;
             self.store(key, entry);
+        } else if now.saturating_sub(entry.updated) >= 5 * 60_000 && entry.allowed {
+            entry.updated = now;
+            entry.until = now + GOOD_TTL;
+            self.store(key,entry);
         }
     }
     pub fn summary(&self, now: u64) -> (usize, usize) {
@@ -252,16 +284,40 @@ impl Policy {
                 |(a, b), e| if e.allowed { (a + 1, b) } else { (a, b + 1) },
             )
     }
-    fn save(&self) {
-        let _ = (|| -> std::io::Result<()> {
+    pub fn take_notice(&mut self) -> Option<String> { self.notice.take() }
+    pub fn flush(&mut self, now: u64) {
+        if !self.dirty || now < self.save_at { return; }
+        self.save_at = now + 15_000;
+        let result = (|| -> std::io::Result<()> {
             if let Some(parent) = self.path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            let tmp = self.path.with_extension("tmp");
-            std::fs::write(&tmp, serde_json::to_vec(&self.saved)?)?;
-            std::fs::rename(tmp, &self.path)
+            let bytes = serde_json::to_vec(&self.saved)?;
+            // Complete and flush both copies before publishing them. Recovery
+            // reads the newest compatible complete snapshot after an abrupt exit.
+            for target in [self.path.with_extension("json.bak"),self.path.clone()] {
+                let tmp = target.with_extension(format!("{}.tmp",std::process::id()));
+                let mut file = std::fs::File::create(&tmp)?;
+                file.write_all(&bytes)?;
+                file.sync_all()?;
+                drop(file);
+                std::fs::rename(tmp,target)?;
+            }
+            Ok(())
         })();
+        match result {
+            Ok(()) => self.dirty=false,
+            Err(e) => self.notice=Some(format!("GPU 学习保存失败，15 秒后重试：{e}")),
+        }
     }
+}
+fn compatible_binding(saved: &str, current: &str) -> bool {
+    if saved == current { return true; }
+    // adaptive-v6 ends in the configured memory limit; all earlier identity
+    // components (engine, module, native library, GPU, driver, CPU) must match.
+    saved.starts_with("adaptive-v6:") && current.starts_with("adaptive-v6:")
+        && saved.rsplit_once(':').zip(current.rsplit_once(':')).is_some_and(|((a,x),(b,y))|
+            a==b && x.parse::<u64>().is_ok() && y.parse::<u64>().is_ok())
 }
 #[cfg(test)]
 mod tests {
@@ -283,12 +339,13 @@ mod tests {
         assert_ne!(family(&a), family(&b));
     }
     #[test]
-    fn negatives_expire_and_binding_changes_clear_measurements() {
+    fn learning_is_durable_before_exit_and_recovers_a_damaged_primary() {
         let file = std::env::temp_dir().join(format!(
             "simfleet-policy-{}.json",
             crate::sys::random_hex(8)
         ));
-        let mut p = Policy::open(&file, "engine-device-a".into());
+        let binding = "adaptive-v6:engine:module:native:gpu:driver:cpu:8192";
+        let mut p = Policy::open(&file, binding.into());
         let input = input();
         p.failed(&input, "timeout", 100);
         assert!(!p.classify(&input, 101).unwrap().allowed);
@@ -308,6 +365,21 @@ mod tests {
         ));
         p.completed(&input, 3000, 201);
         assert!(!p.allowed(&input, 202));
+        // Reopen without dropping/flushing the original policy: no clean-exit hook.
+        let reopened = Policy::open(&file,binding.replace("8192","16384"));
+        assert_eq!(reopened.classify(&input,202).unwrap().reason,"full batch slower than useful CPU overlap");
+        std::fs::write(&file,b"{partial write").unwrap();
+        let mut recovered = Policy::open(&file,binding.into());
+        assert!(!recovered.allowed(&input,202));
+        assert!(recovered.take_notice().unwrap().contains("备份"));
+        let mut other=input.clone();other.request["enemy"]=json!("another_enemy");
+        recovered.begin_probe(&other,300);
+        let reopened=Policy::open(&file,binding.into());
+        assert_eq!(reopened.classify(&other,301).unwrap().reason,"probe interrupted before a result");
+        assert!(reopened.classify(&input,301).is_some());
+        assert!(recovered.observed(&other,&Probe{samples:8,cpu_ms:8.0,gpu_ms:100.0,max_pages:30},302));
+        assert_eq!(recovered.budget(&other,303),192);
+        let _ = std::fs::remove_file(file.with_extension("json.bak"));
         let _ = std::fs::remove_file(file);
     }
     #[test]

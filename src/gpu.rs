@@ -360,6 +360,7 @@ pub fn worker_main(dir: &Path, engine: &str, native: Option<&Path>, memory_mib: 
 
 pub enum Event {
     Ready(String),
+    Notice(String),
     Progress,
     Finished(Vec<Output>),
     Failed(String),
@@ -533,6 +534,9 @@ impl Manager {
     }
     pub fn active(&self) -> bool {
         self.ready && !self.failed
+    }
+    pub fn computing(&self) -> bool {
+        self.active() && !self.pending.is_empty()
     }
     pub fn view(&self) -> View {
         View {
@@ -804,6 +808,10 @@ impl Manager {
         })();
     }
     pub fn poll(&mut self) -> Option<Event> {
+        if let Some(policy) = &mut self.policy {
+            policy.flush(crate::sys::now_ms());
+            if let Some(notice) = policy.take_notice() { return Some(Event::Notice(notice)); }
+        }
         if self.failed {
             return None;
         }

@@ -146,8 +146,8 @@ pub struct Status {
     /// The budget: cores while away, cores while in use (0 pauses then).
     pub idle_cores: usize,
     pub active_cores: usize,
-    /// When the server took each answer, and its work: the last quarter hour.
-    pub answered: VecDeque<(Instant, u64, u64)>,
+    /// Total, CPU and GPU have independent active-time clocks.
+    efficiency: [WorkRate; 3],
     pub note: String,
 }
 
@@ -180,15 +180,55 @@ pub const C_INFO: &str = "\x1b[36m";
 pub const C_END: &str = "\x1b[0m";
 
 impl Status {
+    pub fn activity(&mut self, now: Instant, cpu: bool, gpu: bool) {
+        for (meter, running) in self.efficiency.iter_mut().zip([cpu || gpu, cpu, gpu]) {
+            meter.tick(now, running);
+        }
+    }
     pub fn record_computed(&mut self, now: Instant, work: u64, gpu: bool) {
         let gpu_work = if gpu { work } else { 0 };
         self.computed_work += work;
         self.computed_gpu_work += gpu_work;
-        self.answered.push_back((now, work, gpu_work));
-        while self.answered.front().is_some_and(|a| now.duration_since(a.0) > Duration::from_secs(900)) {
-            self.answered.pop_front();
-        }
+        self.efficiency[0].record(now, work);
+        self.efficiency[if gpu { 2 } else { 1 }].record(now, work);
     }
+}
+
+/// One bucket per active second bounds history even at very high row rates.
+/// Pausing freezes the clock and its ten-minute window, including GPU-only idle.
+#[derive(Default, Clone)]
+struct WorkRate {
+    at: Option<Instant>,
+    elapsed: Duration,
+    running: bool,
+    work: u64,
+    recent: VecDeque<(u64, u64)>,
+}
+impl WorkRate {
+    fn elapsed_at(&self, now: Instant) -> Duration {
+        self.elapsed + if self.running { self.at.map_or(Duration::ZERO, |at| now.saturating_duration_since(at)) } else { Duration::ZERO }
+    }
+    fn tick(&mut self, now: Instant, running: bool) {
+        self.elapsed = self.elapsed_at(now);
+        self.at = Some(now);
+        self.running = running;
+        let cutoff = self.elapsed.as_secs().saturating_sub(600);
+        while self.recent.front().is_some_and(|(second, _)| *second < cutoff) { self.recent.pop_front(); }
+    }
+    fn record(&mut self, now: Instant, work: u64) {
+        self.tick(now, self.running);
+        self.work += work;
+        let second = self.elapsed.as_secs();
+        if let Some((_, value)) = self.recent.back_mut().filter(|(at, _)| *at == second) {
+            *value += work;
+        } else if work > 0 { self.recent.push_back((second, work)); }
+    }
+    fn rates(&self, now: Instant) -> (f64, f64) {
+        let seconds = self.elapsed_at(now).as_secs_f64().max(1.0);
+        let work: u64 = self.recent.iter().filter(|(at, _)| *at as f64 + 1.0 > seconds - 600.0).map(|(_, work)| work).sum();
+        (points(work) * 60.0 / seconds.min(600.0), points(self.work) * 60.0 / seconds)
+    }
+    fn state(&self) -> &'static str { if self.running { "运行" } else { "计时暂停" } }
 }
 
 /// Log lines kept for the panels and for paging back.
@@ -259,11 +299,11 @@ fn hms(secs: u64) -> String {
     format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60)
 }
 
-/// Points a minute computed: over the last ten minutes, and over the whole run.
-fn rates(s: &Status, up: Duration) -> (f64, f64, f64) {
-    let mins = (up.as_secs_f64() / 60.0).max(1.0 / 60.0);
-    let (recent, gpu_recent) = s.answered.iter().filter(|(t, _, _)| t.elapsed() < Duration::from_secs(600)).fold((0,0), |(total,gpu),(_,w,g)| (total+w,gpu+g));
-    (points(recent) / mins.min(10.0), points(s.computed_work) / mins, points(gpu_recent) / mins.min(10.0))
+/// Total uses the union of CPU/GPU busy time; device rates use their own clocks.
+/// Independent device rates must not be added to claim wall-clock throughput.
+fn rates(s: &Status, now: Instant) -> (f64, f64, f64) {
+    let (recent, average) = s.efficiency[0].rates(now);
+    (recent, average, s.efficiency[2].rates(now).0)
 }
 
 impl Ui {
@@ -321,7 +361,7 @@ impl Ui {
 
     /// The minute line of a run without a terminal.
     fn plain_status(&self, s: &Status, ctl: &Ctl) -> String {
-        let (rate, _, _) = rates(s, self.started.elapsed());
+        let (rate, _, _) = rates(s, Instant::now());
         let mut a = format!(
             "{} | {}/{} 核 | 本次 {} 任务 {} 分 | {:.1} 分/分钟",
             s.state,
@@ -478,7 +518,7 @@ impl Ui {
     }
 
     fn key(&self, code: KeyCode, mods: KeyModifiers, ctl: &Ctl, v: &mut View, h: usize) {
-        if v.settings_open && !(code==KeyCode::Char('c') && mods.contains(KeyModifiers::CONTROL)) {
+        if (v.settings_open || v.sidebar_open) && !(code==KeyCode::Char('c') && mods.contains(KeyModifiers::CONTROL)) {
             self.settings_key(code,ctl,v);
             return;
         }
@@ -521,6 +561,7 @@ impl Ui {
                 v.scroll = 0;
             }
             KeyCode::Char('s') | KeyCode::Char('S') => {v.settings_open=true;v.settings_row=0;v.edit=None;}
+            KeyCode::Char('d') | KeyCode::Char('D') => {v.sidebar_open=true;v.sidebar_row=0;}
             KeyCode::PageUp | KeyCode::Up => v.scroll += if code == KeyCode::Up { 1 } else { page },
             KeyCode::PageDown | KeyCode::Down => v.scroll = v.scroll.saturating_sub(if code == KeyCode::Down { 1 } else { page }),
             KeyCode::End => v.scroll = 0,
@@ -530,6 +571,24 @@ impl Ui {
     }
 
     fn settings_key(&self, code: KeyCode, ctl: &Ctl, v: &mut View) {
+        if v.sidebar_open {
+            let count = crate::settings::SIDEBAR_ITEMS.len();
+            match code {
+                KeyCode::Esc | KeyCode::Char('d') | KeyCode::Char('D') => v.sidebar_open = false,
+                KeyCode::Up => v.sidebar_row = v.sidebar_row.saturating_sub(1),
+                KeyCode::Down | KeyCode::Tab => v.sidebar_row = (v.sidebar_row + 1) % count,
+                KeyCode::Home => v.sidebar_row = 0,
+                KeyCode::End => v.sidebar_row = count - 1,
+                KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right | KeyCode::Char('r') | KeyCode::Char('R') => {
+                    let mut state = ctl.settings.lock().unwrap();
+                    if matches!(code, KeyCode::Char('r') | KeyCode::Char('R')) { state.desired.hidden_sidebar.clear(); }
+                    else { state.desired.toggle_sidebar(v.sidebar_row); }
+                    state.message = "正在保存显示设置…".into();
+                }
+                _ => {}
+            }
+            return;
+        }
         if let Some(input)=v.edit.as_mut() {
             match code {
                 KeyCode::Esc=>v.edit=None,
@@ -562,6 +621,7 @@ impl Ui {
             KeyCode::Down|KeyCode::Tab=>v.settings_row=(v.settings_row+1)%count,
             KeyCode::Home=>v.settings_row=0,
             KeyCode::End=>v.settings_row=count-1,
+            KeyCode::Enter if v.settings_row == 14 => { v.sidebar_open=true; v.sidebar_row=0; },
             KeyCode::Enter=>v.edit=Some(ctl.desired_settings().rows()[v.settings_row].1.clone()),
             KeyCode::Left|KeyCode::Right=>{
                 let choices=crate::settings::Settings::choices(v.settings_row);
@@ -833,6 +893,8 @@ struct View {
     scroll: usize,
     settings_open: bool,
     settings_row: usize,
+    sidebar_open: bool,
+    sidebar_row: usize,
     edit: Option<String>,
 }
 
@@ -859,14 +921,21 @@ fn draw(c: &mut Canvas, f: &Frame, v: &mut View) {
     }
     title(c, f);
     footer(c, f, v);
+    if v.sidebar_open {draw_sidebar_settings(c,f,v);return;}
     if v.settings_open {draw_settings(c,f,v);return;}
-    let (y, bh) = (1, h - 2);
+    let y = if h >= 5 { 2 } else { 1 };
+    let bh = h - y - 1;
     if v.full_log {
         header(c, 0, y, w, " 全部日志 ", "PgUp/PgDn 翻页  End 最新  L 回到面板", HDR);
         logs(c, 0, y + 1, w, bh - 1, f, Pick::All, &mut v.scroll);
         return;
     }
     if w >= 96 && bh >= 14 {
+        let settings = f.ctl.desired_settings();
+        if ["contribution", "resources", "site", "ranking"].iter().all(|key| !settings.sidebar_visible(key)) {
+            left(c,0,y,w,bh,f,v);
+            return;
+        }
         let sw = (w * 3 / 10).clamp(36, 54);
         let lw = w - sw - 1;
         side(c, lw + 1, y, sw, bh, f);
@@ -880,18 +949,18 @@ fn draw_settings(c: &mut Canvas, f: &Frame, v: &View) {
     let settings=f.ctl.desired_settings();
     let state=f.ctl.settings.lock().unwrap();
     let rows=settings.rows();let w=c.w;let h=c.h;
-    header(c,0,1,w," 设置 ","确认后立即写入 TOML",HDR);
-    if h<8 {c.text(1,2,w.saturating_sub(2),"窗口太小，请增大窗口后编辑设置。",DIM);return;}
-    let visible=(h.saturating_sub(9)).min(rows.len()).max(1);
+    header(c,0,2,w," 设置 ","确认后立即写入 TOML",HDR);
+    if h<9 {c.text(1,3,w.saturating_sub(2),"窗口太小，请增大窗口后编辑设置。",DIM);return;}
+    let visible=(h.saturating_sub(10)).min(rows.len()).max(1);
     let start=v.settings_row.saturating_sub(visible-1);
     for (i,(name,value,_)) in rows.iter().enumerate().skip(start).take(visible) {
-        let y=3+i-start;let selected=i==v.settings_row;
+        let y=4+i-start;let selected=i==v.settings_row;
         let style=if selected {HDR}else{PLAIN};
         if selected {c.fill(0,y,w,1,style);}
         let value=if selected {v.edit.as_ref().map(|x|format!("{x}_")).unwrap_or_else(||value.clone())}else{value.clone()};
         c.text(1,y,w.saturating_sub(2),&format!("{} {}: {}",if selected{">"}else{" "},name,if value.is_empty(){"全部"}else{&value}),style);
     }
-    let y=3+visible;
+    let y=4+visible;
     c.text(1,y,w.saturating_sub(2),rows[v.settings_row].2,DIM);
     c.text(1,y+1,w.saturating_sub(2),"调度/NUMA/合计内存上限改动：保存后排空手头任务，自动换进程生效。",DIM);
     c.text(1,y+2,w.saturating_sub(2),&state.message,Sty {fg:Some(80),..PLAIN});
@@ -899,6 +968,23 @@ fn draw_settings(c: &mut Canvas, f: &Frame, v: &View) {
         if y+3+i>=h-1 {break;}
         c.text(1,y+3+i,w.saturating_sub(2),line,DIM);
     }
+}
+
+fn draw_sidebar_settings(c: &mut Canvas, f: &Frame, v: &View) {
+    let settings = f.ctl.desired_settings();
+    let items = crate::settings::SIDEBAR_ITEMS;
+    header(c,0,2,c.w," 侧栏显示 ","[x] 显示   [ ] 隐藏",HDR);
+    let visible = c.h.saturating_sub(7).max(1);
+    let start = v.sidebar_row.saturating_sub(visible - 1);
+    for (i,(key,label)) in items.iter().enumerate().skip(start).take(visible) {
+        let y = 3 + i - start;
+        let style = if i == v.sidebar_row { HDR } else { PLAIN };
+        if i == v.sidebar_row { c.fill(0,y,c.w,1,style); }
+        c.text(1,y,c.w.saturating_sub(2),&format!("{} [{}] {}",if i==v.sidebar_row {">"} else {" "},if settings.sidebar_visible(key) {"x"} else {" "},label),style);
+    }
+    let y = 3 + visible;
+    c.text(1,y,c.w.saturating_sub(2),if v.sidebar_row==2 {"CPU/GPU 按各自工作时间计速，无任务时暂停；两项不能直接相加。"} else {"隐藏整组会保留该组子项选择；全部整组隐藏后，任务区自动扩宽。"},DIM);
+    c.text(1,y+1,c.w.saturating_sub(2),&f.ctl.settings.lock().unwrap().message,fg(80));
 }
 
 fn state_bg(state: &str) -> u8 {
@@ -913,34 +999,33 @@ fn state_bg(state: &str) -> u8 {
 
 fn title(c: &mut Canvas, f: &Frame) {
     let (s, w) = (f.s, c.w);
-    c.fill(0, 0, w, 1, BAR);
-    let mut x = c.text(0, 0, w, &format!(" simfleet {} ", env!("CARGO_PKG_VERSION")), on(24));
-    let state = if s.state.is_empty() { "启动中" } else { &s.state };
-    x += c.text(x, 0, w - x, &format!(" {state} "), on(state_bg(state)));
-    if s.gpu.enabled && w.saturating_sub(x)>30 {
-        let badge=if s.gpu.rows>0 {format!(" GPU {} {}行 ",s.gpu.state,s.gpu.rows)}else{format!(" GPU {} ",s.gpu.state)};
-        x+=c.text(x,0,w-x,&badge,on(if s.gpu.rows>0 {24}else{238}));
-    }
+    c.fill(0, 0, w, if c.h >= 5 {2} else {1}, BAR);
     let clock = format!(" {} ", crate::sys::clock());
     let right = w.saturating_sub(c.tw(&clock));
-    // MOST USEFUL FIRST: a narrow window cuts from the right.
-    let mut info = format!("  已运行 {}   核心 {}/{} {}", hms(f.up.as_secs()), s.lanes_now, f.ctl.max_cores, if s.idle { "空闲" } else { "使用中" });
-    if s.max_groups > 0 {
-        info += &format!("   并发 {}/{}", s.groups, s.max_groups);
-    }
-    if let Some(n) = s.computing_now {
-        info += &format!("   全站在线 {n}");
-    }
-    if !s.engine.is_empty() {
-        info += &format!("   引擎 {} {}", s.engine.get(..8).unwrap_or(&s.engine), s.backend);
-    }
-    c.text(x, 0, right.saturating_sub(x), &info, BAR);
+    let mut x = c.text(0, 0, right, &format!(" simfleet {} ", env!("CARGO_PKG_VERSION")), on(24));
+    let state = if s.state.is_empty() { "启动中" } else { &s.state };
+    x += c.text(x, 0, right.saturating_sub(x), &format!(" {state} "), on(state_bg(state)));
+    c.text(x,0,right.saturating_sub(x),&format!("  已运行 {}",hms(f.up.as_secs())),BAR);
     c.text(right, 0, w - right, &clock, BAR);
+    if c.h < 5 { return; }
+    // Keep backend and device state on their own row; sidebar owns core counts.
+    let backend = s.backend.strip_suffix(" + NVIDIA GPU 预览").unwrap_or(&s.backend);
+    let engine = if s.engine.is_empty() { "引擎加载中".into() } else {
+        format!("引擎 {} {}",s.engine.get(..8).unwrap_or(&s.engine),backend)
+    };
+    let badge = if s.gpu.enabled { format!("GPU {}{}",s.gpu.state,if s.gpu.rows>0 {format!(" {}行",s.gpu.rows)} else {String::new()}) } else {String::new()};
+    let engine_width = c.tw(&engine).min(if badge.is_empty(){w.saturating_sub(2)}else{w / 2});
+    c.text(1,1,engine_width,&engine,DIM);
+    if !badge.is_empty() { c.text(engine_width+3,1,w.saturating_sub(engine_width+4),&badge,fg(80)); }
 }
 
 fn footer(c: &mut Canvas, f: &Frame, v: &View) {
     let (y, w) = (c.h - 1, c.w);
     c.fill(0, y, w, 1, BAR);
+    if v.sidebar_open {
+        c.text(0,y,w," ↑↓ 选择  Space/Enter 显示或隐藏  R 全部显示  Esc 返回",BAR);
+        return;
+    }
     if v.settings_open {
         c.text(0,y,w,if v.edit.is_some(){" Enter 保存  Esc 取消编辑  Ctrl+C 退出程序"}else{" ↑↓ 选择  Enter 编辑  ←→ 切换选项  Esc 返回面板"},BAR);
         return;
@@ -949,6 +1034,7 @@ fn footer(c: &mut Canvas, f: &Frame, v: &View) {
     let keys = [
         ("P", if paused { "继续" } else { "暂停" }),
         ("S", "设置"),
+        ("D", "显示"),
         ("+/-", "空闲核心"),
         ("Shift +/-", "使用时核心"),
         ("[ ]", "并发上限"),
@@ -1155,18 +1241,22 @@ fn gpu_activity(g:&crate::gpu::View,up:Duration)->String {
 
 fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
     let s = f.s;
+    let settings = f.ctl.desired_settings();
+    let visible = |key| settings.sidebar_visible(key);
     let end = y + h;
     let mut yy = y;
-    let (rate, avg, gpu_rate) = rates(s, f.up);
+    let (rate, avg, gpu_rate) = rates(s, Instant::now());
 
-    header(c, x, yy, w, " 贡献 ", "", HDR);
+    if visible("contribution") {
+    header(c, x, yy, w, " 贡献 ", "近10活跃分", HDR);
     yy += 1;
     let mut rows: Vec<(&str, String, String)> = vec![
         ("本次", format!("{} 分", pts(points(s.session_work))), format!("  {} 个任务", group(s.session_tasks))),
-        ("速度", format!("{rate:.1} 分/分钟"), format!("  近10分 · 均 {avg:.1}")),
+        ("速度", format!("{rate:.1} 分/分钟"), format!("  均 {avg:.1} · {}",s.efficiency[0].state())),
+        ("CPU速", format!("{:.1} 分/分钟",s.efficiency[1].rates(Instant::now()).0), format!("  {}",s.efficiency[1].state())),
     ];
     if s.gpu.enabled || s.computed_gpu_work > 0 {
-        rows.push(("其中GPU", format!("{gpu_rate:.1} 分/分钟"), format!("  已算 {} 分", pts(points(s.computed_gpu_work)))));
+        rows.push(("GPU速", format!("{gpu_rate:.1} 分/分钟"), format!("  {} · 已算 {} 分",s.efficiency[2].state(),pts(points(s.computed_gpu_work)))));
     }
     if s.kept_rows > 0 {
         rows.push(("待交", format!("{} 分", pts(points(s.kept_work))), format!("  {} 行，随下次同步提交", group(s.kept_rows))));
@@ -1190,36 +1280,40 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
         rows.push(("确认", format!("{}", s.confirmed), format!(" 已确认  {} 待确认", s.waiting)));
     }
     for (l, val, rest) in rows {
+        let key = match l { "本次"=>"session", "速度"|"CPU速"|"GPU速"=>"speed", "待交"=>"pending", "今日"=>"today", "账号"|"本机"=>"account", _=>"confirmation" };
+        if !visible(key) { continue; }
         if yy < end {
             kv(c, x, yy, w, l, &val, &rest);
             yy += 1;
         }
     }
+    }
 
-    if yy + 3 < end {
+    if visible("resources") && yy + 3 < end {
         let device=s.gpu.device.strip_prefix("NVIDIA GeForce ").unwrap_or(&s.gpu.device);
         header(c, x, yy, w, " 资源 ", if s.gpu.enabled {device}else{""}, HDR);
         yy += 1;
         let pct = |v: Option<f64>| v.map_or("--".into(), |v| format!("{:>3.0}%", v * 100.0));
         let m = f.m;
-        bar_row(c, x, yy, w, "CPU", m.cpu, &pct(m.cpu), load_color(m.cpu.unwrap_or(0.0)));
-        yy += 1;
-        if yy < end {
+        if visible("cpu") { bar_row(c, x, yy, w, "CPU", m.cpu, &pct(m.cpu), load_color(m.cpu.unwrap_or(0.0))); yy += 1; }
+        if visible("process_cpu") && yy < end {
             bar_row(c, x, yy, w, "本程序", m.me, &pct(m.me), 31);
             yy += 1;
         }
-        if s.gpu.enabled {
+        if s.gpu.enabled && visible("gpu") {
             if yy<end {kv(c,x,yy,w,"GPU状态",&gpu_activity(&s.gpu,f.up),"");yy+=1;}
             if yy<end && !s.gpu.reason.is_empty(){kv(c,x,yy,w,"上次错误",&s.gpu.reason,"");yy+=1;}
             if yy<end {bar_row(c,x,yy,w,"程序GPU",s.gpu.sample.utilization,&gpu_percent(s.gpu.sample.utilization),75);yy+=1;}
+        }
+        if s.gpu.enabled && visible("vram") {
             if yy<end {
                 let dedicated=s.gpu.sample.dedicated_bytes.map_or("--".into(),|n|format!("{:.2} GiB",n as f64/(1u64<<30) as f64));
                 let shared=s.gpu.sample.shared_bytes.map_or(String::new(),|n|format!(" · 共享 {:.0} MiB",n as f64/(1u64<<20) as f64));
                 kv(c,x,yy,w,"显存",&dedicated,&shared);yy+=1;
             }
         }
-        if yy<end && cfg!(windows) && s.compute_memory_limit_mb>0 {kv(c,x,yy,w,"总限额",&format!("{:.1} GiB",s.compute_memory_limit_mb as f64/1024.0)," CPU+GPU 提交");yy+=1;}
-        if let (Some((used, all, me)), true) = (m.mem, yy < end) {
+        if visible("memory_limit") && yy<end && cfg!(windows) && s.compute_memory_limit_mb>0 {kv(c,x,yy,w,"总限额",&format!("{:.1} GiB",s.compute_memory_limit_mb as f64/1024.0)," CPU+GPU 提交");yy+=1;}
+        if let (Some((used, all, me)), true) = (m.mem, visible("memory") && yy < end) {
             let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
             let frac = used as f64 / all.max(1) as f64;
             bar_row(c, x, yy, w, "内存", Some(frac), &format!("{:.1}/{:.0}G", gb(used), gb(all)), load_color(frac));
@@ -1229,23 +1323,23 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
                 yy += 1;
             }
         }
-        if yy < end {
+        if visible("utilisation") && yy < end {
             bar_row(c, x, yy, w, "利用率", s.utilisation, &pct(s.utilisation), 31);
             yy += 1;
         }
-        if yy < end {
+        if visible("budget") && yy < end {
             let busy = if s.active_cores == 0 { "暂停".to_string() } else { format!("{} 核", s.active_cores) };
             kv(c, x, yy, w, "预算", &format!("离开 {} 核", s.idle_cores), &format!("  使用时 {busy}"));
             yy += 1;
         }
-        if yy < end && s.max_groups > 0 {
+        if visible("concurrency") && yy < end && s.max_groups > 0 {
             let held = s.held_secs.map_or(String::new(), |h| format!(" · 积压 {h:.0}s"));
             kv(c, x, yy, w, "并发", &format!("{} 路", s.groups), &format!("  上限 {}{held}", s.max_groups));
             yy += 1;
         }
         // WHAT THE LANES REALLY GET: lanes crowded onto a few processors, or
         // starved by other programs, are less than a core each.
-        if let (Some(eff), Some(share), true) = (s.effective_cores, s.lane_yield, yy < end) {
+        if let (Some(eff), Some(share), true) = (s.effective_cores, s.lane_yield, visible("effective_cores") && yy < end) {
             c.text(x + 1, yy, 7, "实得", DIM);
             let st = Sty { fg: Some(if share < 0.6 { 203 } else if share < 0.85 { 179 } else { 255 }), bold: true, ..PLAIN };
             let u = c.text(x + 8, yy, w.saturating_sub(9), &format!("{eff:.1} 核"), st);
@@ -1258,7 +1352,7 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
             c.text(x + 8 + u, yy, w.saturating_sub(9 + u), &rest, DIM);
             yy += 1;
         }
-        if let (Some(pref), true) = (s.core_pref, yy < end) {
+        if let (Some(pref), true) = (s.core_pref, visible("effective_cores") && yy < end) {
             let (p, e) = s.lane_kind.iter().flatten().fold((0, 0), |a, k| if *k == 'P' { (a.0 + 1, a.1) } else { (a.0, a.1 + 1) });
             // Where each lane ran is known on an Intel hybrid, not on Apple silicon.
             let tail = if s.lane_kind.is_empty() { String::new() } else { format!("  在 P {p} / E {e}") };
@@ -1269,7 +1363,7 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
         let per = (w.saturating_sub(9) / 3).max(1);
         let max = f.ctl.max_cores;
         let rows = max.div_ceil(per);
-        if yy + rows <= end && rows <= 4 {
+        if visible("core_map") && yy + rows <= end && rows <= 4 {
             c.text(x + 1, yy, 7, "核心", DIM);
             for i in 0..max {
                 let st = match s.lane_map.get(i) {
@@ -1288,7 +1382,7 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
         }
     }
 
-    if yy + 3 < end && (s.computing_now.is_some() || s.owed.is_some()) {
+    if visible("site") && yy + 3 < end && (s.computing_now.is_some() || s.owed.is_some()) {
         header(c, x, yy, w, " 全站 ", "", HDR);
         yy += 1;
         if let Some(n) = s.computing_now {
@@ -1306,7 +1400,7 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
         }
     }
 
-    if yy + 2 < end && !s.ranking.is_empty() {
+    if visible("ranking") && yy + 2 < end && !s.ranking.is_empty() {
         // THE PACE beside the points: what each one's points grew by a minute
         // over the last half hour, as the ranking showed them (fleet.rs `paces`).
         let pace = if s.ranking.iter().any(|r| r.rate.is_some()) { "每分钟按近半小时" } else { "每分钟测量中" };
@@ -1356,39 +1450,44 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
 
 fn compact(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame, v: &mut View) {
     let s = f.s;
+    let settings = f.ctl.desired_settings();
+    let visible = |key| settings.sidebar_visible(key);
     let end = y + h;
     let mut yy = y;
-    let (rate, _, _) = rates(s, f.up);
-    let mut a = format!(
-        " 本次 {C_OK}{}{C_END} 分 · {} 任务 · {C_OK}{rate:.1}{C_END} 分/分钟",
-        pts(points(s.session_work)),
-        group(s.session_tasks)
-    );
-    if s.kept_rows > 0 {
+    let (rate, _, _) = rates(s, Instant::now());
+    let mut a = String::new();
+    if visible("session") { a += &format!(" 本次 {C_OK}{}{C_END} 分 · {} 任务",pts(points(s.session_work)),group(s.session_tasks)); }
+    if visible("speed") { a += &format!(" · {C_OK}{rate:.1}{C_END} 分/活跃分钟"); }
+    if visible("pending") && s.kept_rows > 0 {
         a += &format!(" · 待交 {} 分", pts(points(s.kept_work)));
     }
-    if let Some(t) = s.today_points {
+    if let Some(t) = s.today_points.filter(|_| visible("today")) {
         a += &format!(" · 今日 {} 分", group(t));
     }
-    if let (Some(eff), Some(share)) = (s.effective_cores, s.lane_yield) {
+    if let (Some(eff), Some(share), true) = (s.effective_cores, s.lane_yield, visible("resources") && visible("effective_cores")) {
         let col = if share < 0.6 { C_BAD } else if share < 0.85 { C_GO } else { "" };
         a += &format!(" · 实得 {col}{eff:.1}{C_END} 核");
     }
-    match (&s.account, s.account_points) {
+    if visible("account") { match (&s.account, s.account_points) {
         (Some(_), Some(p)) => a += &format!(" · 账号 {} 分", group(p)),
         _ => {
             if let Some(p) = s.device_points {
                 a += &format!(" · 本机 {} 分", group(p));
             }
         }
+    } }
+    if visible("contribution") {
+        c.ansi(x, yy, w, &a, PLAIN); yy += 1;
+        if visible("speed") && yy < end {
+            c.text(x+1,yy,w.saturating_sub(2),&format!("CPU {:.1}/分 {} · GPU {:.1}/分 {}",s.efficiency[1].rates(Instant::now()).0,s.efficiency[1].state(),s.efficiency[2].rates(Instant::now()).0,s.efficiency[2].state()),DIM);yy+=1;
+        }
     }
-    c.ansi(x, yy, w, &a, PLAIN);
-    yy += 1;
-    if yy < end && w >= 40 {
+    if visible("resources") && yy < end && w >= 40 {
         // CPU, memory and the lanes' use, a third of the width each.
         let third = w / 3;
         let mem = f.m.mem.map(|(u, a, _)| u as f64 / a.max(1) as f64);
         for (i, (l, v)) in [("CPU", f.m.cpu), ("内存", mem), ("利用率", s.utilisation)].into_iter().enumerate() {
+            if !visible(["cpu","memory","utilisation"][i]) { continue; }
             let x0 = x + i * third;
             let t = v.map_or(" --".into(), |v| format!("{:>3.0}%", v * 100.0));
             let lw = c.text(x0 + 1, yy, 7, l, DIM) + 2;
@@ -1401,7 +1500,7 @@ fn compact(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame, v:
         yy += 1;
     }
     let budget = end.saturating_sub(yy + 3);
-    if s.gpu.enabled && yy<end {
+    if visible("resources") && visible("gpu") && s.gpu.enabled && yy<end {
         c.text(x+1,yy,w.saturating_sub(2),&format!("GPU {} · 本程序 {}",gpu_activity(&s.gpu,f.up),gpu_percent(s.gpu.sample.utilization)),fg(75));yy+=1;
     }
     let budget=budget.min(end.saturating_sub(yy+3));
@@ -1440,8 +1539,15 @@ mod tests {
             let rendered=(0..h).map(|y|text_of(&c,y)).collect::<Vec<_>>();
             let text=rendered.join("\n");assert!(text.contains("GPU"));assert!(text.contains("87%"));assert!(text.contains("16行"));
             assert!(!text.contains("0%  0s GPU"));
+            assert!(!rendered[0].contains("核心") && !rendered[0].contains("并发") && !rendered[0].contains("在线"));
+            assert!(rendered[1].contains("引擎"));
             for row in rendered {assert!(row.chars().map(|ch|c.cw(ch)).sum::<usize>()<w);}
         }
+        ctl.settings.lock().unwrap().desired.hidden_sidebar=vec!["gpu".into(),"ranking".into()];
+        let f=Frame{s:&s,lines:&lines,ctl:&ctl,m:SysView::default(),up:Duration::ZERO,multi:false};
+        let mut c=Canvas::new(54,42,false);side(&mut c,0,0,54,42,&f);
+        let text=(0..c.h).map(|y|text_of(&c,y)).collect::<Vec<_>>().join("\n");
+        assert!(!text.contains("GPU状态") && !text.contains("程序GPU") && text.contains("显存"));
         s.gpu.sample=Default::default();s.gpu.state="故障回退 CPU".into();s.gpu.rows=0;
         assert_eq!(gpu_percent(s.gpu.sample.utilization),"--");assert!(gpu_activity(&s.gpu,Duration::ZERO).contains("故障回退"));
     }
@@ -1454,6 +1560,15 @@ mod tests {
         ui.key(KeyCode::Backspace,KeyModifiers::NONE,&ctl,&mut v,24);ui.key(KeyCode::Backspace,KeyModifiers::NONE,&ctl,&mut v,24);
         ui.key(KeyCode::Char('0'),KeyModifiers::NONE,&ctl,&mut v,24);ui.key(KeyCode::Enter,KeyModifiers::NONE,&ctl,&mut v,24);
         assert_eq!(ctl.desired_settings().native_wait_hours,0);
+        v.settings_row=14;ui.key(KeyCode::Enter,KeyModifiers::NONE,&ctl,&mut v,24);
+        assert!(v.sidebar_open);v.sidebar_row=10;
+        ui.key(KeyCode::Char(' '),KeyModifiers::NONE,&ctl,&mut v,24);
+        assert!(!ctl.desired_settings().sidebar_visible("gpu"));
+        let mut saved=cfg.clone();ctl.desired_settings().write(&mut saved);
+        let restored:crate::config::Config=toml::from_str(&toml::to_string(&saved).unwrap()).unwrap();
+        assert_eq!(restored.hidden_sidebar,vec!["gpu"]);
+        assert!(!ctl.desired_settings().topology_changed(&crate::settings::Settings::from_config(&cfg)));
+        ui.key(KeyCode::Esc,KeyModifiers::NONE,&ctl,&mut v,24);assert!(!v.sidebar_open && v.settings_open);
         v.settings_row=0;v.edit=Some("0".into());ui.key(KeyCode::Enter,KeyModifiers::NONE,&ctl,&mut v,24);
         assert!(v.edit.is_some());assert_eq!(ctl.desired_settings().idle_cores,2);
         ui.key(KeyCode::Esc,KeyModifiers::NONE,&ctl,&mut v,24);assert!(v.settings_open);
@@ -1464,16 +1579,12 @@ mod tests {
     fn settings_screen_fits_narrow_and_wide_consoles() {
         let ctl=Ctl::new(&crate::config::Config::fresh(2),16);let status=Status::default();let lines=VecDeque::new();
         let f=Frame{s:&status,lines:&lines,ctl:&ctl,m:SysView::default(),up:Duration::ZERO,multi:false};
-        for (w,h) in [(39,12),(69,24),(109,32)] {
-            for wide in [false,true] {
-                for selected in [0,4,9,11] {
-                    let mut v=View{settings_open:true,settings_row:selected,..Default::default()};let mut c=Canvas::new(w,h,wide);draw(&mut c,&f,&mut v);
-                    for y in 0..h {assert_eq!(text_of(&c,y).chars().map(|ch|c.cw(ch)).sum::<usize>(),w);}
-                    if w==109 && selected==4 && !wide {
-                        if let Ok(path)=std::env::var("SIMFLEET_SETTINGS_PREVIEW") {std::fs::write(path,(0..h).map(|y|text_of(&c,y)).collect::<Vec<_>>().join("\n")).unwrap();}
-                    }
-                }
-            }
+        for (w,h,wide,selected) in [(39,12,true,20),(109,32,false,14)] {
+            let mut v=View{settings_open:true,settings_row:14,sidebar_open:true,sidebar_row:selected,..Default::default()};
+            let mut c=Canvas::new(w,h,wide);draw(&mut c,&f,&mut v);
+            for y in 0..h {assert_eq!(text_of(&c,y).chars().map(|ch|c.cw(ch)).sum::<usize>(),w);}
+            assert!((0..h).map(|y|text_of(&c,y)).collect::<Vec<_>>().join("\n").contains("侧栏显示"));
+            if w==109 {if let Ok(path)=std::env::var("SIMFLEET_SETTINGS_PREVIEW") {std::fs::write(path,(0..h).map(|y|text_of(&c,y)).collect::<Vec<_>>().join("\n")).unwrap();}}
         }
     }
 
@@ -1510,7 +1621,6 @@ mod tests {
     fn preview() {
         let mut config=crate::config::Config::fresh(10);config.active_cores=10;
         let ctl = Ctl::new(&config,16);
-        let now = Instant::now();
         let s = Status {
             state: "计算中".into(),
             lanes_now: 10,
@@ -1546,7 +1656,6 @@ mod tests {
             held_secs: Some(34.0),
             group_views: (0..3).map(|i| GroupView { id: format!("a7i8qm{i:02}"), state: "计算中".into(), open: i < 3, tasks: 700 + i as u64, work: 7_800_000_000_000 }).collect(),
             lane_map: vec![Some(0), Some(0), Some(0), Some(0), Some(1), Some(1), Some(1), None, Some(2), None],
-            answered: [(now, 9_000_000_000, 0)].into_iter().collect(),
             lane_kind: vec![Some('P'), Some('P'), Some('P'), Some('P'), Some('P'), Some('P'), Some('E'), None, Some('E'), None],
             core_pref: Some("自动分配"),
             lane_yield: Some(0.52),
@@ -1579,18 +1688,29 @@ mod tests {
     }
 
     #[test]
-    fn gpu_work_is_part_of_total_speed_once_and_uses_the_same_window() {
+    fn device_speeds_freeze_without_work_and_resume_their_own_clocks() {
         let mut s = Status::default();
-        let now = Instant::now();
-        s.record_computed(now - Duration::from_secs(700), 20_000_000_000, true);
-        s.record_computed(now, 60_000_000_000, false);
-        s.record_computed(now, 30_000_000_000, true);
-        let (total, average, gpu) = rates(&s, Duration::from_secs(1200));
-        assert_eq!((total, average, gpu), (9.0, 5.5, 3.0));
-        assert_eq!(s.computed_work, 110_000_000_000);
-        assert_eq!(s.computed_gpu_work, 50_000_000_000);
-        s.record_computed(now + Duration::from_secs(201), 0, false);
-        assert_eq!(s.answered.len(), 3);
+        let start = Instant::now();
+        let at = |secs| start + Duration::from_secs(secs);
+        s.activity(at(0),true,true);
+        s.record_computed(at(60),60_000_000_000,false);
+        s.record_computed(at(60),30_000_000_000,true);
+        assert_eq!(rates(&s,at(60)),(90.0,90.0,30.0));
+        s.activity(at(60),true,false);
+        s.record_computed(at(120),60_000_000_000,false);
+        s.activity(at(120),false,false);
+        assert_eq!(rates(&s,at(3600)),(75.0,75.0,30.0));
+        assert_eq!(s.efficiency[1].rates(at(3600)).0,60.0);
+        s.activity(at(3600),false,true);
+        s.record_computed(at(3660),30_000_000_000,true);
+        s.activity(at(3660),false,false);
+        assert_eq!(rates(&s,at(7200)),(60.0,60.0,30.0));
+        assert_eq!((s.computed_work,s.computed_gpu_work),(180_000_000_000,60_000_000_000));
+        // Expire in active time, never by the intervening idle hour.
+        s.activity(at(7200),false,true);
+        s.activity(at(7801),false,false);
+        assert_eq!(s.efficiency[2].rates(at(7801)).0,0.0);
+        assert!(s.efficiency[2].recent.is_empty());
     }
 
     #[test]

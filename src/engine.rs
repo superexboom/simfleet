@@ -774,6 +774,9 @@ impl Pool {
     pub fn pending(&self, lane: usize) -> usize {
         self.pending.get(lane).copied().unwrap_or(0)
     }
+    pub fn computing(&self) -> bool {
+        self.pending.iter().any(|n| *n > 0)
+    }
     pub fn send(&mut self, lane: usize, job: Job) {
         let mut i=0;
         while i<self.retired.len() {

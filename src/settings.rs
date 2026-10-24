@@ -19,6 +19,7 @@ pub struct Settings {
     pub pause_on_battery: bool,
     pub gpu_enabled: bool,
     pub compute_memory_limit_mb:u64,
+    pub hidden_sidebar: Vec<String>,
 }
 impl Settings {
     pub fn from_config(c: &Config) -> Self {
@@ -37,6 +38,7 @@ impl Settings {
             pause_on_battery: c.pause_on_battery,
             gpu_enabled: c.gpu_enabled,
             compute_memory_limit_mb:c.compute_memory_limit_mb,
+            hidden_sidebar:c.hidden_sidebar.clone(),
         }
     }
     pub fn write(&self, c: &mut Config) {
@@ -54,6 +56,7 @@ impl Settings {
         c.pause_on_battery = self.pause_on_battery;
         c.gpu_enabled = self.gpu_enabled;
         c.compute_memory_limit_mb=self.compute_memory_limit_mb;
+        c.hidden_sidebar=self.hidden_sidebar.clone();
     }
     pub fn topology_changed(&self, old: &Self) -> bool {
         self.placement != old.placement
@@ -226,6 +229,7 @@ impl Settings {
             ),
             ("NVIDIA GPU 预览",self.gpu_enabled.to_string(),"true 自动探测榜单收益；学习适合 GPU 的场景，失败或过慢暂缓并回 CPU。"),
             ("CPU+GPU上限 MiB",self.compute_memory_limit_mb.to_string(),"Windows 进程合计提交硬上限，默认 8192；显存另计。改动后排空并重启。"),
+            ("侧栏显示项目",format!("隐藏 {} 项",self.hidden_sidebar.len()),"Enter 打开勾选菜单；也可在面板按 D，显示改动立即保存，无需重启。"),
         ]
     }
     pub fn choices(row: usize) -> &'static [&'static str] {
@@ -235,6 +239,32 @@ impl Settings {
             7 => &["idle", "below_normal", "normal"],
             11 | 12 => &["true", "false"],
             _ => &[],
+        }
+    }
+}
+
+/// Stable keys persisted in TOML; labels can change without losing preferences.
+pub const SIDEBAR_ITEMS: &[(&str, &str)] = &[
+    ("contribution", "贡献（整组）"), ("session", "  本次贡献 / 任务数"),
+    ("speed", "  总速度 / CPU、GPU 速度"), ("pending", "  待提交"),
+    ("today", "  今日贡献"), ("account", "  账号 / 本机积分"),
+    ("confirmation", "  确认进度"), ("resources", "资源（整组）"),
+    ("cpu", "  系统 CPU 占用"), ("process_cpu", "  本程序 CPU 占用"),
+    ("gpu", "  GPU 状态 / 占用 / 最近错误"), ("vram", "  显存"),
+    ("memory_limit", "  CPU+GPU 提交上限"), ("memory", "  系统 / 程序内存"),
+    ("utilisation", "  计算线程利用率"), ("budget", "  核心预算"),
+    ("concurrency", "  并发 / 积压"), ("effective_cores", "  实得核心 / 大小核"),
+    ("core_map", "  核心状态色块"), ("site", "全站在线 / 待算 / 线路"),
+    ("ranking", "本周贡献榜"),
+];
+impl Settings {
+    pub fn sidebar_visible(&self, key: &str) -> bool {
+        !self.hidden_sidebar.iter().any(|k| k == key)
+    }
+    pub fn toggle_sidebar(&mut self, index: usize) {
+        if let Some((key, _)) = SIDEBAR_ITEMS.get(index) {
+            if self.sidebar_visible(key) { self.hidden_sidebar.push((*key).into()); }
+            else { self.hidden_sidebar.retain(|k| k != key); }
         }
     }
 }

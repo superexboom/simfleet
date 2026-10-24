@@ -33,7 +33,7 @@ def main():
     p.add_argument("--wire-library", type=pathlib.Path, required=True)
     p.add_argument("--nvrtc-dir", type=pathlib.Path)
     p.add_argument("--private-kib", type=int, default=192)
-    p.add_argument("--block", type=int, choices=[8, 16, 32, 64, 128, 256], default=32)
+    p.add_argument("--block", type=int, choices=[1, 8, 16, 32, 64, 128, 256], default=32)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--cpu-rows", type=int, default=0)
     p.add_argument("--cpu-lanes", type=int, default=16)

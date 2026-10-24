@@ -59,6 +59,9 @@ pub struct Config {
     /// Windows hard commit ceiling for CPU worker plus GPU subprocesses, MiB.
     #[serde(default="default_compute_memory_limit")]
     pub compute_memory_limit_mb:u64,
+    /// Dashboard rows hidden by the display menu; an empty list shows all.
+    #[serde(default)]
+    pub hidden_sidebar: Vec<String>,
     /// Where published native engines are fetched from when `engines/` holds
     /// none (`<url>/engine-<id>/<id>-sfe<revision>.dll`); "" never downloads one.
     #[serde(default = "default_native_url")]
@@ -167,6 +170,7 @@ impl Config {
             native_engine: true,
             gpu_enabled: false,
             compute_memory_limit_mb:default_compute_memory_limit(),
+            hidden_sidebar: Vec::new(),
             native_engine_url: NATIVE_URL.into(),
             slots: 0,
             max_slots: 0,

@@ -17,3 +17,5 @@ __pycache__/
 /dispatch.log*
 /gpu-policy.json
 /gpu-policy.tmp
+/gpu-policy.json.bak
+/gpu-policy.*.tmp

@@ -806,6 +806,7 @@ impl Fleet {
     }
 
     fn drop_all(&mut self, why: &str) {
+        self.ui.status(|s| s.activity(Instant::now(), false, false));
         for p in &mut self.packs {
             p.rows.clear();
             // Protocol 8: what is no longer computed goes back with a sync soon.
@@ -1639,6 +1640,7 @@ impl Fleet {
         // Local work first, then steal across nodes/cache domains when they
         // would otherwise idle. A single task can still use the full budget.
         if crate::placement::active() { self.fill_lanes(true); }
+        self.ui.status(|s| s.activity(Instant::now(), self.pool.computing(), self.gpu.as_ref().is_some_and(|g|g.computing())));
     }
 
     fn release_gpu_rows(&mut self) {
@@ -1680,6 +1682,10 @@ impl Fleet {
         }
         if let Some(event)=self.gpu.as_mut().and_then(|g|g.poll()) {
             match event {
+                crate::gpu::Event::Notice(message)=>{
+                    self.trace.event(json!({"event":"gpu_learning","message":message}));
+                    self.ui.log(format!("{C_INFO}[GPU学习]{C_END} {message}"));
+                },
                 crate::gpu::Event::Progress=>{},
                 crate::gpu::Event::Ready(name)=>{
                     self.trace.event(json!({"event":"gpu_ready","engine":self.rel.engine,"restarts":self.gpu_restarts}));
@@ -1701,7 +1707,7 @@ impl Fleet {
                 crate::gpu::Event::Finished(rows)=>{
                     let fallback=rows.iter().filter(|r|r.fallback.is_some()).count();
                     if rows.len()>fallback {self.gpu_recovery.success(Instant::now());}
-                    self.trace.event(json!({"event":"gpu_batch_finished","rows":rows.len(),"fallback":fallback,"private_kib":self.gpu.as_ref().map(|g|g.budget()),"timing":self.gpu.as_ref().and_then(|g|g.last_timing.as_ref())}));
+                    self.trace.event(json!({"event":"gpu_batch_finished","rows":rows.len(),"fallback":fallback,"probe":rows.iter().any(|r|r.probe.is_some()),"work":rows.iter().filter(|r|r.fallback.is_none() && r.probe.is_none()).filter_map(|r|r.score["work"].as_u64()).sum::<u64>(),"private_kib":self.gpu.as_ref().map(|g|g.budget()),"timing":self.gpu.as_ref().and_then(|g|g.last_timing.as_ref())}));
                     if fallback>0 {
                         let pages=rows.iter().filter(|r|r.fallback==Some(120)).count();
                         let output=rows.iter().filter(|r|r.fallback==Some(2)).count();
@@ -1773,7 +1779,7 @@ impl Fleet {
         if rows.is_empty() || selected<required {self.ui.status(|s|s.gpu.state=if held==0{"待机：等待新任务".into()}else if held<=32{"待机：CPU收尾".into()}else if selected==0{"待机：暂缓场景或探测间隔".into()}else{format!("待机：合适任务 {selected}/{required}次")});return;}
         match self.gpu.as_mut().expect("available").submit(&rows) {
             Ok(())=>{
-                self.trace.event(json!({"event":"gpu_dispatch","probe":probing,"rows":rows.len(),"runs":selected,"private_kib":budget,"allowed_runs":allowed,"compute_limit_mib":self.cfg.compute_memory_limit_mb,"system_available_bytes":memory.map(|m|m.0),"system_reserve_bytes":memory.map(|m|crate::gpu::system_memory_reserve(m.1))}));
+                self.trace.event(json!({"event":"gpu_dispatch","probe":probing,"rows":rows.len(),"runs":selected,"private_kib":budget,"allowed_runs":allowed,"compute_limit_mib":self.cfg.compute_memory_limit_mb,"system_available_bytes":memory.map(|m|m.0),"system_reserve_bytes":memory.map(|m|crate::gpu::system_memory_reserve(m.1)),"contexts":rows.iter().map(|r|json!([r.request["weapon"],r.ruler,r.request["mode"]])).collect::<Vec<_>>()}));
                 if !probing {for t in &mut self.tasks {if rows.iter().any(|r|r.id==t.id) {if let Runner::Board(b)=&mut t.runner {b.gpu_pending=true;t.last_ran=Instant::now();}}}}
                 if probing {self.ui.log(format!("{C_INFO}[GPU]{C_END} 探测 {} / {}，CPU 同时正常计算",rows[0].request["weapon"].as_str().unwrap_or("?"),rows[0].ruler));}
                 else{self.ui.log(format!("{C_INFO}[GPU]{C_END} 已分配 {} 条独立榜单任务",rows.len()));}
@@ -2441,6 +2447,7 @@ impl Fleet {
             }
             self.cool_down_over();
             if let Some(why) = self.held_why() {
+                self.ui.status(|s| s.activity(Instant::now(), false, false));
                 self.stop_gpu();
                 if !self.tasks.is_empty() || !self.packs.is_empty() {
                     self.drop_all("，任务已交还");
