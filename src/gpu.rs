@@ -618,24 +618,30 @@ impl Manager {
         )
         .into()
     }
-    pub fn accepts(&self, input: &Input) -> bool {
-        !self
-            .excluded
-            .iter()
-            .any(|(k, until)| *k == Self::key(input) && *until > crate::sys::now_ms())
-            && self
-                .policy
-                .as_ref()
-                .is_some_and(|p| p.allowed(input, crate::sys::now_ms()))
-    }
     pub fn select(&self, candidates: &[Input], run_limit: &impl Fn(u32) -> usize) -> Vec<Input> {
         let now = crate::sys::now_ms();
         let Some(policy) = &self.policy else {
             return vec![];
         };
+        // Hashing the whole request inside the exclusion scan multiplies JSON
+        // serialization by every failure retained across worker restarts. A
+        // long-lived worker must not delay CPU completion/refill on that work.
+        let excluded: std::collections::HashSet<_> = self.excluded.iter()
+            .filter(|(_, until)| *until > now).map(|(key, _)| *key).collect();
+        let mut unknown = None;
         let full = fullest_batch(
-            candidates.iter().filter(|i| self.accepts(i))
-                .map(|row| (row, policy::family(row), policy.budget(row, now))),
+            candidates.iter().filter_map(|row| {
+                let family = policy::family(row);
+                let entry = policy.classify_key(&family, now);
+                if entry.is_some_and(|e| !e.allowed)
+                    || (!excluded.is_empty() && excluded.contains(&Self::key(row))) {
+                    return None;
+                }
+                match entry {
+                    Some(entry) => Some((row, family, entry.private_kib)),
+                    None => { unknown.get_or_insert(row); None }
+                }
+            }),
             &|budget| run_limit(budget)
                 .min(self.layout.run_limit(budget))
                 .min(device_run_limit(self.device_available_bytes, budget)),
@@ -655,13 +661,7 @@ impl Manager {
             return full;
         }
         if self.probe_supported && policy.can_probe(now) {
-            if let Some(row) = candidates.iter().find(|i| {
-                !self
-                    .excluded
-                    .iter()
-                    .any(|(k, until)| *k == Self::key(i) && *until > now)
-                    && policy.classify(i, now).is_none()
-            }) {
+            if let Some(row) = unknown {
                 let mut row = row.clone();
                 row.probe = true;
                 row.private_kib = 1536;
@@ -1098,6 +1098,22 @@ sys.stdin.read()
             private_kib: 192,
             probe: false,
         };
+        let rows: Vec<_> = (0..8)
+            .map(|i| {
+                let mut r = row.clone();
+                r.id = i + 1;
+                r.request["seed"] = serde_json::json!(i);
+                r
+            })
+            .collect();
+        let now=crate::sys::now_ms();
+        m.excluded=(0..510).map(|i| (Sha256::digest(format!("other-{i}").as_bytes()).into(),now+60_000)).collect();
+        m.excluded.push_back((Manager::key(&rows[0]),now+60_000));
+        m.excluded.push_back((Manager::key(&rows[1]),now-1));
+        let probe=m.select(&rows,&|_|16000);
+        assert_eq!(probe.len(),1);
+        assert!(probe[0].probe);
+        assert_eq!(probe[0].id,2,"expired exclusions must not hide a probe");
         assert!(m.policy.as_mut().unwrap().observed(
             &row,
             &Probe {
@@ -1108,15 +1124,9 @@ sys.stdin.read()
             },
             crate::sys::now_ms()
         ));
-        let rows: Vec<_> = (0..8)
-            .map(|i| {
-                let mut r = row.clone();
-                r.id = i + 1;
-                r.request["seed"] = serde_json::json!(i);
-                r
-            })
-            .collect();
         assert!(!m.policy.as_ref().unwrap().can_probe(crate::sys::now_ms()));
+        assert_eq!(m.select(&rows,&|_|16000).iter().map(|r|r.id).collect::<Vec<_>>(),(2..=8).collect::<Vec<_>>());
+        m.excluded.clear();
         assert_eq!(m.select(&rows,&|_|16000).len(),8);
         m.submit(&rows).unwrap();
         loop {

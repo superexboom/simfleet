@@ -116,15 +116,21 @@ impl Policy {
         self.saved.entries.retain(|_,e|e.private_kib>=layout.minimum_kib());
         self
     }
+    #[cfg(test)]
     pub fn classify(&self, input: &Input, now: u64) -> Option<&Entry> {
+        self.classify_key(&family(input), now)
+    }
+    pub fn classify_key(&self, key: &str, now: u64) -> Option<&Entry> {
         self.saved
             .entries
-            .get(&family(input))
+            .get(key)
             .filter(|e| e.until > now)
     }
+    #[cfg(test)]
     pub fn allowed(&self, input: &Input, now: u64) -> bool {
         self.classify(input, now).is_some_and(|e| e.allowed)
     }
+    #[cfg(test)]
     pub fn budget(&self, input: &Input, now: u64) -> u32 {
         self.classify(input, now).map_or(384, |e| e.private_kib)
     }
