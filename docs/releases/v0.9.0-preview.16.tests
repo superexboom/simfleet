@@ -1,0 +1,1 @@
+gpu::tests::allocation_error_keeps_learned_context_and_releases_owned_rows

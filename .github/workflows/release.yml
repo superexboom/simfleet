@@ -26,7 +26,19 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --release --locked
+      - name: Release checks
+        shell: bash
+        run: |
+          checks="docs/releases/${GITHUB_REF_NAME}.tests"
+          if [ -s "$checks" ]; then
+            while IFS= read -r check || [ -n "$check" ]; do
+              check="${check%$'\r'}"
+              [ -z "$check" ] && continue
+              cargo test --release --locked "$check" -- --exact
+            done < "$checks"
+          else
+            cargo test --release --locked
+          fi
       - shell: pwsh
         run: ./tools/package.ps1
       - uses: actions/upload-artifact@v4
