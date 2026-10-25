@@ -1,0 +1,89 @@
+{
+  "date": "2026-10-25",
+  "engine": "6c720edfd739",
+  "upstream": "98b5e28e515c531cdb24d57c2b099e989a8fdca3",
+  "client": "0.9.0-preview.15",
+  "fix_commit": "3ef2b72e447e5c625bb9abddb424608279dca5a4",
+  "reference_wasm": "4990a5afe220",
+  "reference_data": "f8bc96ccab7e",
+  "native": {
+    "sha256": "df63a1a4ef0eeb667270c83268a16cfd10cd6bc9c03d79bc7caed09d99039bda",
+    "cpu": "x86-64-v3",
+    "pgo": true,
+    "board_rows": 8,
+    "all_board_rows_have_rivens": true,
+    "scores_work_gas_exact": true,
+    "riven_search_canary_exact": true,
+    "action_url": "https://github.com/superexboom/simfleet/actions/runs/40161436720",
+    "action_conclusion": "success"
+  },
+  "gpu": [
+    {
+      "architecture": "sm120",
+      "device_validated": true,
+      "module_sha256": "7c709ba47c16eec2b7c888c3a2c9bf1de59f457c5c10c5aa3c5cecdc5300edca",
+      "bridge_sha256": "d1cc48ed7c196eb311c1d5e26efb68aec52ebf6edac7e7fe35737f05d031771a",
+      "wire_sha256": "a2e6975d434704a7d2718c9c01c59d9cd48aae6a36e9fce542886a1f1795a7ea",
+      "package": "simfleet-gpu-6c720edfd739-sfg3-sm120-windows-x64.zip",
+      "package_sha256": "81410dac3da46d361eb857aef54b4334a314f456ad193ed45a5f6e94fddc71c5",
+      "package_files": 6
+    },
+    {
+      "architecture": "sm89",
+      "device_validated": false,
+      "module_sha256": "4971a4622031eae89b2cfa37af96b79fbd267c2970e5bf696208662b5196999f",
+      "bridge_sha256": "d1cc48ed7c196eb311c1d5e26efb68aec52ebf6edac7e7fe35737f05d031771a",
+      "wire_sha256": "a2e6975d434704a7d2718c9c01c59d9cd48aae6a36e9fce542886a1f1795a7ea",
+      "package": "simfleet-gpu-6c720edfd739-sfg3-sm89-windows-x64.zip",
+      "package_sha256": "4b4146babd4004b4574835a554c6882419e1395285f22f1988c51ea51ea0518d",
+      "package_files": 6
+    },
+    {
+      "architecture": "sm75",
+      "device_validated": false,
+      "module_sha256": "de1c95a0da334d313d4dccccd6c20af43626cdeff494504a8ab710d300e95eef",
+      "bridge_sha256": "d1cc48ed7c196eb311c1d5e26efb68aec52ebf6edac7e7fe35737f05d031771a",
+      "wire_sha256": "a2e6975d434704a7d2718c9c01c59d9cd48aae6a36e9fce542886a1f1795a7ea",
+      "package": "simfleet-gpu-6c720edfd739-sfg3-sm75-windows-x64.zip",
+      "package_sha256": "862007efc55855d647d1cd2e0d0f2c3b3d59e127a0d221cbf063b7e1e3e13f70",
+      "package_files": 6
+    }
+  ],
+  "sm120_validation": {
+    "weapon": "burston_prime",
+    "ruler": "standard_single_target",
+    "mode": "base",
+    "includes_riven": true,
+    "exact_shards": 128,
+    "short_scores": 2,
+    "worker_complete_scores": 4,
+    "worker_runs_per_row": 1000,
+    "worker_distinct_gpu_requests": 4,
+    "worker_seconds": 15.782323699997505,
+    "worker_private_bytes": 3756744704,
+    "live_first_batch": {
+      "weapon": "torid",
+      "ruler": "standard_single_target__aimed_body",
+      "mode": "cycle",
+      "rows": 5,
+      "work": 15224412140,
+      "gpu_ms": 14433,
+      "fallback_rows": 0
+    }
+  },
+  "limits": {
+    "runtime_compute_mib": 8192,
+    "build_family_mib": 8192,
+    "sm120_build_peak_private_bytes": 3799924736
+  },
+  "scope": "Compatibility refresh, not a throughput benchmark. sm75 and sm89 share the validated host bridge but have not been run on matching hardware. GPU riven_gain search is not implemented; fixed-build board rows with rivens are supported.",
+  "deployment_observation": {
+    "local_time": "2026-10-25T13:10:14+08:00",
+    "gpu_completed_rows": 49,
+    "gpu_completed_batches": 9,
+    "last_gpu_state": "waiting for suitable batch: 3000/4000 runs",
+    "probe_and_full_batch_timeouts_observed": true,
+    "worker_recovered": true,
+    "all_workloads_gpu_efficient": false
+  }
+}
