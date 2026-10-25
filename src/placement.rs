@@ -7,10 +7,12 @@ use crate::config::Config;
 use anyhow::{bail, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
+use std::ops::Range;
 
 struct Plan {
     cpus: Vec<Cpu>,
     mode: String,
+    slots: Vec<Range<usize>>,
 }
 static PLAN: OnceLock<Option<Plan>> = OnceLock::new();
 
@@ -24,7 +26,7 @@ fn plan(t: &Topology, cfg: &Config) -> Result<Option<Plan>> {
         }
         return Ok(None);
     }
-    if cfg.placement == "auto" && Prefer::parse(&cfg.core_type) == Prefer::Windows && cfg.numa_nodes.is_empty() && cfg.cpu_offset == 0 {
+    if cfg.slot_threads == 0 && cfg.placement == "auto" && Prefer::parse(&cfg.core_type) == Prefer::Windows && cfg.numa_nodes.is_empty() && cfg.cpu_offset == 0 {
         return Ok(None);
     }
     let all_nodes: BTreeSet<u32> = t.cpus.iter().map(|c| c.numa).collect();
@@ -44,7 +46,7 @@ fn plan(t: &Topology, cfg: &Config) -> Result<Option<Plan>> {
     let caches: BTreeSet<_> = cpus.iter().map(|c| (c.group, c.llc)).collect();
     let groups: BTreeSet<_> = cpus.iter().map(|c| c.group).collect();
     let hybrid = t.hybrid().is_ok();
-    if cfg.placement == "auto" && nodes.len() == 1 && caches.len() == 1 && groups.len() == 1 && !hybrid && cfg.numa_nodes.is_empty() && cfg.cpu_offset == 0 {
+    if cfg.slot_threads == 0 && cfg.placement == "auto" && nodes.len() == 1 && caches.len() == 1 && groups.len() == 1 && !hybrid && cfg.numa_nodes.is_empty() && cfg.cpu_offset == 0 {
         return Ok(None);
     }
     let mode = if cfg.placement == "auto" {
@@ -101,7 +103,73 @@ fn plan(t: &Topology, cfg: &Config) -> Result<Option<Plan>> {
     }
     let offset = cfg.cpu_offset % cpus.len();
     cpus.rotate_left(offset);
-    Ok(Some(Plan { cpus, mode: mode.into() }))
+    let (cpus, slots) = if cfg.slot_threads > 0 {
+        partition_cpus(cpus, cfg.slot_threads, mode)
+    } else { (cpus, Vec::new()) };
+    Ok(Some(Plan { cpus, mode: mode.into(), slots }))
+}
+
+/// Pack physical-core bundles within a locality domain. Distribute each
+/// class across slots before the next class; SMT siblings travel together
+/// unless an odd slot limit leaves only single-thread holes.
+fn partition_cpus(cpus: Vec<Cpu>, limit: usize, mode: &str) -> (Vec<Cpu>, Vec<Range<usize>>) {
+    let mut domains: Vec<((u32,u64), Vec<Vec<Cpu>>)> = Vec::new();
+    for cpu in cpus {
+        let domain=(cpu.numa,if mode=="numa" {0} else {(u64::from(cpu.group)<<32)|u64::from(cpu.llc)});
+        let d=domains.iter().position(|(key,_)|*key==domain).unwrap_or_else(||{domains.push((domain,Vec::new()));domains.len()-1});
+        let cores=&mut domains[d].1;
+        if let Some(core)=cores.iter_mut().find(|v|v[0].group==cpu.group && v[0].core==cpu.core) {core.push(cpu);}
+        else {cores.push(vec![cpu]);}
+    }
+    let (mut ordered,mut slots)=(Vec::new(),Vec::new());
+    for (_, mut cores) in domains {
+        for core in &mut cores {core.sort_by_key(|c|c.index);}
+        let total=cores.iter().map(Vec::len).sum::<usize>();
+        let n=total.div_ceil(limit.max(1));
+        let capacities:Vec<_>=(0..n).map(|i|limit.min(total-i*limit)).collect();
+        let mut banks:Vec<Vec<Cpu>>=vec![Vec::new();n];
+        let mut singles=Vec::new();
+        for core in cores {
+            let class=core[0].class;
+            if let Some(i)=(0..n).filter(|i|banks[*i].len()+core.len()<=capacities[*i])
+                .min_by_key(|i|(banks[*i].iter().filter(|c|c.class==class).count()*4096/capacities[*i],banks[*i].len()*4096/capacities[*i],*i)) {
+                banks[i].extend(core);
+            } else {singles.extend(core);}
+        }
+        for cpu in singles {
+            let i=(0..n).find(|i|banks[*i].len()<capacities[*i]).expect("partition capacity");
+            banks[i].push(cpu);
+        }
+        for bank in banks.into_iter().filter(|b|!b.is_empty()) {
+            let start=ordered.len();ordered.extend(bank);slots.push(start..ordered.len());
+        }
+    }
+    (ordered,slots)
+}
+
+/// Groups beyond the number of physical partitions share a partition. The
+/// dispatcher rotates among them; no group can exceed its partition's width.
+#[derive(Clone, Debug)]
+pub struct Slots { ranges: Vec<Range<usize>>, shared: bool }
+impl Slots {
+    fn new(lanes: usize, limit: usize, ranges: &[Range<usize>]) -> Self {
+        let shared=limit==0;
+        let ranges=if shared {vec![0..lanes]} else if !ranges.is_empty() {
+            ranges.iter().filter(|r|r.start<lanes).map(|r|r.start..r.end.min(lanes)).collect()
+        } else {(0..lanes).step_by(limit.max(1)).map(|start|start..(start+limit).min(lanes)).collect()};
+        Self {ranges,shared}
+    }
+    pub fn count(&self)->usize {self.ranges.len().max(1)}
+    pub fn range(&self,group:usize)->Range<usize> {
+        self.ranges.get(group%self.count()).cloned().unwrap_or(0..0)
+    }
+    pub fn allows(&self,group:usize,lane:usize)->bool {self.range(group).contains(&lane)}
+    pub fn width(&self,group:usize)->usize {self.range(group).len()}
+    pub fn bank(&self,lane:usize)->usize {self.ranges.iter().position(|r|r.contains(&lane)).unwrap_or(0)}
+    pub fn partitioned(&self)->bool {!self.shared}
+}
+pub fn slots(lanes:usize,limit:usize)->Slots {
+    Slots::new(lanes,limit,PLAN.get().and_then(Option::as_ref).map_or(&[],|p|p.slots.as_slice()))
 }
 
 pub fn init(cfg: &Config) -> Result<Option<String>> {
@@ -117,11 +185,13 @@ pub fn init(cfg: &Config) -> Result<Option<String>> {
     }
     let msg = p.as_ref().map(|p| {
         format!(
-            "{} 调度：{} 个可用线程，{} 个 NUMA 节点，{} 组末级缓存；线程先占物理核心，再用 SMT",
+            "{} 调度：{} 个可用线程，{} 个 NUMA 节点，{} 组末级缓存；{}",
             p.mode,
             p.cpus.len(),
             p.cpus.iter().map(|c| c.numa).collect::<BTreeSet<_>>().len(),
-            p.cpus.iter().map(|c| (c.group, c.llc)).collect::<BTreeSet<_>>().len()
+            p.cpus.iter().map(|c| (c.group, c.llc)).collect::<BTreeSet<_>>().len(),
+            if cfg.slot_threads>0 {format!("每路最多 {} 线程，物理核与 SMT 成组，共 {} 个分区",cfg.slot_threads,p.slots.len())}
+            else {"线程先占物理核心，再用 SMT".into()}
         )
     });
     let _ = PLAN.set(p);
@@ -198,6 +268,12 @@ pub fn report(cfg: &Config) -> Result<String> {
                 s += &format!(" N{}:G{}:{}", c.numa, c.group, c.index);
             }
             s.push('\n');
+            for (i,range) in p.slots.iter().enumerate() {
+                let members=&p.cpus[range.clone()];
+                let cores=members.iter().map(|c|(c.group,c.core)).collect::<BTreeSet<_>>().len();
+                s+=&format!("  分区 {}：{} 线程 / {} 物理核，CPU {}\n",i+1,members.len(),cores,
+                    members.iter().map(|c|format!("G{}:{}",c.group,c.index)).collect::<Vec<_>>().join(","));
+            }
         }
     }
     Ok(s)
@@ -309,6 +385,18 @@ mod tests {
         assert!(p.cpus[64..].iter().all(|c| c.index % 2 == 1));
         assert_eq!(p.cpus[..4].iter().map(|c| c.numa).collect::<Vec<_>>(), [0, 1, 0, 1]);
         assert_eq!(p.cpus.iter().map(|c| c.id).collect::<BTreeSet<_>>().len(), 128);
+        let mut cfg=cfg;cfg.slot_threads=10;
+        let p=plan(&t,&cfg).unwrap().unwrap();
+        assert_eq!(p.slots.len(),14);
+        assert!(p.slots.iter().all(|r| r.len()<=10 && p.cpus[r.clone()].iter().all(|c|c.numa==p.cpus[r.start].numa)));
+        let slots=Slots::new(128,10,&p.slots);
+        assert_eq!(slots.range(0),slots.range(14));
+        assert_eq!(slots.width(0),10);
+        assert_eq!(slots.width(6),4);
+        let reduced=Slots::new(11,10,&p.slots);
+        assert_eq!(reduced.width(1),1);
+        assert!(!reduced.allows(0,10));
+        assert!(reduced.allows(1,10));
     }
     #[test]
     fn cache_chip_fills_large_cache_physical_cores_then_other_ccd() {
@@ -322,6 +410,39 @@ mod tests {
         assert!(p.cpus[..8].iter().all(|c| c.llc == 0 && c.index % 2 == 0));
         assert!(p.cpus[8..16].iter().all(|c| c.llc == 1 && c.index % 2 == 0));
         assert!(p.cpus[16..].iter().all(|c| c.index % 2 == 1));
+        let mut cfg=Config::fresh(32);cfg.slot_threads=8;
+        let p=plan(&t,&cfg).unwrap().unwrap();
+        assert_eq!(p.slots.len(),4);
+        for r in &p.slots {
+            let cpus=&p.cpus[r.clone()];
+            assert_eq!(cpus.len(),8);
+            assert_eq!(cpus.iter().map(|c|(c.group,c.core)).collect::<BTreeSet<_>>().len(),4);
+            assert!(cpus.iter().all(|c|c.llc==cpus[0].llc));
+        }
+        assert_eq!(p.cpus.iter().map(|c|c.id).collect::<BTreeSet<_>>().len(),32);
+    }
+    #[test]
+    fn hybrid_odd_slots_mix_complete_p_cores_and_independent_e_cores() {
+        let mut t=chip(1,6);
+        for c in &mut t.cpus {c.class=1;}
+        for i in 0..4 {t.cpus.push(Cpu{id:12+i,index:12+i,core:6+i,cache_bytes:32<<20,..Default::default()});}
+        let mut cfg=Config::fresh(16);cfg.slot_threads=5;
+        let p=plan(&t,&cfg).unwrap().unwrap();
+        assert_eq!(p.slots.iter().map(Range::len).collect::<Vec<_>>(),vec![5,5,5,1]);
+        for r in p.slots.iter().take(3) {
+            let cpus=&p.cpus[r.clone()];
+            assert_eq!(cpus.iter().filter(|c|c.class==1).count(),4);
+            assert_eq!(cpus.iter().map(|c|c.core).collect::<BTreeSet<_>>().len(),3);
+        }
+        assert_eq!(p.cpus.iter().map(|c|c.id).collect::<BTreeSet<_>>().len(),16);
+        // No E cores: odd caps must split some pairs, while every full slot
+        // still owns two complete physical cores and just one shared thread.
+        let mut homogeneous=t;homogeneous.cpus.retain(|c|c.class==1);
+        let p=plan(&homogeneous,&cfg).unwrap().unwrap();
+        for r in p.slots.iter().filter(|r|r.len()==5) {
+            let cpus=&p.cpus[r.clone()];
+            assert_eq!(cpus.iter().map(|c|c.core).collect::<BTreeSet<_>>().len(),3);
+        }
     }
     #[test]
     fn explicit_partition_and_offset_do_not_wrap_budget() {
@@ -354,6 +475,7 @@ mod tests {
     fn selected_lane_really_runs_on_its_processor() {
         let mut cfg = Config::fresh(1);
         cfg.placement = "cache".into();
+        cfg.slot_threads = 3;
         init(&cfg).unwrap();
         let p = PLAN.get().unwrap().as_ref().unwrap();
         for (lane, cpu) in p.cpus.iter().enumerate().take(16) {

@@ -314,6 +314,8 @@ struct Group {
     /// A row's wall time in this group, smoothed (the `pace_ms` a pack is sized
     /// by): rows finishing side by side count the time between them.
     pace_ms: f64,
+    /// Sync round-trip cost informs how early the next pack is requested.
+    sync_rtt_ms: f64,
     last_row: Option<Instant>,
     /// When the server last had nothing for it.
     nothing_at: Option<Instant>,
@@ -384,6 +386,9 @@ pub struct Fleet {
     tag_task: HashMap<u64, u64>,
     /// The task whose job each lane runs.
     lane_job: Vec<Option<u64>>,
+    /// Rotates groups sharing a CPU partition; task age stays local to a group.
+    next_lane_group: Vec<usize>,
+    slot_trace_at: Instant,
     next_id: u64,
     stale: bool,
     /// THE BOARD'S PROTOCOL this run: 8, or 7 once the server or the config says so.
@@ -503,6 +508,8 @@ impl Fleet {
             sending: Vec::new(),
             tag_task: HashMap::new(),
             lane_job: Vec::new(),
+            next_lane_group: Vec::new(),
+            slot_trace_at: Instant::now()-Duration::from_secs(5),
             next_id: 0,
             stale: false,
             proto,
@@ -558,7 +565,9 @@ impl Fleet {
             replay_memory_available: None,
         };
         if f.cfg.slots > 0 {
-            f.open = f.cfg.slots;
+            f.open = f.cfg.slots.min(f.max_groups()).max(1);
+        } else if f.slot_limit() > 0 {
+            f.open = f.cpu_slots().count().min(f.max_groups());
         }
         if f.proto == 7 {
             f.ui.log(format!("{C_INFO}[协议]{C_END} 按配置使用协议 7"));
@@ -610,6 +619,7 @@ impl Fleet {
                 points: None,
                 give_back: false,
                 last_received: None,
+                sync_rtt_ms: 0.0,
                 wait_reason: String::new(),
             });
         }
@@ -682,11 +692,14 @@ impl Fleet {
     /// rows on every lane — nor than memory allows (`watch_memory`).
     fn max_groups(&self) -> usize {
         let cap = match self.ctl.max_slots.load(Ordering::Relaxed) {
-            0 => crate::config::auto_max_slots(self.ctl.max_cores),
+            0 => crate::config::auto_max_slots(self.ctl.max_cores).max(if self.slot_limit()>0 {self.cpu_slots().count()} else {1}),
             n => n,
         };
-        (self.lanes() / 2).max(1).min(cap).min(self.mem_cap.unwrap_or(usize::MAX))
+        let lanes=if self.slot_limit()>0 {self.lanes()} else {self.lanes()/2};
+        lanes.max(1).min(cap.clamp(1,64)).min(self.mem_cap.unwrap_or(usize::MAX))
     }
+    fn slot_limit(&self)->usize {self.settings_original.slot_threads}
+    fn cpu_slots(&self)->crate::placement::Slots {crate::placement::slots(self.lanes(),self.slot_limit())}
     fn backend(&self) -> Backend {
         if self.pool.code().native.is_some() { Backend::Native } else { Backend::Wasm }
     }
@@ -706,13 +719,14 @@ impl Fleet {
     }
 
     /// WHAT THIS ID CAN GIVE: its share of the lanes, as one browser among several says its own.
-    fn id_lanes(&self) -> usize {
-        (self.lanes() / self.open.max(1)).max(1)
+    fn id_lanes(&self,group:usize) -> usize {
+        if self.slot_limit()>0 {self.cpu_slots().width(group).max(1)}
+        else {(self.lanes() / self.open.max(1)).max(1)}
     }
 
     /// A protocol 7 ask (`/api/board/work`).
     fn ask_body(&self, gi: usize, ahead: bool) -> Value {
-        let lanes = self.id_lanes();
+        let lanes = self.id_lanes(gi);
         let g = &self.groups[gi];
         let mut b = json!({
             "verifier": g.verifier,
@@ -1038,7 +1052,11 @@ impl Fleet {
 
     /// THE NEXT ROW of the oldest pack with one, started — `false` when no pack has one.
     fn start_row(&mut self) -> bool {
-        let Some(pi) = self.packs.iter().position(|p| !p.rows.is_empty()) else { return false };
+        let pi=if self.slot_limit()>0 {
+            self.packs.iter().enumerate().filter(|(_,p)|!p.rows.is_empty())
+                .min_by_key(|(_,p)|self.tasks.iter().filter(|t|t.group==p.group).count()).map(|(i,_)|i)
+        }else {self.packs.iter().position(|p|!p.rows.is_empty())};
+        let Some(pi)=pi else {return false};
         let p = &mut self.packs[pi];
         let Some(mut w) = p.rows.pop_front() else { return false };
         p.running += 1;
@@ -1294,7 +1312,9 @@ impl Fleet {
                 continue;
             }
             let open = gi < self.open && !held_back && self.switch_to.is_none() && !self.memory_guard.draining() && self.settings_restart.is_none();
-            let go = match (idle && open && now >= self.groups[gi].not_before).then(|| self.idle_go(gi, now)) {
+            // Prepare the signal/jitter while the grant gate runs. The work
+            // request below still cannot leave before the server's deadline.
+            let go = match (idle && open).then(|| self.idle_go(gi, now)) {
                 Some(None) => false,
                 // Work waits for the signal/jitter; due result flushes and
                 // renewals must remain independent of signal availability.
@@ -1303,14 +1323,17 @@ impl Fleet {
                 None => false,
             };
             let g = &self.groups[gi];
-            let left = held as f64 * if g.pace_ms > 0.0 { g.pace_ms } else { 60_000.0 };
-            let work = open && now >= g.not_before && packs < self.dials.packs_held && if idle { go } else { left < self.dials.sync_low_ms as f64 };
+            let left = self.remaining_rows(gi) * if g.pace_ms > 0.0 { g.pace_ms } else { 60_000.0 };
+            let ahead=prefetch_window(self.dials.sync_low_ms,self.dials.pack8_ms,self.dials.sync_floor_ms,g.sync_rtt_ms,self.slot_limit()>0);
+            let work = open && now >= g.not_before && packs < self.dials.packs_held && if idle { go } else { left <= ahead as f64 };
             // WITH NO PACE YET the server hands `pack_first` rows whatever is
             // asked, and says to come back once what was asked is nearly done:
             // asked for ten minutes, that is eight minutes with three rows.
             // So it is asked for about what it gives — back in a minute, pace known.
             let want = if g.pace_ms > 0.0 {
-                (self.dials.pack8_ms as f64 - left).max(0.0) as u64
+                // The slot cap slows a single identity; keep a full next pack
+                // ready within the server's pack/lease limits.
+                if self.slot_limit()>0 {self.dials.pack8_ms} else {(self.dials.pack8_ms as f64 - left).max(0.0) as u64}
             } else {
                 (self.dials.sync_low_ms + self.dials.sync_floor_ms).min(self.dials.pack8_ms)
             };
@@ -1340,7 +1363,7 @@ impl Fleet {
         let engine = engine.unwrap_or_else(|| self.rel.engine.clone());
         let current = engine == self.rel.engine;
         let held = if current { self.held_rows(gi) } else { Vec::new() };
-        let lanes = self.id_lanes();
+        let lanes = self.id_lanes(gi);
         let consent = json!({ "v": self.cfg.consent_v, "at": self.cfg.consent_at });
         let (since, lease_max) = (sys::local_midnight_utc_hour(), self.dials.sync_lease_ms);
         let g = &mut self.groups[gi];
@@ -1401,6 +1424,7 @@ impl Fleet {
             Out::Failed(why) => {
                 self.trace.event(json!({"event":"sync_failed","group":gi+1,"elapsed_ms":s.at.elapsed().as_millis()}));
                 let g = &mut self.groups[gi];
+                g.sync_rtt_ms=g.sync_rtt_ms.max(s.at.elapsed().as_secs_f64()*1000.0);
                 g.failures += 1;
                 g.retry_at = now + sync::backoff(g.failures);
                 // A body the server cannot read is this client's to fix: said, not only tried again.
@@ -1423,6 +1447,8 @@ impl Fleet {
         let lease_ms = self.dials.sync_lease_ms;
         let g = &mut self.groups[gi];
         g.failures = 0;
+        let elapsed=s.at.elapsed().as_secs_f64()*1000.0;
+        g.sync_rtt_ms=if g.sync_rtt_ms>0.0 {g.sync_rtt_ms*0.75+elapsed*0.25} else {elapsed};
         g.last_sync = Some(now);
         g.wait_reason=if r["early"]==true{"服务器领取间隔"}else if r["busy"]==true||r["paused"]==true{"服务器暂缓派发"}else if incoming==0 && r["work"]["kind"]!="riven_gain" && s.want>0{"服务器未分配"}else{"领取间隔"}.into();
         if let Some(ms) = r["next_ms"].as_u64() {
@@ -1644,6 +1670,16 @@ impl Fleet {
         // would otherwise idle. A single task can still use the full budget.
         if crate::placement::active() { self.fill_lanes(true); }
         self.ui.status(|s| s.activity(Instant::now(), self.pool.computing(), self.gpu.as_ref().is_some_and(|g|g.computing())));
+        if self.slot_limit()>0 && self.slot_trace_at.elapsed()>=Duration::from_secs(5) && self.pool.computing() {
+            self.slot_trace_at=Instant::now();
+            let slots=self.cpu_slots();
+            let jobs:Vec<_>=self.lane_job.iter().enumerate().filter_map(|(lane,id)|{
+                let task=self.tasks.iter().find(|t|Some(t.id)==*id)?;
+                Some(json!({"lane":lane,"group":task.group+1,"task":task.id}))
+            }).collect();
+            self.trace.event(json!({"event":"slot_schedule","lanes":self.lanes(),"slot_threads":self.slot_limit(),"open":self.open,
+                "ranges":(0..self.groups.len()).map(|g|{let r=slots.range(g);json!([r.start,r.end])}).collect::<Vec<_>>(),"jobs":jobs}));
+        }
         if began.elapsed()>=Duration::from_millis(200) {
             self.trace.event(json!({"event":"dispatch_slow","elapsed_ms":began.elapsed().as_millis(),"cpu_fill_ms":before_gpu,"gpu_dispatch_ms":after_gpu-before_gpu,"lanes":self.lanes(),"cpu_pending_lanes":(0..self.lanes()).filter(|l|self.pool.pending(*l)>0).count(),"active_tasks":self.tasks.len(),"held_rows":self.packs.iter().map(|p|p.rows.len()).sum::<usize>()}));
         }
@@ -1798,17 +1834,30 @@ impl Fleet {
     /// …one pass; the lanes it left free that a board row could use.
     fn fill_lanes(&mut self, remote: bool) -> usize {
         let lanes = self.lanes();
+        let slots = self.cpu_slots();
+        self.next_lane_group.resize(slots.count(),0);
         self.pool.ensure(lanes);
         crate::affinity::process_default(lanes);
         let backend = self.backend();
         // Leaders: a riven gain without one takes the lowest free lane in
         // budget, and its backend — once the riven canary has its verdict.
         let riven_backend = self.riven_backend();
+        let mut taken: Vec<usize> = self.tasks.iter().filter_map(|t| match &t.runner { Runner::Riven(r) => r.leader, _ => None }).collect();
         for i in 0..self.tasks.len() {
-            let taken: Vec<usize> = self.tasks.iter().filter_map(|t| match &t.runner { Runner::Riven(r) => r.leader, _ => None }).collect();
+            let group=self.tasks[i].group;
             if let (Runner::Riven(r), Some(b)) = (&mut self.tasks[i].runner, riven_backend) {
+                // Search state is thread-local. If a reduced budget moves its
+                // group, retire it only after all outstanding calls return.
+                if slots.partitioned() && r.leader.is_some_and(|l|!slots.allows(group,l))
+                    && r.lead_tag.is_none() && r.inflight.is_empty() {
+                    self.pool.retire(r.leader.unwrap());
+                    *r=Riven::new(r.request.clone());
+                    self.ui.glog(group,format!("{C_INFO}[调度]{C_END} 线程预算改变，紫卡搜索在新分区重新开始"));
+                }
                 if r.leader.is_none() {
-                    r.leader = (0..lanes).find(|l| !taken.contains(l));
+                    r.leader = (0..lanes).filter(|l|slots.allows(group,*l) && !taken.contains(l))
+                        .min_by_key(|l|self.pool.pending(*l));
+                    if let Some(l)=r.leader {taken.push(l);}
                     r.backend = b;
                 }
             }
@@ -1821,21 +1870,45 @@ impl Fleet {
         // A RIVEN GAIN'S JOBS FIRST (see the module's note), then the rest by age.
         let order: Vec<usize> =
             (0..self.tasks.len()).filter(|&i| self.tasks[i].riven()).chain((0..self.tasks.len()).filter(|&i| !self.tasks[i].riven())).collect();
+        let mut used=vec![0;self.groups.len()];
+        let mut by_group=vec![Vec::new();self.groups.len()];
+        if slots.partitioned() {
+            for &i in &order {by_group[self.tasks[i].group].push(i);}
+            for id in self.lane_job.iter().flatten() {
+                if let Some(t)=self.tasks.iter().find(|t|t.id==*id) {used[t.group]+=1;}
+            }
+        }
         let mut free = 0;
         for lane in 0..lanes {
             if self.pool.pending(lane) > 0 {
                 continue;
             }
             let owner = leader_of.get(&lane).copied();
-            for &ti in &order {
+            let bank=slots.bank(lane);
+            // Build each group's task order once, then rotate group buckets.
+            // Re-sorting every active task for every free lane scales poorly.
+            let candidates;
+            let order=if slots.partitioned() {
+                let groups=self.groups.len().max(1);
+                candidates=(0..groups).map(|i|(self.next_lane_group[bank]%groups+i)%groups)
+                    .filter(|g|slots.allows(*g,lane) && used[*g]<slots.width(*g))
+                    .flat_map(|g|by_group[g].iter().copied()).collect::<Vec<_>>();
+                &candidates
+            }else {&order};
+            for &ti in order {
                 let t = &mut self.tasks[ti];
+                if !slots.allows(t.group,lane) || (slots.partitioned() && used[t.group]>=slots.width(t.group)) {continue;}
                 let mine = owner == Some(t.id);
                 let tag = self.pool.next_tag();
+                let share=slots.width(t.group);
+                // A partition already owns its locality. An old row's first
+                // touch must not keep it from making progress after budget changes.
+                let local=remote || slots.partitioned();
                 let job = match &mut t.runner {
                     // Never on a leader's lane: its next lead step must not wait.
-                    Runner::Board(b) if owner.is_none() => b.job_on(tag, lanes, lane, remote).map(|c| (backend, c)),
+                    Runner::Board(b) if owner.is_none() => b.job_on(tag, share, lane, local).map(|c| (backend, c)),
                     Runner::Riven(r) if (owner.is_none() || mine)
-                        && (remote || r.leader.is_none_or(|l| crate::placement::same_domain(l,lane))) => r.job(lane, tag).map(|c| (r.backend, c)),
+                        && (local || r.leader.is_none_or(|l| crate::placement::same_domain(l,lane))) => r.job(lane, tag).map(|c| (r.backend, c)),
                     _ => None,
                 };
                 if let Some((backend, call)) = job {
@@ -1847,6 +1920,8 @@ impl Fleet {
                     self.lane_job[lane] = Some(t.id);
                     self.tag_task.insert(tag, t.id);
                     self.pool.send(lane, Job { tag, backend, call });
+                    self.next_lane_group[bank]=t.group+1;
+                    used[t.group]+=1;
                     break;
                 }
             }
@@ -1864,7 +1939,7 @@ impl Fleet {
         }
         let Some(id) = self.tag_task.remove(&d.tag) else { return };
         let Some(ti) = self.tasks.iter().position(|t| t.id == id) else { return };
-        let lanes = self.lanes();
+        let lanes = if self.slot_limit()>0 {self.cpu_slots().width(self.tasks[ti].group)} else {self.lanes()};
         let t = &mut self.tasks[ti];
         t.last_ran = Instant::now();
         let outcome = match &mut t.runner {
@@ -2195,6 +2270,14 @@ impl Fleet {
         Some((waiting + running) * self.row_cost_ms / self.lanes().max(1) as f64 / 1000.0)
     }
 
+    fn remaining_rows(&self,group:usize)->f64 {
+        let waiting=self.packs.iter().filter(|p|p.group==group).map(|p|p.rows.len()).sum::<usize>() as f64;
+        waiting+self.tasks.iter().filter(|t|t.group==group).filter_map(|t|match &t.runner {
+            Runner::Board(b) if b.runs>0 => Some((1.0-b.folded as f64/b.runs as f64).max(0.0)),
+            _=>None,
+        }).sum::<f64>()
+    }
+
     /// THE GROUP COUNT, both ways (see the module's note). A fixed `slots` is
     /// kept, under the cap.
     fn control(&mut self) {
@@ -2212,6 +2295,12 @@ impl Fleet {
             }
             return;
         }
+        let minimum=if self.slot_limit()>0 {self.cpu_slots().count().min(cap)} else {1};
+        if self.open<minimum {
+            self.open=minimum;self.ensure_groups(minimum);
+            self.ui.log(format!("{C_INFO}[调度]{C_END} 按每路 {} 线程打开 {minimum} 路",self.slot_limit()));
+            return;
+        }
         // THE CAP comes first, and at once: a key press, a smaller budget, memory.
         if self.open > cap {
             self.ui.log(format!("{C_INFO}[调度]{C_END} 并发上限 {cap}，第 {}～{} 路做完手头的活后不再接", cap + 1, self.open));
@@ -2219,7 +2308,7 @@ impl Fleet {
             self.closed_at = Some(now);
             return;
         }
-        if self.control_at.elapsed() < CONTROL_EVERY {
+        if self.control_at.elapsed() < Duration::from_secs(5) {
             return;
         }
         let (busy, lane_ms) = (self.meter.busy_total - self.control_busy, self.meter.cap_total - self.control_cap);
@@ -2252,7 +2341,7 @@ impl Fleet {
         });
         let told_nothing = (0..self.open).any(|g| self.groups[g].nothing_at.is_some_and(|t| now.duration_since(t) < NOTHING_RECENT));
         let reopen_ok = self.closed_at.is_none_or(|t| now.duration_since(t) >= REOPEN_AFTER);
-        let close = |why: String| (self.open > 1).then_some(why);
+        let close = |why: String| (self.open > minimum).then_some(why);
         let closing = if told_nothing && util < OPEN_BELOW {
             close("服务器暂时没有更多任务可分".into())
         } else if h > held_high {
@@ -2322,6 +2411,11 @@ impl Fleet {
                 } else {
                     self.wait_text(gi,now)
                 };
+                let state=if self.slot_limit()>0 {
+                    let range=self.cpu_slots().range(gi);
+                    let used=lane_map.iter().filter(|v|**v==Some(gi)).count();
+                    format!("{state} · {used}/{}线程",range.len())
+                }else{state};
                 GroupView { id: g.verifier.get(..8).unwrap_or(&g.verifier).to_string(), state, open: gi < open, tasks: g.done, work: g.work }
             })
             .collect();
@@ -2964,6 +3058,12 @@ fn capacity_limited(held:bool,received:bool,cooldown:bool,signal:bool,empty_repl
     held || (received && cooldown && signal && !empty_reply && !network_error)
 }
 
+fn prefetch_window(low:u64,pack:u64,gate:u64,rtt:f64,partitioned:bool)->u64 {
+    let latency=if rtt.is_finite() && rtt>0.0 {rtt.min(120_000.0) as u64} else {0};
+    low.max(gate.saturating_add(latency.saturating_mul(2)).saturating_add(5_000))
+        .max(if partitioned {pack/2} else {0}).min(pack)
+}
+
 fn ranking_file(net: &Net) -> Option<Value> {
     let f = net.get(&net.public_file(RANKING_FILE)).ok().filter(|r| r.status == 200)?.body;
     let now = net.server_now_ms();
@@ -3078,6 +3178,9 @@ mod tests {
         assert!(!capacity_limited(false,true,true,false,false,false));
         assert!(!capacity_limited(false,true,true,true,true,false));
         assert!(!capacity_limited(false,true,true,true,false,true));
+        assert_eq!(prefetch_window(120_000,600_000,60_000,3000.0,true),300_000);
+        assert_eq!(prefetch_window(120_000,600_000,60_000,55_000.0,false),175_000);
+        assert_eq!(prefetch_window(120_000,60_000,60_000,55_000.0,true),60_000);
     }
 
     #[test]

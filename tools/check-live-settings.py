@@ -119,7 +119,7 @@ native_wait_hours = 48
                     wait(lambda:any(r.get('engine')==NEW['engine'] for r in received),120)
                     # The same menu/key path used in the terminal, without
                     # requiring a desktop window in an automated regression.
-                    process.stdin.write(b's\ndown\ndown\ndown\nright\n');process.stdin.flush()
+                    process.stdin.write(b's\ndown\ndown\ndown\ndown\nright\n');process.stdin.flush()
                     wait(lambda:tomllib.loads(config_path.read_text(encoding='utf-8'))['placement']=='numa',10)
                     wait(lambda:(args.out/(case+'.log')).read_text(encoding='utf-8').count('simfleet 0.8.')>=2,90)
                     wait(lambda:len([r for r in received if r.get('engine')==NEW['engine']])>=2,30)

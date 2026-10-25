@@ -621,7 +621,7 @@ impl Ui {
             KeyCode::Down|KeyCode::Tab=>v.settings_row=(v.settings_row+1)%count,
             KeyCode::Home=>v.settings_row=0,
             KeyCode::End=>v.settings_row=count-1,
-            KeyCode::Enter if v.settings_row == 14 => { v.sidebar_open=true; v.sidebar_row=0; },
+            KeyCode::Enter if v.settings_row == 15 => { v.sidebar_open=true; v.sidebar_row=0; },
             KeyCode::Enter=>v.edit=Some(ctl.desired_settings().rows()[v.settings_row].1.clone()),
             KeyCode::Left|KeyCode::Right=>{
                 let choices=crate::settings::Settings::choices(v.settings_row);
@@ -1556,11 +1556,11 @@ mod tests {
     fn settings_menu_navigation_validation_and_escape() {
         let cfg=crate::config::Config::fresh(2);let ctl=Ctl::new(&cfg,crate::sys::cores());let ui=Ui::new();let mut v=View::default();
         ui.key(KeyCode::Char('s'),KeyModifiers::NONE,&ctl,&mut v,24);assert!(v.settings_open);
-        v.settings_row=9;ui.key(KeyCode::Enter,KeyModifiers::NONE,&ctl,&mut v,24);
+        v.settings_row=10;ui.key(KeyCode::Enter,KeyModifiers::NONE,&ctl,&mut v,24);
         ui.key(KeyCode::Backspace,KeyModifiers::NONE,&ctl,&mut v,24);ui.key(KeyCode::Backspace,KeyModifiers::NONE,&ctl,&mut v,24);
         ui.key(KeyCode::Char('0'),KeyModifiers::NONE,&ctl,&mut v,24);ui.key(KeyCode::Enter,KeyModifiers::NONE,&ctl,&mut v,24);
         assert_eq!(ctl.desired_settings().native_wait_hours,0);
-        v.settings_row=14;ui.key(KeyCode::Enter,KeyModifiers::NONE,&ctl,&mut v,24);
+        v.settings_row=15;ui.key(KeyCode::Enter,KeyModifiers::NONE,&ctl,&mut v,24);
         assert!(v.sidebar_open);v.sidebar_row=10;
         ui.key(KeyCode::Char(' '),KeyModifiers::NONE,&ctl,&mut v,24);
         assert!(!ctl.desired_settings().sidebar_visible("gpu"));
@@ -1580,7 +1580,7 @@ mod tests {
         let ctl=Ctl::new(&crate::config::Config::fresh(2),16);let status=Status::default();let lines=VecDeque::new();
         let f=Frame{s:&status,lines:&lines,ctl:&ctl,m:SysView::default(),up:Duration::ZERO,multi:false};
         for (w,h,wide,selected) in [(39,12,true,20),(109,32,false,14)] {
-            let mut v=View{settings_open:true,settings_row:14,sidebar_open:true,sidebar_row:selected,..Default::default()};
+            let mut v=View{settings_open:true,settings_row:15,sidebar_open:true,sidebar_row:selected,..Default::default()};
             let mut c=Canvas::new(w,h,wide);draw(&mut c,&f,&mut v);
             for y in 0..h {assert_eq!(text_of(&c,y).chars().map(|ch|c.cw(ch)).sum::<usize>(),w);}
             assert!((0..h).map(|y|text_of(&c,y)).collect::<Vec<_>>().join("\n").contains("侧栏显示"));

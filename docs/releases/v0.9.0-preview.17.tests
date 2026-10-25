@@ -1,0 +1,7 @@
+placement::tests::numa_and_groups_are_spread_before_smt
+placement::tests::cache_chip_fills_large_cache_physical_cores_then_other_ccd
+placement::tests::hybrid_odd_slots_mix_complete_p_cores_and_independent_e_cores
+settings::tests::validate_settings_before_mutating_identity
+config::tests::older_config_gets_wait_default_and_current_options_roundtrip
+fleet::tests::fast_pack_drained_before_control_can_fill_unused_group_budget
+ui::tests::settings_menu_navigation_validation_and_escape

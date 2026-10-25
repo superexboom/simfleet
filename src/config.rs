@@ -75,6 +75,10 @@ pub struct Config {
     /// machine's size (`auto_max_slots`).
     #[serde(default)]
     pub max_slots: usize,
+    /// CPU threads per concurrent identity. Zero keeps the shared worker pool.
+    /// A positive cap partitions physical cores with their SMT siblings.
+    #[serde(default)]
+    pub slot_threads: usize,
     /// Riven gains on the native engine too, when its build has the optimizer
     /// and it gave the wasm's answer on the riven canary.
     #[serde(default = "yes")]
@@ -174,6 +178,7 @@ impl Config {
             native_engine_url: NATIVE_URL.into(),
             slots: 0,
             max_slots: 0,
+            slot_threads: 0,
             native_riven: true,
             official_engine: true,
             watch: true,
@@ -250,6 +255,7 @@ impl Paths {
         let text = format!(
             "# simfleet — WFSim 志愿计算客户端的配置。运行中按 S 打开设置，确认的改动会立即保存；手工编辑请先退出程序。\n\
              # native_wait_hours：新引擎缺少优化原生库时最多等待的小时数，默认 48；0 立即更新，服务器的旧引擎接受期限优先。\n\
+             # slot_threads：每路 CPU 线程上限，0 共享全部线程；启用后优先同一物理核的 SMT 成组，按 NUMA/缓存划分，每路不越界借用。\n\
              # core_type（只对 Intel 大小核和 Apple 芯片有效）：auto 先 P 核、再 E 核、最后 P 核超线程（Apple 芯片：性能核优先、能效核也用）；p 优先性能核；e 优先能效核（Apple 芯片：只用能效核）；windows 交给系统。\n\
              # verifier 是本机的计算者 id，account.session 是登录凭据：都请勿发给别人。\n\n{body}"
         );
@@ -266,13 +272,15 @@ mod tests {
     #[test]
     fn older_config_gets_wait_default_and_current_options_roundtrip() {
         let mut cfg=Config::fresh(6);cfg.placement=String::new();cfg.account.name="test user".into();cfg.extra_verifiers=vec!["another".into()];
-        let text=toml::to_string(&cfg).unwrap().lines().filter(|l|!l.starts_with("native_wait_hours") && !l.starts_with("gpu_enabled") && !l.starts_with("compute_memory_limit_mb")).collect::<Vec<_>>().join("\n");
+        let text=toml::to_string(&cfg).unwrap().lines().filter(|l|!l.starts_with("native_wait_hours") && !l.starts_with("gpu_enabled") && !l.starts_with("compute_memory_limit_mb") && !l.starts_with("slot_threads")).collect::<Vec<_>>().join("\n");
         let decoded:Config=toml::from_str(&text).unwrap();assert_eq!(decoded.native_wait_hours,48);
         assert!(!decoded.gpu_enabled);
         assert_eq!(decoded.compute_memory_limit_mb,8192);
+        assert_eq!(decoded.slot_threads,0);
         assert_eq!(decoded.placement,"auto");
         assert_eq!(decoded.extra_verifiers,cfg.extra_verifiers);assert_eq!(decoded.account.name,cfg.account.name);
-        let mut settings=crate::settings::Settings::from_config(&decoded);settings.native_wait_hours=0;settings.write(&mut cfg);
+        let mut settings=crate::settings::Settings::from_config(&decoded);settings.native_wait_hours=0;settings.slot_threads=5;settings.write(&mut cfg);
         let decoded:Config=toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();assert_eq!(decoded.native_wait_hours,0);
+        assert_eq!(decoded.slot_threads,5);
     }
 }

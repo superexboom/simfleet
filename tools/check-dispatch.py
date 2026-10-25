@@ -12,13 +12,17 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--client',type=pathlib.Path,required=True);p.add_argument('--installed',type=pathlib.Path,required=True)
     p.add_argument('--out',type=pathlib.Path,required=True);p.add_argument('--expect-groups',type=int,default=2)
+    p.add_argument('--slot-threads',type=int,default=0);p.add_argument('--lanes',type=int,default=4)
+    p.add_argument('--fixed-slots',type=int,default=0)
     a=p.parse_args();a.out.mkdir(parents=True,exist_ok=True)
     for folder in ('cache','engines'):(a.out/folder).mkdir(exist_ok=True)
     shutil.copy2(a.client,a.out/'simfleet.exe')
     state=json.loads((a.installed/'engine-state.json').read_text(encoding='utf8'))['current']
     for name in [f"{state['wasm']}.wasmtime49.cwasm",f"wfsim_wasm_bg.{state['wasm']}.wasm",f"pack.data.{state['data']}.json"]:
         shutil.copy2(a.installed/'cache'/name,a.out/'cache'/name)
-    name=f"{state['engine']}-sfe1-v3.dll";shutil.copy2(a.installed/'engines'/name,a.out/'engines'/name)
+    libraries=sorted((a.installed/'engines').glob(f"{state['engine']}-sfe*-v3.dll"),reverse=True)
+    if not libraries:raise RuntimeError('No matching native engine')
+    shutil.copy2(libraries[0],a.out/'engines'/libraries[0].name)
     orders=json.loads((pathlib.Path(__file__).resolve().parents[1]/'experiments/prepared-board/orders.json').read_text());order=orders[9]
     ids={};grants={};next_at={};events=[];start=time.monotonic();first=[None];lock=threading.Lock()
     def event(kind,**fields):
@@ -39,26 +43,30 @@ def main():
             if identity not in ids:ids[identity]=len(ids)+1
             group=ids[identity]
             if self.path=='/api/account/devices/claim':
-                event('claim_start',group=group);time.sleep(1);event('claim_done',group=group);self.send(dict(ok=True));return
+                event('claim_start',group=group)
+                if not a.slot_threads:time.sleep(1)
+                event('claim_done',group=group);self.send(dict(ok=True));return
             if self.path!='/api/board/sync':self.send(dict(ok=True,points=0));return
             now=time.monotonic();want=data.get('want_ms',0);old=next_at.get(identity,0)
             early=want>0 and now<old-0.05
-            event('sync',group=group,want_ms=want,early=early)
+            event('sync',group=group,want_ms=want,early=early,lanes=data.get('lanes'),held=sum(len(x.get('rows',[])) for x in data.get('held',[])),results=len(data.get('results',[])))
             reply=dict(ok=True,protocol=8,next_ms=max(0,int((old-now)*1000)),taken=[r['question'] for r in data.get('results',[])],dropped=[],held=[],pack=None,states=[],
                 dials=dict(pack8_ms=600000,pack8_max=200,sync_floor_ms=60000,sync_low_ms=120000,flush_ms=600000,poll_ms=1000,jitter_ms=0,urgent_jitter_ms=0,report_ms=3600000))
             if early:reply['early']=True
             elif want:
-                grants[identity]=grants.get(identity,0)+1;first[0]=first[0] or now;next_at[identity]=now+60
+                grants[identity]=grants.get(identity,0)+1;first[0]=first[0] or now
+                gate=0.5 if a.slot_threads else 60
+                next_at[identity]=now+gate
                 lease=f'local-{group}-{grants[identity]}'
-                reply.update(next_ms=60000,pack=dict(lease=lease,lease_ms=300000,tasks=[dict(order,kind='board',question=f'{lease}-{i}') for i in range(3)]))
+                reply.update(next_ms=int(gate*1000),pack=dict(lease=lease,lease_ms=300000,tasks=[dict(order,kind='board',question=f'{lease}-{i}') for i in range(24 if a.slot_threads else 3)]))
             self.send(reply)
     server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);threading.Thread(target=server.serve_forever,daemon=True).start()
     config=f'''server = "http://127.0.0.1:{server.server_port}"
 verifier = "{secrets.token_hex(12)}"
 consent_at = "2026-10-23T00:00:00.000Z"
 consent_v = 3
-idle_cores = 4
-active_cores = 4
+idle_cores = {a.lanes}
+active_cores = {a.lanes}
 idle_after_secs = 60
 pause_on_battery = false
 priority = "normal"
@@ -67,8 +75,9 @@ native_engine_url = ""
 native_riven = false
 official_engine = false
 watch = false
-slots = 0
-max_slots = 2
+slots = {a.fixed_slots}
+max_slots = {a.expect_groups}
+slot_threads = {a.slot_threads}
 gpu_enabled = false
 protocol = 8
 [account]
@@ -81,7 +90,7 @@ name = "local"
         try:
             while time.monotonic()-start<45:
                 if proc.poll() is not None:raise RuntimeError('client stopped')
-                if first[0] and time.monotonic()-first[0]>23:break
+                if first[0] and time.monotonic()-first[0]>(7 if a.slot_threads else 23):break
                 time.sleep(.1)
             proc.stdin.write('q\n');proc.stdin.flush();proc.wait(timeout=15)
         finally:
@@ -95,6 +104,28 @@ name = "local"
         claim=next(e for e in events if e['event']=='claim_start')
         signal=next(e for e in events if e['event']=='signal')
         assert signal['seconds']-claim['seconds']<.5,'signal was blocked by account binding'
+    if a.slot_threads:
+        traces=[json.loads(x) for x in (a.out/'dispatch.log').read_text(encoding='utf8').splitlines()]
+        samples=[x for x in traces if x['event']=='slot_schedule']
+        assert samples,'No per-slot scheduling observation'
+        concurrent=set()
+        for sample in samples:
+            counts={}
+            for job in sample['jobs']:
+                group=job['group'];low,high=sample['ranges'][group-1]
+                assert low<=job['lane']<high,(sample,job)
+                counts[group]=counts.get(group,0)+1
+            assert max(counts.values(),default=0)<=a.slot_threads,sample
+            if len(counts)>len(concurrent):concurrent=set(counts)
+        if a.fixed_slots:
+            progressed={e['group'] for e in events if e['event']=='sync' and e.get('results',0)>0}
+            assert len(progressed)==a.expect_groups,progressed
+            report['progressed_groups']=sorted(progressed)
+        else:assert len(concurrent)==a.expect_groups,concurrent
+        assert any(e['event']=='sync' and e['want_ms']>0 and e.get('held',0)>0 for e in events),'No prefetch while work remained'
+        assert all(e.get('lanes',1)<=a.slot_threads for e in events if e['event']=='sync')
+        report['slot_samples']=samples;report['prefetch_with_held']=True
+        (a.out/'result.json').write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps({k:v for k,v in report.items() if k!='events'}),flush=True)
 
 if __name__=='__main__':main()

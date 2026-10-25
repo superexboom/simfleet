@@ -8,6 +8,7 @@ pub struct Settings {
     pub idle_cores: usize,
     pub active_cores: usize,
     pub max_slots: usize,
+    pub slot_threads: usize,
     pub placement: String,
     pub numa_nodes: Vec<u32>,
     pub cpu_offset: usize,
@@ -27,6 +28,7 @@ impl Settings {
             idle_cores: c.idle_cores,
             active_cores: c.active_cores,
             max_slots: c.max_slots,
+            slot_threads: c.slot_threads,
             placement: c.placement.clone(),
             numa_nodes: c.numa_nodes.clone(),
             cpu_offset: c.cpu_offset,
@@ -45,6 +47,7 @@ impl Settings {
         c.idle_cores = self.idle_cores;
         c.active_cores = self.active_cores;
         c.max_slots = self.max_slots;
+        c.slot_threads = self.slot_threads;
         c.placement = self.placement.clone();
         c.numa_nodes = self.numa_nodes.clone();
         c.cpu_offset = self.cpu_offset;
@@ -60,6 +63,7 @@ impl Settings {
     }
     pub fn topology_changed(&self, old: &Self) -> bool {
         self.placement != old.placement
+            || self.slot_threads != old.slot_threads
             || self.numa_nodes != old.numa_nodes
             || self.cpu_offset != old.cpu_offset
             || self.core_type != old.core_type
@@ -72,7 +76,14 @@ impl Settings {
                 .parse::<u64>()
                 .map_err(|_| anyhow::anyhow!("请输入非负整数"))
         };
-        match row {
+        if row == 3 {
+            let n = integer()?;
+            if n > max as u64 { bail!("每路线程应在 0..={max}，0 为共享线程池"); }
+            self.slot_threads = n as usize;
+            return Ok(());
+        }
+        // Preserve the existing setting IDs after inserting the slot control.
+        match if row > 3 { row - 1 } else { row } {
             0 => {
                 let n = integer()?;
                 if n == 0 || n > max as u64 {
@@ -179,6 +190,11 @@ impl Settings {
                 "0 自动；控制同时计算的身份/任务组数。",
             ),
             (
+                "每路线程上限",
+                self.slot_threads.to_string(),
+                "0 共享；正数按物理核+SMT分组，奇数尽量用独立核心补齐。保存后排空并重启。",
+            ),
+            (
                 "调度 placement",
                 self.placement.clone(),
                 "auto 自动 / system 系统 / numa 节点 / cache 缓存；空值按 auto。",
@@ -233,7 +249,8 @@ impl Settings {
         ]
     }
     pub fn choices(row: usize) -> &'static [&'static str] {
-        match row {
+        if row == 3 { return &[]; }
+        match if row > 3 { row - 1 } else { row } {
             3 => &["auto", "system", "numa", "cache"],
             6 => &["auto", "p", "e", "windows"],
             7 => &["idle", "below_normal", "normal"],
@@ -284,19 +301,22 @@ mod tests {
         let id = c.verifier.clone();
         let mut s = Settings::from_config(&c);
         assert!(s.apply_value(0, "0", 16).is_err());
-        s.apply_value(3, "", 16).unwrap();
+        s.apply_value(3, "5", 16).unwrap();
+        assert!(s.topology_changed(&Settings::from_config(&c)));
+        s.apply_value(4, "", 16).unwrap();
         assert_eq!(s.placement, "auto");
-        s.apply_value(4, "1,0,1", 16).unwrap();
+        s.apply_value(5, "1,0,1", 16).unwrap();
         assert_eq!(s.numa_nodes, vec![0, 1]);
-        assert!(s.apply_value(9, "-1", 16).is_err());
-        s.apply_value(9, "48", 16).unwrap();
-        s.apply_value(12,"true",16).unwrap();
-        assert!(s.apply_value(13,"2048",16).is_err());s.apply_value(13,"8192",16).unwrap();
-        assert!(s.apply_value(12,"maybe",16).is_err());
+        assert!(s.apply_value(10, "-1", 16).is_err());
+        s.apply_value(10, "48", 16).unwrap();
+        s.apply_value(13,"true",16).unwrap();
+        assert!(s.apply_value(14,"2048",16).is_err());s.apply_value(14,"8192",16).unwrap();
+        assert!(s.apply_value(13,"maybe",16).is_err());
         s.write(&mut c);
         assert_eq!(c.verifier, id);
         assert_eq!(c.native_wait_hours, 48);
         assert!(c.gpu_enabled);
         assert_eq!(c.compute_memory_limit_mb,8192);
+        assert_eq!(c.slot_threads,5);
     }
 }
