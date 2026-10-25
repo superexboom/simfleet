@@ -1,0 +1,66 @@
+{
+  "date": "2026-10-25",
+  "engine": "3194962a0af7",
+  "upstream": "23b2b964900bd2109cf7285077e7d5d5e49d0659",
+  "wrapper": "98c340168fafed299b48a52f9da2786b9c8ba910",
+  "client": "0.9.0-preview.16",
+  "reference_wasm": "8b7fd3c95320",
+  "reference_data": "f8bc96ccab7e",
+  "native": {
+    "sha256": "cf9833c2cdd1cc6b7c2a700124347cde8057cf86cdc71da191ec0b2b27145f79",
+    "cpu": "x86-64-v3",
+    "pgo": true,
+    "action_url": "https://github.com/superexboom/simfleet/actions/runs/40191159936",
+    "action_conclusion": "success",
+    "board_rows": 8,
+    "skipped": 0,
+    "riven_canary": "same",
+    "source_patch_hashes": {
+      "003-static-panel-metadata.patch": "60e886a98ae5cb76a935224a5ee31231a5d632ff3ea9476504930d9f9e8c3bf1",
+      "001-prepared-board.patch": "f8bb97de23ba85b1f694bd2884a9638e8810a6bfec01013eb9f837588d7f33e8",
+      "002-single-worker.patch": "f224b567838e0dc4fde94b531bfa24e185c4144750b34c9080b6d1d8d1a08cae",
+      "004-frozen-optimize-plan.patch": "b5160a35186e0f73cf00aa331453a8a6de310837bd80289ca9dff27f0084e760",
+      "006-bounded-lead-metadata.patch": "a75105d6c0739c9843438aa7138e7478a0248f65d97141afee44a2c58d2db825"
+    }
+  },
+  "gpu": {
+    "architecture": "sm120",
+    "revision": 3,
+    "device_validated": true,
+    "files": {
+      "engine.cubin": "0c4909f3860a3da7f40c27e0d0851054b37124b8bd6267b4137337f22092c40b",
+      "bridge.wasm": "ae831c2cfaa06be101e912eb8feb74b4ab0b8ad6cccb72288e7d871975a847b2",
+      "wire.dll": "a6e7c9de39a7c4eb477374f26378906299c3e4c950fca209e44d79413c68e60e"
+    },
+    "package": "simfleet-gpu-3194962a0af7-sfg3-sm120-windows-x64.zip",
+    "package_sha256": "2de0d394dfb72cd9e81b928c01ebd52e208585d77c1931bd206aa9656f75f955",
+    "package_files": 6
+  },
+  "validation": {
+    "weapon": "burston_prime",
+    "ruler": "standard_single_target",
+    "mode": "base",
+    "includes_riven": true,
+    "exact_shards": 128,
+    "exact_short_scores": 2,
+    "worker_full_rows": 4,
+    "worker_runs_per_row": 1000,
+    "worker_batch_seconds": 9.599335799997789,
+    "worker_private_bytes": 3841490944
+  },
+  "runtime": {
+    "native_auto_switched_at": "2026-10-25T20:24:15+08:00",
+    "first_new_engine_sync_ms": 2642,
+    "first_new_engine_rows": 200,
+    "next_syncs_ms": [
+      2897,
+      3465
+    ],
+    "next_syncs_rows": [
+      200,
+      200
+    ]
+  },
+  "gpu_build_scope": "Only sm120 built for this engine; historical sm75/sm89 packages retained for their original engine IDs.",
+  "limitations": "Compatibility checks only; no new throughput benchmark. Native switch coincided with recovery of live syncs, but the precise upstream HTTP 500 root cause remains unconfirmed."
+}
