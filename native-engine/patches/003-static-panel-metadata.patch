@@ -40,7 +40,7 @@ index 5b5f1e1f60..10d7154a74 100644
 -                .into_boxed_slice(),
 -        ),
 +        mod_pools: {
-+            static POOLS: OnceLock<Mutex<BTreeMap<&'static str, &'static [&'static str]>>> = OnceLock::new();
++            static POOLS: OnceLock<std::sync::Mutex<BTreeMap<&'static str, &'static [&'static str]>>> = OnceLock::new();
 +            let mut pools = POOLS.get_or_init(Default::default).lock().expect("panel pools");
 +            *pools.entry(raw.id.as_str()).or_insert_with(|| {
 +                Box::leak(raw.mod_pools.iter().map(String::as_str).collect::<Vec<_>>().into_boxed_slice())
