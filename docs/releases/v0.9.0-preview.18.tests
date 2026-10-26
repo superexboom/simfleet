@@ -1,0 +1,2 @@
+gpu::policy::tests::resource_retry_keeps_its_larger_budget_after_a_small_probe
+gpu::policy::tests::expensive_cpu_work_can_justify_a_slower_probe

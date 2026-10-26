@@ -1749,11 +1749,16 @@ impl Fleet {
                 crate::gpu::Event::Finished(rows)=>{
                     let fallback=rows.iter().filter(|r|r.fallback.is_some()).count();
                     if rows.len()>fallback {self.gpu_recovery.success(Instant::now());}
-                    self.trace.event(json!({"event":"gpu_batch_finished","rows":rows.len(),"fallback":fallback,"probe":rows.iter().any(|r|r.probe.is_some()),"work":rows.iter().filter(|r|r.fallback.is_none() && r.probe.is_none()).filter_map(|r|r.score["work"].as_u64()).sum::<u64>(),"private_kib":self.gpu.as_ref().map(|g|g.budget()),"timing":self.gpu.as_ref().and_then(|g|g.last_timing.as_ref())}));
+                    self.trace.event(json!({"event":"gpu_batch_finished","rows":rows.len(),"fallback":fallback,"probe":rows.iter().any(|r|r.probe.is_some()),"work":rows.iter().filter(|r|r.fallback.is_none() && r.probe.is_none()).filter_map(|r|r.score["work"].as_u64()).sum::<u64>(),"private_kib":self.gpu.as_ref().map(|g|g.last_private_kib),"max_private_kib":rows.iter().filter_map(|r|r.max_private_kib).max(),"resource_adjustments":self.gpu.as_ref().map(|g|&g.last_resource_adjustments),"timing":self.gpu.as_ref().and_then(|g|g.last_timing.as_ref())}));
                     if fallback>0 {
                         let pages=rows.iter().filter(|r|r.fallback==Some(120)).count();
                         let output=rows.iter().filter(|r|r.fallback==Some(2)).count();
-                        if pages>0 {self.ui.log(format!("{C_GO}[GPU]{C_END} {pages} 行单局私有页不足（120），交由 CPU；后续提高单局配额并缩批，达到上限则暂缓"));}
+                        if pages>0 {
+                            let changes=self.gpu.as_ref().map(|g|g.last_resource_adjustments.iter().map(|a|
+                                format!("{}→{} KiB/局{}",a.from_kib,a.to_kib,if a.at_limit {"（已达上限，暂缓）"}
+                                    else if !a.allowed {"（仍暂缓）"} else {""})).collect::<std::collections::BTreeSet<_>>().into_iter().collect::<Vec<_>>().join("，")).unwrap_or_default();
+                            self.ui.log(format!("{C_INFO}[GPU]{C_END} {pages} 行触及单局配额（120），交由 CPU；{changes}。与 CPU+GPU 总限额不同"));
+                        }
                         if output>0 {self.ui.log(format!("{C_GO}[GPU]{C_END} {output} 行输出/地址范围超限（2），交由 CPU；与整机空闲内存无关"));}
                     }
                     for row in rows {

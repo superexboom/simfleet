@@ -1,0 +1,41 @@
+{
+  "engine": "3194962a0af7",
+  "memory_mib": 32768,
+  "configured_bytes": 34292629504,
+  "same_worker": true,
+  "original_budget_kib": 128,
+  "controlled_lower_budget": 64,
+  "records": [
+    {
+      "private_kib": 64,
+      "fallback": 120
+    },
+    {
+      "private_kib": 128,
+      "max_private_kib": 100,
+      "fallback": null,
+      "full_score_exact": true,
+      "runs": 1000
+    }
+  ],
+  "version": "0.9.0-preview.18",
+  "device": "RTX 5080",
+  "remote_report": "RTX 5090, user estimates preview.15 with latest engine; 32 GiB setting not independently confirmed",
+  "natural_replay": {
+    "original_kib": 128,
+    "successful": true,
+    "max_private_kib": 95
+  },
+  "fixes": [
+    "Full successful rows report peak private KiB and retain reserve",
+    "Resource failures precede performance classification within one family/batch",
+    "Successful siblings do not erase resource failure history",
+    "Actual per-batch quota and adjustment details are logged",
+    "Deferred context is not mislabeled as reaching the maximum"
+  ],
+  "focused_tests": [
+    "gpu::policy::tests::resource_retry_keeps_its_larger_budget_after_a_small_probe",
+    "gpu::policy::tests::expensive_cpu_work_can_justify_a_slower_probe"
+  ],
+  "scope": "Controlled recovery contract on a recorded row; not reproduction of the remote 5090 long-running state; no full suite or broad GPU corpus"
+}

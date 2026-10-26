@@ -376,6 +376,7 @@ impl Runtime {
                     compute_ms: 0,
                     fallback: Some(code),
                     probe: None,
+                    max_private_kib: None,
                 });
                 offset += n;
                 continue;
@@ -401,6 +402,7 @@ impl Runtime {
                         gpu_ms,
                         max_pages: used.iter().copied().max().unwrap_or(0),
                     }),
+                    max_private_kib: None,
                 });
                 offset += n;
                 continue;
@@ -417,6 +419,8 @@ impl Runtime {
                 compute_ms: 0,
                 fallback: None,
                 probe: None,
+                max_private_kib: Some(used[offset..offset+n].iter().copied().max().unwrap_or(0)
+                    * self.layout.page_bytes as u32 / 1024),
             });
             offset += n;
         }

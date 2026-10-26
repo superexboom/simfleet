@@ -255,6 +255,18 @@ pub struct Output {
     pub fallback: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe: Option<Probe>,
+    /// Peak private state across every successful run of a complete row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_private_kib: Option<u32>,
+}
+#[derive(Serialize)]
+pub struct ResourceAdjustment {
+    pub weapon: String,
+    pub ruler: String,
+    pub from_kib: u32,
+    pub to_kib: u32,
+    pub allowed: bool,
+    pub at_limit: bool,
 }
 #[derive(Default, Serialize, Deserialize)]
 pub struct BatchTiming {
@@ -450,6 +462,8 @@ pub struct Manager {
     batch_limit: usize,
     driver_error: Value,
     pub last_timing: Option<BatchTiming>,
+    pub last_private_kib: u32,
+    pub last_resource_adjustments: Vec<ResourceAdjustment>,
     worker_base_commit: Option<u64>,
     layout: MemoryLayout,
 }
@@ -574,6 +588,8 @@ impl Manager {
             batch_limit: 16_000,
             driver_error: Value::Null,
             last_timing: None,
+            last_private_kib: 0,
+            last_resource_adjustments: Vec::new(),
             worker_base_commit: None,
             layout: MemoryLayout::default(),
         })
@@ -976,29 +992,16 @@ impl Manager {
                         }) {
                             return Some(self.failure("GPU probe sample count mismatch"));
                         }
+                        if rows.iter().zip(&self.pending_inputs).any(|(r,i)|r.max_private_kib.is_some_and(|k|
+                            k==0 || k>i.private_kib || r.probe.is_some() || r.fallback.is_some())) {
+                            return Some(self.failure("invalid GPU private-memory observation"));
+                        }
                         let now = crate::sys::now_ms();
+                        self.last_private_kib=self.pending_inputs.iter().map(|i|i.private_kib).max().unwrap_or(0);
+                        self.last_resource_adjustments.clear();
                         self.persist_resource_fallbacks(&rows);
                         if let Some(policy) = &mut self.policy {
-                            let mut failed_families = std::collections::BTreeSet::new();
-                            for (row, input) in rows.iter().zip(&self.pending_inputs) {
-                                if let Some(probe) = &row.probe {
-                                    policy.observed(input, probe, now);
-                                } else if let Some(code) = row.fallback {
-                                    if failed_families.insert(policy::family(input)) {
-                                        if code == 120 {
-                                            policy.resource_exhausted(input, now);
-                                        } else {
-                                            policy.failed(
-                                                input,
-                                                &format!("row status {code}: output/address limit"),
-                                                now,
-                                            );
-                                        }
-                                    }
-                                } else {
-                                    policy.completed(input, row.compute_ms, now);
-                                }
-                            }
+                            self.last_resource_adjustments=policy.finished_batch(&self.pending_inputs,&rows,now);
                         }
                         for (row, key) in rows.iter().zip(&self.pending_keys) {
                             if row.probe.is_some() {

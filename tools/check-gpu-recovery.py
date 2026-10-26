@@ -4,11 +4,17 @@
 import argparse,concurrent.futures,importlib.util,json,pathlib,queue,subprocess,threading
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    for name in ('client','package','native','board','out'):p.add_argument('--'+name,type=pathlib.Path,required=True)
+    for name in ('client','package','native','out'):p.add_argument('--'+name,type=pathlib.Path,required=True)
+    p.add_argument('--board',type=pathlib.Path)
+    p.add_argument('--request',type=pathlib.Path,help='One recorded resource-fallback report; replay that row only')
+    p.add_argument('--force-private-kib',type=int,help='Controlled lower quota when a fresh worker no longer reproduces the long-run failure')
     p.add_argument('--memory-mib',type=int,default=8192)
     a=p.parse_args();a.out.mkdir(parents=True,exist_ok=True)
     spec=importlib.util.spec_from_file_location('board',pathlib.Path(__file__).with_name('bench-board.py'));mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
     native=mod.Native(a.native);repo=pathlib.Path(__file__).resolve().parents[1]
+    if a.request:
+        check_recorded(a,native);return
+    if not a.board:p.error('--board or --request is required')
     base=json.loads((repo/'experiments/prepared-board/orders.json').read_text())[9]
     good=json.loads(native.call('/api/board/order',base))['request']
     source=[r for r in json.loads(a.board.read_text(encoding='utf8')) if r['benchmark']=='demolisher' and r['mode']=='cycle']
@@ -79,4 +85,44 @@ def main():
         if proc.poll() is None:proc.kill();proc.wait()
     report=dict(engine=native.engine,records=records)
     (a.out/'result.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report),flush=True)
+def check_recorded(a,native):
+    report=json.loads(a.request.read_text(encoding='utf-8-sig'))
+    assert report['engine']==native.engine
+    original=next(r['input'] for r in report['rows'] if r['status']==120)
+    original=dict(original,id=1,probe=False)
+    original_budget=original['private_kib']
+    if a.force_private_kib is not None:original['private_kib']=a.force_private_kib
+    proc=subprocess.Popen([str(a.client.resolve()),'gpu-worker',str(a.package.resolve()),native.engine,'--memory-mib',str(a.memory_mib)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf8',creationflags=0x08000000)
+    q=queue.Queue()
+    def read():
+        for line in proc.stdout:q.put(json.loads(line))
+        q.put(dict(error='worker exited'))
+    threading.Thread(target=read,daemon=True).start()
+    def batch(row):
+        proc.stdin.write(json.dumps([row])+'\n');proc.stdin.flush();v=q.get(timeout=60)
+        while 'phase' in v:v=q.get(timeout=60)
+        if v.get('error'):raise RuntimeError(v)
+        assert len(v['rows'])==1 and v['rows'][0]['id']==row['id']
+        return v['rows'][0]
+    records=[]
+    try:
+        ready=q.get(timeout=180);assert ready.get('ready'),ready
+        assert ready['memory_limit_bytes']==(a.memory_mib-64)*1024**2
+        failed=batch(original)
+        assert failed.get('fallback')==120 and failed['score'] is None,failed
+        records.append(dict(private_kib=original['private_kib'],fallback=120))
+        budget=max(original_budget,next(k for k in (64,96,128,160,192,256,384,512,768,1536) if k>=original['private_kib']*1.5))
+        recovered=batch(dict(original,id=2,private_kib=budget))
+        assert not recovered.get('fallback'),recovered
+        assert 0<recovered['max_private_kib']<=budget,recovered
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            expected=json.loads(native.row(original['request'],original['ruler'],pool,8))
+        assert recovered['score']==expected,(recovered,expected)
+        records.append(dict(private_kib=budget,max_private_kib=recovered['max_private_kib'],fallback=None,full_score_exact=True,runs=original['request']['runs']))
+        proc.stdin.close();proc.wait(timeout=15);assert proc.returncode==0
+    finally:
+        if proc.poll() is None:proc.kill();proc.wait()
+    result=dict(engine=native.engine,memory_mib=a.memory_mib,configured_bytes=ready['memory_limit_bytes'],same_worker=True,original_budget_kib=original_budget,controlled_lower_budget=a.force_private_kib,records=records)
+    (a.out/'result.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf8');print(json.dumps(result),flush=True)
+
 if __name__=='__main__':main()

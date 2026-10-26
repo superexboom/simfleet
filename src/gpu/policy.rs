@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Bounded local observations, never a weapon allowlist or server authority.
-use super::{Input, Probe};
+use super::{Input, Output, Probe, ResourceAdjustment};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -171,7 +171,7 @@ impl Policy {
     pub fn observed(&mut self, input: &Input, probe: &Probe, now: u64) -> bool {
         self.pending = None;
         let used_kib=probe.max_pages.saturating_mul(self.layout.page_bytes as u32)/1024;
-        let headroom=if self.layout.compact(){12.max(used_kib/8)}else{48};
+        let headroom=if self.layout.compact(){16.max(used_kib/4)}else{48};
         let budget = super::PRIVATE_BUDGETS
             .into_iter()
             .find(|k| *k >= used_kib.saturating_add(headroom) && *k >= self.layout.minimum_kib())
@@ -261,8 +261,10 @@ impl Policy {
                 private_kib: budget,
                 reason: if allowed {
                     "private-page budget raised; reduce batch"
-                } else {
+                } else if budget <= current {
                     "single-run private-page limit reached"
+                } else {
+                    "private-page budget raised; context remains deferred"
                 }
                 .into(),
                 cpu_us: previous.map_or(0.0, |e| e.cpu_us),
@@ -279,7 +281,39 @@ impl Policy {
             }
         }
     }
-    pub fn completed(&mut self, input: &Input, ms: u64, now: u64) {
+    pub fn finished_batch(&mut self, inputs:&[Input], rows:&[Output], now:u64)->Vec<ResourceAdjustment> {
+        let mut failed=std::collections::BTreeSet::new();
+        let mut adjustments=Vec::new();
+        // All rows share one batch's elapsed cost. Learn a resource failure
+        // before successes: input ordering must not turn an expandable quota
+        // into a performance rejection, nor clear that failure's history.
+        for (input,row) in inputs.iter().zip(rows).filter(|(_,r)|r.fallback==Some(2))
+            .chain(inputs.iter().zip(rows).filter(|(_,r)|r.fallback==Some(120))) {
+            if let Some(code)=row.fallback {
+                let key=family(input);
+                if failed.insert(key.clone()) {
+                    if code==120 {
+                        self.resource_exhausted(input,now);
+                        if let Some(entry)=self.saved.entries.get(&key) {
+                            adjustments.push(ResourceAdjustment {
+                                weapon:input.request["weapon"].as_str().unwrap_or("?").into(),ruler:input.ruler.clone(),
+                                from_kib:input.private_kib,to_kib:entry.private_kib,allowed:entry.allowed,
+                                at_limit:entry.reason=="single-run private-page limit reached",
+                            });
+                        }
+                    } else {self.failed(input,&format!("row status {code}: output/address limit"),now);}
+                }
+            }
+        }
+        for (input,row) in inputs.iter().zip(rows) {
+            if let Some(probe)=&row.probe {self.observed(input,probe,now);}
+            else if row.fallback.is_none() && !failed.contains(&family(input)) {
+                self.completed(input,row.compute_ms,row.max_private_kib,now);
+            }
+        }
+        adjustments
+    }
+    pub fn completed(&mut self, input: &Input, ms: u64, max_private_kib:Option<u32>, now: u64) {
         let key = family(input);
         let Some(mut entry) = self.saved.entries.get(&key).cloned() else {
             return;
@@ -287,6 +321,12 @@ impl Policy {
         // Every row of one batch reports the same amortized time. Once its
         // family is deferred, the remaining rows must not count as retries.
         if !entry.allowed { return; }
+        let previous_budget=entry.private_kib;
+        if let Some(used)=max_private_kib.filter(|k|*k>0 && *k<=input.private_kib) {
+            let headroom=if self.layout.compact(){16.max(used/4)}else{48};
+            let budget=super::PRIVATE_BUDGETS.into_iter().find(|k|*k>=used.saturating_add(headroom)).unwrap_or(1536);
+            entry.private_kib=entry.private_kib.max(budget);
+        }
         // Reject a full GPU row that costs longer than one CPU core would take.
         let cpu_ms = entry.cpu_us * input.request["runs"].as_u64().unwrap_or(0) as f64 / 1000.0;
         if ms as f64 > cpu_ms * 1.25 && ms > 100 {
@@ -296,7 +336,8 @@ impl Policy {
             entry.reason = "full batch slower than useful CPU overlap".into();
             entry.updated = now;
             self.store(key, entry);
-        } else if entry.allowed && (entry.failures>0 || now.saturating_sub(entry.updated) >= 5 * 60_000) {
+        } else if entry.allowed && (entry.private_kib>previous_budget || entry.failures>0 || now.saturating_sub(entry.updated) >= 5 * 60_000) {
+            if entry.private_kib>previous_budget {entry.reason="full-row private peak raised budget".into();}
             entry.failures=0;
             entry.updated = now;
             entry.until = now + GOOD_TTL;
@@ -392,7 +433,7 @@ mod tests {
             },
             200
         ));
-        p.completed(&input, 3000, 201);
+        p.completed(&input, 3000, None, 201);
         assert!(!p.allowed(&input, 202));
         // Reopen without dropping/flushing the original policy: no clean-exit hook.
         let reopened = Policy::open(&file,binding.replace("8192","16384"));
@@ -440,10 +481,10 @@ mod tests {
         p.failed_batch(&rows,"GPU timed out",400);
         assert_eq!(p.classify(&a,401).unwrap().until,400+3*BAD_TTL);
         assert!(p.observed(&a,&Probe{samples:8,cpu_ms:32.0,gpu_ms:100.0,max_pages:30},500));
-        p.completed(&a,1000,501);
+        p.completed(&a,1000,None,501);
         assert_eq!(p.classify(&a,502).unwrap().failures,0);
-        p.completed(&a,10_000,503);
-        p.completed(&a,10_000,504);
+        p.completed(&a,10_000,None,503);
+        p.completed(&a,10_000,None,504);
         assert_eq!((p.classify(&a,505).unwrap().failures,p.classify(&a,505).unwrap().until),(1,503+BAD_TTL));
         let _ = std::fs::remove_file(file);
     }
@@ -480,7 +521,28 @@ mod tests {
         p.resource_exhausted(&row, 60);
         assert!(!p.allowed(&row, 61));
         assert_eq!(p.budget(&row, 61), 1536);
-        let _ = std::fs::remove_file(file);
+        let mut compact=Policy::open(&file,"compact".into()).with_layout(super::super::MemoryLayout::checked(3,1024,2).unwrap());
+        row.private_kib=128;
+        assert!(compact.observed(&row,&Probe{samples:8,cpu_ms:8.0,gpu_ms:100.0,max_pages:90},100));
+        assert_eq!(compact.budget(&row,101),128);
+        let good=Output{id:1,score:json!({}),compute_ms:10_000,fallback:None,probe:None,max_private_kib:Some(126)};
+        let bad=Output{id:2,score:serde_json::Value::Null,compute_ms:10_000,fallback:Some(120),probe:None,max_private_kib:None};
+        let changes=compact.finished_batch(&[row.clone(),row.clone()],&[good,bad],110);
+        assert_eq!(changes.len(),1);
+        assert_eq!((changes[0].from_kib,changes[0].to_kib,changes[0].allowed,changes[0].at_limit),(128,192,true,false));
+        assert_eq!(compact.classify(&row,111).unwrap().failures,1,"success in a partly failed batch must not clear failure history");
+        row.private_kib=192;
+        compact.completed(&row,1000,Some(180),120);
+        assert_eq!(compact.budget(&row,121),256,"full-run peaks must keep reserve for unseen seeds/builds");
+        assert_eq!(Policy::open(&file,"compact".into()).budget(&row,121),256);
+        compact.failed(&row,"slow",130);
+        compact.resource_exhausted(&row,140);
+        let entry=compact.classify(&row,141).unwrap();
+        assert_eq!(entry.private_kib,384);
+        assert!(!entry.allowed);
+        assert_eq!(entry.reason,"private-page budget raised; context remains deferred");
+        let _ = std::fs::remove_file(&file);
+        let _ = std::fs::remove_file(file.with_extension("json.bak"));
     }
 
     #[test]
