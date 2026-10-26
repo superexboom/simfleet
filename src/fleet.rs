@@ -30,10 +30,9 @@
 //!   lane takes no other task's work while the search lives — not even a native
 //!   board piece, which the next lead step would wait behind (measured: a
 //!   search 10-15% slower).
-//! - THE SERVED ENGINE IS FOLLOWED, NOT WAITED FOR: an older engine is still
-//!   handed board rows for a week (docs/CLIENTS.md `accepted`), so when the site
-//!   names a newer one the client fetches it on a thread of its own, finishes
-//!   what it holds on the old one, and computes the next work on the new.
+//! - ENGINE UPDATES run off the dispatcher. The server's accepted list bounds
+//!   any wait for a native build; join-only old engines receive witness rows.
+//!   A ready replacement is taken once the old engine's held work is done.
 //! - THE NETWORK IS NEVER WAITED ON: syncs, asks, renewals and answers run on
 //!   their own threads. A protocol 8 sync gives back every row of its id it
 //!   does not name, so it names them all, and an id computing a riven gain
@@ -45,14 +44,10 @@
 //! - A RIVEN GAIN'S JOBS GO FIRST. Its search is a chain — a lead step, then the
 //!   round's scoring — so a step kept waiting holds the whole search back, while
 //!   a board piece is a quarter second and anything else can wait for one.
-//! - HOW MANY GROUPS IS MEASURED, not guessed, and goes both ways: every 20
-//!   seconds, from the lanes' utilisation, the board work held (in seconds of
-//!   the whole budget, from what a row has cost) and whether the server still
-//!   hands every group work. One more opens when lanes idle with little held and
-//!   every group busy; the newest stops asking when the work held would keep
-//!   the budget busy for minutes, when the server has none to spare, or when the
-//!   budget shrank — at most the cap (`max_slots`, `[`/`]`), one step at a time,
-//!   and not straight back after closing.
+//! - GROUPS RETRY INDEPENDENTLY, including after an empty answer. Automatic
+//!   mode restores known groups within the cap and checks capacity every five
+//!   seconds. An underfilled group can open another; excess queued work or a
+//!   smaller resource budget can close one. Empty answers never close peers.
 //!
 //! Every computation is the page's own, step for step (work.rs), so a result is
 //! bit for bit what a browser sends, however the lanes were shared.
@@ -94,7 +89,7 @@ const HELD_LOW: f64 = 60.0;
 const HELD_FULL: f64 = 180.0;
 const HELD_HIGH: f64 = 300.0;
 const REOPEN_AFTER: Duration = Duration::from_secs(60);
-/// A group the server told "nothing" this recently says the server has none to spare.
+/// A recent empty reply prevents this group alone from justifying expansion.
 const NOTHING_RECENT: Duration = Duration::from_secs(60);
 /// A group the server told "nothing for you" asks again after this.
 const NOTHING_WAIT: Duration = Duration::from_secs(10);
@@ -568,6 +563,10 @@ impl Fleet {
             f.open = f.cfg.slots.min(f.max_groups()).max(1);
         } else if f.slot_limit() > 0 {
             f.open = f.cpu_slots().count().min(f.max_groups());
+        } else {
+            // Preserve the useful identities from previous runs, including
+            // their separate server gates. Do not create new IDs on restart.
+            f.open = ids.len().min(f.max_groups()).max(1);
         }
         if f.proto == 7 {
             f.ui.log(format!("{C_INFO}[协议]{C_END} 按配置使用协议 7"));
@@ -1436,7 +1435,7 @@ impl Fleet {
             }
         };
         let incoming=r["pack"]["tasks"].as_array().map_or(0,Vec::len);
-        self.trace.event(json!({"event":"sync_reply","group":gi+1,"elapsed_ms":s.at.elapsed().as_millis(),"want_ms":s.want,"rows":incoming,"next_ms":r["next_ms"],"dials":r["dials"],"early":r["early"],"busy":r["busy"],"paused":r["paused"],"stale":r["stale"],"riven":r["work"]["kind"]=="riven_gain"}));
+        self.trace.event(json!({"event":"sync_reply","group":gi+1,"elapsed_ms":s.at.elapsed().as_millis(),"want_ms":s.want,"rows":incoming,"next_ms":r["next_ms"],"dials":r["dials"],"early":r["early"],"busy":r["busy"],"paused":r["paused"],"stale":r["stale"],"join":r["join"],"engine":s.engine,"riven":r["work"]["kind"]=="riven_gain"}));
         if r["fallback"] == json!(7) {
             return self.fall_back("服务器暂时关闭了协议 8");
         }
@@ -2338,18 +2337,17 @@ impl Fleet {
         };
         let signal_work=self.signal.as_ref().is_some_and(|(at,s)|now.duration_since(*at)<Duration::from_millis(3*self.dials.poll_ms)
             && s.as_ref().is_some_and(|s|s.open>0 || s.urgent>0));
-        let busy_groups = (0..self.open).all(|gi| {
+        let capacity_waiting = (0..self.open).any(|gi| {
             let g=&self.groups[gi];
             let held=self.tasks.iter().any(|t|t.group==gi)||self.packs.iter().any(|p|p.group==gi);
             capacity_limited(held,g.last_received.is_some(),now<g.not_before,signal_work,
                 g.nothing_at.is_some_and(|at|now.duration_since(at)<NOTHING_RECENT),g.failures>0)
         });
-        let told_nothing = (0..self.open).any(|g| self.groups[g].nothing_at.is_some_and(|t| now.duration_since(t) < NOTHING_RECENT));
         let reopen_ok = self.closed_at.is_none_or(|t| now.duration_since(t) >= REOPEN_AFTER);
         let close = |why: String| (self.open > minimum).then_some(why);
-        let closing = if told_nothing && util < OPEN_BELOW {
-            close("服务器暂时没有更多任务可分".into())
-        } else if h > held_high {
+        // A reply describes one identity's eligible rows, not fleet-wide
+        // capacity. Keep each open group's cooldown and retry independent.
+        let closing = if h > held_high {
             close(format!("手上的榜单够全部核心算 {h:.0} 秒"))
         } else if util > FULL_ABOVE && h > held_full {
             close(format!("核心已满，手上还有 {h:.0} 秒的活"))
@@ -2360,7 +2358,7 @@ impl Fleet {
             self.open -= 1;
             self.closed_at = Some(now);
             self.ui.log(format!("{C_INFO}[调度]{C_END} {why}，第 {} 路做完手头的活后不再接（现 {} 路）", self.open + 1, self.open));
-        } else if util < OPEN_BELOW && h < held_low && busy_groups && !told_nothing && reopen_ok && self.open < cap {
+        } else if util < OPEN_BELOW && h < held_low && capacity_waiting && reopen_ok && self.open < cap {
             self.open += 1;
             self.ensure_groups(self.open);
             let held = held.map_or(String::new(), |h| format!("，手上只剩 {h:.0} 秒的活"));

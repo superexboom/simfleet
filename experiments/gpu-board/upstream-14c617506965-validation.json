@@ -1,0 +1,79 @@
+{
+  "date": "2026-10-26",
+  "engine": "14c617506965",
+  "upstream": "b43ee664bddddbcd4f62e03b99a2a24b9ad39026",
+  "wrapper": "15f8e283e14779bfb745df61242c3fb6fcefeca9",
+  "client": "0.9.0-preview.19",
+  "reference_wasm": "4bf7c5c9f316",
+  "reference_data": "087697e90dd4",
+  "native": {
+    "sha256": "f2920843951a9a54c5db16a792e5c27d208cb6d67f76f1e866d36b409d9904f9",
+    "cpu": "x86-64-v3",
+    "pgo": true,
+    "action_url": "https://github.com/superexboom/simfleet/actions/runs/40326105189",
+    "action_conclusion": "success",
+    "board_rows": 8,
+    "skipped": 0,
+    "riven_canary": "same",
+    "source_patch_hashes": {
+      "002-single-worker.patch": "f224b567838e0dc4fde94b531bfa24e185c4144750b34c9080b6d1d8d1a08cae",
+      "001-prepared-board.patch": "f8bb97de23ba85b1f694bd2884a9638e8810a6bfec01013eb9f837588d7f33e8",
+      "004-frozen-optimize-plan.patch": "b5160a35186e0f73cf00aa331453a8a6de310837bd80289ca9dff27f0084e760",
+      "003-static-panel-metadata.patch": "60e886a98ae5cb76a935224a5ee31231a5d632ff3ea9476504930d9f9e8c3bf1",
+      "006-bounded-lead-metadata.patch": "a75105d6c0739c9843438aa7138e7478a0248f65d97141afee44a2c58d2db825"
+    }
+  },
+  "gpu": {
+    "architecture": "sm120",
+    "revision": 3,
+    "device_validated": true,
+    "files": {
+      "engine.cubin": "460713d67a6583632e17394ffe322597f9ddde0b6d1e34ba8774121a959f0e64",
+      "bridge.wasm": "7482eee035c6e9e54e92524cffba804f6803d935b8e79864417f661a32bf844f",
+      "wire.dll": "d50679268c0d22f0c72ee3e4c7bec3dcd492674c20a454192faa95448ce0a9e2"
+    },
+    "package": "simfleet-gpu-14c617506965-sfg3-sm120-windows-x64.zip",
+    "package_sha256": "2e324df1f0ddb3329f3d7641f2dd199df3ef7d0f342cedc250111aab53c5c6c5",
+    "package_files": 6
+  },
+  "validation": {
+    "exact_shards": 128,
+    "exact_short_scores": 2,
+    "worker_full_rows": 4,
+    "worker_runs_per_row": 1000,
+    "worker_batch_seconds": 1.415629699999954,
+    "worker_private_bytes": 3830108160
+  },
+  "dispatch": {
+    "granted_groups": 3,
+    "early_requests": 0,
+    "independent_retry_seconds": 6.0843393000000106,
+    "first_request_seconds": 0.7992349000001013
+  },
+  "live_before": {
+    "started_at": "2026-10-26T20:28:10+08:00",
+    "sync_replies": 82,
+    "sync_failures": 0,
+    "work_replies": 39,
+    "empty_work_replies": 42,
+    "rows": 2728,
+    "median_sync_ms": 1406.0,
+    "first_sync_after_start_seconds": 156.56,
+    "by_group": {
+      "1": {
+        "replies": 38,
+        "rows": 1341
+      },
+      "2": {
+        "replies": 29,
+        "rows": 850
+      },
+      "3": {
+        "replies": 15,
+        "rows": 537
+      }
+    }
+  },
+  "gpu_build_scope": "sm120 only",
+  "limitations": "Compatibility and focused scheduling checks, not a throughput benchmark or a long soak. Production startup includes internet access; local startup measurement used cached engine files and a localhost server."
+}

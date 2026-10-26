@@ -97,8 +97,14 @@ fn local_native(paths: &Paths, rel: &Release) -> bool {
 }
 fn optimized(code: &Arc<Code>, cfg: &Config) -> bool {
     code.native.as_ref().is_some_and(|n| {
-        !n.official && (!cfg.native_riven || (n.has_optimize() && n.wait_riven() == 2))
+        !n.official && (!cfg.native_riven || optimizer_pending_or_ready(n.has_optimize(), n.riven_state()))
     })
+}
+
+// Board validation has already passed. Search validation stays asynchronous;
+// the dispatcher separately gates native riven tasks on a successful verdict.
+fn optimizer_pending_or_ready(has_optimize: bool, state: u8) -> bool {
+    has_optimize && matches!(state, 1 | 2)
 }
 pub struct Prepared {
     pub release: Release,
@@ -157,7 +163,7 @@ pub fn startup(
     if let Some(old) = state
         .current
         .clone()
-        .filter(|r| r.engine != latest.engine && cfg.native_engine && local_native(paths, r))
+        .filter(|r| r.engine != latest.engine && cfg.native_engine && !local_native(paths, &latest) && local_native(paths, r))
     {
         state.observe(&old, &latest, crate::sys::now_ms());
         state.save(paths)?;
@@ -187,6 +193,14 @@ mod tests {
             accepted: vec![],
         }
     }
+    #[test]
+    fn pending_riven_validation_does_not_block_board_startup() {
+        assert!(optimizer_pending_or_ready(true, 1));
+        assert!(optimizer_pending_or_ready(true, 2));
+        assert!(!optimizer_pending_or_ready(true, 3));
+        assert!(!optimizer_pending_or_ready(false, 1));
+    }
+
     #[test]
     fn deadline_survives_new_upstream_versions_and_serialization() {
         let now = crate::sys::parse_iso("2026-10-22T00:00:00Z").unwrap();
