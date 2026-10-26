@@ -75,5 +75,37 @@
     }
   },
   "gpu_build_scope": "sm120 only",
-  "limitations": "Compatibility and focused scheduling checks, not a throughput benchmark or a long soak. Production startup includes internet access; local startup measurement used cached engine files and a localhost server."
+  "limitations": "Compatibility and focused scheduling checks, not a throughput benchmark or a long soak. Production startup includes internet access; local startup measurement used cached engine files and a localhost server.",
+  "deployment_observation": {
+    "deployment": {
+      "at": "2026-10-26T21:26:19.2287040+08:00",
+      "client": "0.9.0-preview.19",
+      "engine": "14c617506965",
+      "gpu": "sfg3-sm120",
+      "client_sha256": "5cd1efa9d2603ce495e78346860679fb768bc7acd9aac9e6a17b53eab1ba1191",
+      "config_unchanged": true,
+      "backup": "C:\\Users\\SuperExboom\\Documents\\simfleet\\.bench-sync-refresh-20261026\\deployment-backup"
+    },
+    "first_request_after_deployment_seconds": 2.871296142578125,
+    "first_grants": {
+      "1": {
+        "rows": 200,
+        "elapsed_ms": 1135,
+        "seconds_after_deployment": 4.637296142578125
+      },
+      "3": {
+        "rows": 200,
+        "elapsed_ms": 1050,
+        "seconds_after_deployment": 4.743296142578125
+      },
+      "2": {
+        "rows": 200,
+        "elapsed_ms": 5058,
+        "seconds_after_deployment": 7.929296142578125
+      }
+    },
+    "sync_replies": 6,
+    "sync_failures": 0,
+    "gpu_ready": true
+  }
 }
