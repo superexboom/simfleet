@@ -19,3 +19,4 @@ __pycache__/
 /gpu-policy.tmp
 /gpu-policy.json.bak
 /gpu-policy.*.tmp
+/result-diagnostics/

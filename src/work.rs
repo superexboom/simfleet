@@ -604,6 +604,26 @@ fn native_board_canary(code: &Arc<Code>) -> Result<bool> {
     Ok(true)
 }
 
+/// Protocol 8 requires finite scores and JS-safe integer work. Optional
+/// counters must also survive the browser/server's integer representation.
+pub const MAX_SAFE_WORK: u64 = (1u64 << 53) - 1;
+pub fn valid_board_score(v: &Value) -> bool {
+    v["ok"] != false
+        && v["score"].as_f64().is_some_and(|n| n.is_finite() && n >= 0.0)
+        && v["metric"].as_str().is_some_and(|s| !s.is_empty())
+        && v["work"].as_u64().is_some_and(|n| n <= MAX_SAFE_WORK)
+        && v["counts"].as_object().is_none_or(|c| c.values().all(|n| n.as_u64().is_some_and(|n| n <= MAX_SAFE_WORK)))
+}
+
+#[derive(Debug)]
+pub struct InvalidBoardScore(pub Value);
+impl std::fmt::Display for InvalidBoardScore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid board score/counters: work={}, gas={}", self.0["work"], self.0["counts"]["gas"])
+    }
+}
+impl std::error::Error for InvalidBoardScore {}
+
 pub struct RowScore {
     pub score: f64,
     pub metric: String,
@@ -626,6 +646,7 @@ pub struct RowScore {
 /// byte, as when it was read there.
 pub struct BoardRun {
     pub gpu_pending: bool,
+    force_wasm: bool,
     native: Option<Arc<NativeBoard>>,
     home: Option<usize>,
     req_s: String,
@@ -649,6 +670,7 @@ impl BoardRun {
     pub fn new(req: &Value, ruler: &str) -> BoardRun {
         BoardRun {
             gpu_pending: false,
+            force_wasm: false,
             native: None,
             home: None,
             req_s: req.to_string(),
@@ -668,8 +690,20 @@ impl BoardRun {
     pub fn enable_native(&mut self, code: Arc<Code>, req: &Value) {
         self.native = NativeBoard::new(code, req, &self.ruler, false);
     }
+    pub fn request(&self) -> Value { serde_json::from_str(&self.req_s).expect("retained board request") }
+    pub fn backend(&self, default: Backend) -> Backend { if self.force_wasm { Backend::Wasm } else { default } }
+    /// A final score has no outstanding shards. Discard its entire accumulator
+    /// and retry the original request once on the independent reference path.
+    pub fn retry_wasm(&mut self) -> bool {
+        if self.force_wasm || self.scoring.is_none() || !self.inflight.is_empty() || self.folding.is_some() { return false; }
+        let spent = self.spent;
+        *self = Self::new(&self.request(), &self.ruler);
+        self.force_wasm = true;
+        self.spent = spent;
+        true
+    }
     pub fn gpu_input(&self, id:u64)->Option<crate::gpu::Input> {
-        if self.cursor!=0 || self.gpu_pending {return None;}
+        if self.force_wasm || self.cursor!=0 || self.gpu_pending {return None;}
         let request:Value=serde_json::from_str(&self.req_s).ok()?;
         crate::gpu::eligible(&request,&self.ruler).then(||crate::gpu::Input{id,request,ruler:self.ruler.clone(),private_kib:192,probe:false})
     }
@@ -729,6 +763,7 @@ impl BoardRun {
                 bail!("/api/board/score: {}", s["error"].as_str().unwrap_or("engine refused"));
             }
             self.spent += d.ms;
+            if !valid_board_score(&s) { return Err(InvalidBoardScore(s).into()); }
             return Ok(Some(RowScore {
                 score: s["score"].as_f64().context("score")?,
                 metric: s["metric"].as_str().unwrap_or("").to_string(),
@@ -973,6 +1008,22 @@ mod tests {
         assert!(matches!(row.job(1, 1), Some(Call::Api("/api/board/score", _))));
         let d = Done { tag: 1, lane: 0, ms: 1.0, out: Ok(r#"{"ok":false,"error":"bad acc"}"#.into()) };
         assert!(matches!(row.done(d), Err(e) if e.to_string().contains("bad acc")));
+        // The live CPU failure: a plausible combat score with corrupted gas.
+        let bad = json!({"ok":true,"score":6.3244318701136635,"metric":"kpm",
+            "work":230358922269743420u64,"counts":{"gas":4607178437394868700u64,"runs":1000}});
+        let d = Done { tag:1, lane:0, ms:2.0, out:Ok(bad.to_string()) };
+        let error = row.done(d).err().expect("unsafe work rejected before accounting");
+        assert!(error.downcast_ref::<InvalidBoardScore>().is_some());
+        assert!(row.retry_wasm());
+        assert_eq!(row.backend(Backend::Native), Backend::Wasm);
+        assert!(row.gpu_input(1).is_none());
+        let Some(Call::Runs(body,1)) = row.job(2,1) else {panic!("restart from run zero")};
+        assert_eq!(jsnum::parse(&body).unwrap()["from"],0);
+        row.inflight.clear();row.folded=1;
+        assert!(matches!(row.job(3,1),Some(Call::Api("/api/board/score",_))));
+        let d=Done {tag:3,lane:0,ms:1.0,out:Ok(r#"{"ok":true,"score":6.3244318701136635,"metric":"kpm","work":1000,"counts":{"gas":20}}"#.into())};
+        assert_eq!(row.done(d).unwrap().unwrap().work,1000);
+        assert!(!row.retry_wasm());
     }
     #[test]
     fn payload_like_the_page() {

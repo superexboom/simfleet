@@ -585,7 +585,14 @@ impl Fleet {
     fn ensure_groups(&mut self, n: usize) {
         while self.groups.len() < n {
             let verifier = self.free_id();
-            let journal = Journal::load(&self.paths.dir, &verifier);
+            let mut journal = Journal::load(&self.paths.dir, &verifier);
+            let quarantined = match journal.quarantine_invalid(&self.paths.dir) {
+                Ok(n) => n,
+                Err(e) => { self.ui.log(format!("{C_BAD}[结果]{C_END} 无法隔离异常结果：{e}；无效结果仍不会提交")); 0 }
+            };
+            if quarantined > 0 {
+                self.ui.glog(self.groups.len(),format!("{C_GO}[结果]{C_END} 隔离 {quarantined} 行异常计量到 result-diagnostics，正常答案继续补交"));
+            }
             if !journal.results.is_empty() {
                 self.ui.glog(
                     self.groups.len(),
@@ -606,7 +613,7 @@ impl Fleet {
                 last_row: None,
                 nothing_at: None,
                 journal,
-                journal_dirty: false,
+                journal_dirty: quarantined > 0,
                 not_before: now,
                 retry_at: now,
                 failures: 0,
@@ -1910,7 +1917,7 @@ impl Fleet {
                 let local=remote || slots.partitioned();
                 let job = match &mut t.runner {
                     // Never on a leader's lane: its next lead step must not wait.
-                    Runner::Board(b) if owner.is_none() => b.job_on(tag, share, lane, local).map(|c| (backend, c)),
+                    Runner::Board(b) if owner.is_none() => b.job_on(tag, share, lane, local).map(|c| (b.backend(backend), c)),
                     Runner::Riven(r) if (owner.is_none() || mine)
                         && (local || r.leader.is_none_or(|l| crate::placement::same_domain(l,lane))) => r.job(lane, tag).map(|c| (r.backend, c)),
                     _ => None,
@@ -1959,6 +1966,33 @@ impl Fleet {
                 self.answer(t, f);
             }
             Err(e) => {
+                if let Some(bad) = e.downcast_ref::<crate::work::InvalidBoardScore>() {
+                    let t = &self.tasks[ti];
+                    let request = match &t.runner { Runner::Board(b)=>b.request(), _=>Value::Null };
+                    let report = json!({"at":sys::now_ms(),"version":env!("CARGO_PKG_VERSION"),"engine":self.rel.engine,
+                        "label":t.label,"request":request,"ruler":t.w["ruler"],"score":bad.0});
+                    let folder=self.paths.dir.join("result-diagnostics");
+                    let saved=(||->Result<()> {
+                        let bytes=serde_json::to_vec_pretty(&report)?;
+                        anyhow::ensure!(bytes.len()<=8<<20,"diagnostic too large");
+                        std::fs::create_dir_all(&folder)?;
+                        let path=folder.join("last-invalid-score.json");
+                        if path.exists() {std::fs::copy(&path,folder.join("previous-invalid-score.json"))?;}
+                        let tmp=folder.join("last-invalid-score.json.tmp");
+                        std::fs::write(&tmp,bytes)?;std::fs::rename(tmp,path)?;Ok(())
+                    })();
+                    if let Err(e)=saved {self.ui.log(format!("{C_GO}[诊断]{C_END} 保存异常计量失败：{e}"));}
+                    self.trace.event(json!({"event":"invalid_board_score","engine":self.rel.engine,"group":t.group+1,"label":t.label,"work":bad.0["work"],"gas":bad.0["counts"]["gas"]}));
+                    if self.backend()==Backend::Native {
+                        let t=&mut self.tasks[ti];
+                        if let Runner::Board(b)=&mut t.runner {
+                            if b.retry_wasm() {
+                                self.ui.glog(t.group,format!("{C_GO}[重算]{C_END} {} 的计量异常，已保存诊断，改用 WASM 从头计算；异常值不计分、不提交",t.label));
+                                return;
+                            }
+                        }
+                    }
+                }
                 let (label, gi) = (self.tasks[ti].label.clone(), self.tasks[ti].group);
                 self.ui.glog(gi, format!("{C_BAD}[失败]{C_END} {label}：{e:#}"));
                 self.drop_task(id, "，任务已交还", true);

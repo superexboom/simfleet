@@ -159,6 +159,12 @@ pub struct Journal {
     pub pace_ms: f64,
 }
 
+impl Kept {
+    fn valid(&self) -> bool {
+        crate::work::valid_board_score(&self.result) && self.result["work"].as_u64() == Some(self.work)
+    }
+}
+
 impl Journal {
     fn path(dir: &Path, verifier: &str) -> PathBuf {
         dir.join("kept").join(format!("{}.json", verifier.get(..12).unwrap_or(verifier)))
@@ -171,6 +177,22 @@ impl Journal {
         let mut j = read.filter(|j| j.verifier == verifier).unwrap_or_else(|| Journal { verifier: verifier.into(), ..Default::default() });
         j.prune(crate::sys::now_ms());
         j
+    }
+
+    /// Preserve invalid answers outside the submission journal. Never clamp
+    /// work: that would invent a result. A corrupt row must not block its peers.
+    pub fn quarantine_invalid(&mut self, dir: &Path) -> std::io::Result<usize> {
+        let bad: Vec<&Kept> = self.results.iter().filter(|k| !k.valid()).collect();
+        let count = bad.len();
+        if count == 0 { return Ok(0); }
+        let folder = dir.join("result-diagnostics");
+        std::fs::create_dir_all(&folder)?;
+        let path = folder.join(Self::path(dir, &self.verifier).file_name().unwrap());
+        let temp = path.with_extension("json.tmp");
+        std::fs::write(&temp, serde_json::to_vec(&serde_json::json!({"at":crate::sys::now_ms(),"invalid_results":bad}))?)?;
+        std::fs::rename(temp, path)?;
+        self.results.retain(Kept::valid);
+        Ok(count)
     }
 
     /// Written whole, through a file beside it; an empty journal leaves no file.
@@ -211,7 +233,7 @@ impl Journal {
     /// The results a sync of `engine` carries: that engine's, oldest first,
     /// as many as one body holds.
     pub fn to_send(&self, engine: &str) -> Vec<&Kept> {
-        let mut mine: Vec<&Kept> = self.results.iter().filter(|k| k.engine == engine).collect();
+        let mut mine: Vec<&Kept> = self.results.iter().filter(|k| k.engine == engine && k.valid()).collect();
         mine.sort_by_key(|k| k.at);
         let (mut out, mut bytes) = (Vec::new(), 0);
         for k in mine {
@@ -289,7 +311,7 @@ impl Journal {
     }
 
     pub fn kept_work(&self) -> u64 {
-        self.results.iter().map(|k| k.work).sum()
+        self.results.iter().filter(|k| k.valid()).map(|k| k.work).sum()
     }
 }
 
@@ -398,7 +420,7 @@ mod tests {
     use super::*;
 
     fn kept(q: &str, engine: &str, at: u64) -> Kept {
-        Kept { question: q.into(), engine: engine.into(), at, work: 1_000, result: json!({ "lease": "l", "question": q, "score": 1.5 }) }
+        Kept { question: q.into(), engine: engine.into(), at, work: 1_000, result: json!({ "lease": "l", "question": q, "score": 1.5, "metric":"kpm", "work":1000 }) }
     }
 
     #[test]
@@ -435,6 +457,20 @@ mod tests {
         let back = Journal::load(&dir, &v);
         assert_eq!(back.results.len(), 1);
         assert_eq!(back.results[0].result, j.results[0].result);
+        let mut bad = kept("bad", "e", crate::sys::now_ms());
+        bad.work = 230358922269743420;
+        bad.result["work"] = json!(bad.work);
+        bad.result["counts"] = json!({"gas":4607178437394868700u64});
+        j.keep(bad.clone());j.save(&dir).unwrap();
+        let mut back = Journal::load(&dir,&v);
+        assert_eq!(back.to_send("e").len(),1);
+        assert_eq!(back.kept_work(),1000);
+        assert_eq!(back.quarantine_invalid(&dir).unwrap(),1);
+        assert_eq!(back.results.len(),1);
+        let evidence:Value=serde_json::from_slice(&std::fs::read(dir.join("result-diagnostics").join(Journal::path(&dir,&v).file_name().unwrap())).unwrap()).unwrap();
+        assert_eq!(evidence["invalid_results"][0]["result"],bad.result);
+        back.save(&dir).unwrap();
+        assert_eq!(Journal::load(&dir,&v).results.len(),1);
         // Another id whose file has the same name: not its journal.
         let w = format!("{}{}", &v[..12], if &v[12..] == "000000000000" { "111111111111" } else { "000000000000" });
         assert!(Journal::load(&dir, &w).results.is_empty());
