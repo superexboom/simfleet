@@ -1,0 +1,66 @@
+{
+  "date": "2026-10-31",
+  "engine": "ea828b371375",
+  "upstream": "e5791136347341e7435d8a5623aaa836dd87350f",
+  "client": "0.9.0-preview.20",
+  "reference_wasm": "d00fbb5dd94b",
+  "reference_data": "40fe1aa06a49",
+  "native": {
+    "sha256": "b36d23132cfb487b12878634e542ae0a6228b1b369799d4fecb82dce5eee0204",
+    "cpu": "x86-64-v3",
+    "pgo": true,
+    "source_wrapper": "82aada2f9139d574378151dd92ccc347607687e0",
+    "action_url": "https://github.com/superexboom/simfleet/actions/runs/41205099682",
+    "action_conclusion": "success",
+    "board_rows": 8,
+    "skipped": 0,
+    "riven_canary": "same",
+    "source_patch_hashes": {
+      "001-prepared-board.patch": "620583ecbd8aeeeac87af8f5b440386e3757d1b72f27fe050f12539c7e9c7423",
+      "004-frozen-optimize-plan.patch": "b5160a35186e0f73cf00aa331453a8a6de310837bd80289ca9dff27f0084e760",
+      "002-single-worker.patch": "f224b567838e0dc4fde94b531bfa24e185c4144750b34c9080b6d1d8d1a08cae",
+      "006-bounded-lead-metadata.patch": "a75105d6c0739c9843438aa7138e7478a0248f65d97141afee44a2c58d2db825",
+      "003-static-panel-metadata.patch": "60e886a98ae5cb76a935224a5ee31231a5d632ff3ea9476504930d9f9e8c3bf1"
+    }
+  },
+  "gpu": {
+    "architecture": "sm120",
+    "revision": 3,
+    "device_validated": true,
+    "files": {
+      "engine.cubin": "4e58c7740843b03d5152f2b2e981108b810efb60bc5f14027346e5c92e1c4a82",
+      "bridge.wasm": "d430f1b35a600e13c16bd4db2b280d3b61a87cc2bd1e3a6d2f1aa2f4d2b4bfa6",
+      "wire.dll": "7bd8a10f2a399c5bcb952afe4a0c4b279cdba8640ca2ff2b49a15e7d7e5637c5"
+    },
+    "package": "simfleet-gpu-ea828b371375-sfg3-sm120-windows-x64.zip",
+    "package_sha256": "699a13043b3779cf1d9e87cfdceb52c556d16aeec541700cb9ce35e7debca2e6",
+    "package_files": 6
+  },
+  "validation": {
+    "exact_shards": 128,
+    "exact_short_scores": 2,
+    "worker_full_rows": 4,
+    "worker_runs_per_row": 1000,
+    "worker_batch_seconds": 1.7046027000033064,
+    "worker_private_bytes": 3855028224
+  },
+  "action_repair": {
+    "failed_run": 41180872549,
+    "cause": "001-prepared-board.patch registration context changed upstream; skipping it broke required Windows PGO ABI",
+    "source_commit": "82aada2f9139d574378151dd92ccc347607687e0",
+    "existing_linux_macos": "Already published sfe2 assets retained; they passed WASM checks without prepared-board ABI. Future patched builds require the ABI."
+  },
+  "gpu_build_scope": "sm120 only",
+  "limitations": "Compatibility verification only, not throughput or long-run validation. No production instance was running when this task began. Calculation reports capability remains unadvertised.",
+  "deployment": {
+    "at": "2026-10-31T21:47:51.7589558+08:00",
+    "engine": "ea828b371375",
+    "gpu": "sfg3-sm120",
+    "native_sha256": "b36d23132cfb487b12878634e542ae0a6228b1b369799d4fecb82dce5eee0204",
+    "module_sha256": "4e58c7740843b03d5152f2b2e981108b810efb60bc5f14027346e5c92e1c4a82",
+    "files_staged": true,
+    "client_config_learning_unchanged": true,
+    "process_started": false,
+    "activation": "Next client startup performs canary and selects current engine"
+  }
+}
