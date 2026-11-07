@@ -1,0 +1,111 @@
+{
+  "date": "2026-11-08",
+  "engine": "69219ccb033d",
+  "source": "1db552fa9157817113029fa6bed9950caad1a431",
+  "fix_commit": "f66b48b42499bb3726ecb8490c77f9a9ec9a0372",
+  "action": 42389719662,
+  "conclusion": "success",
+  "url": "https://github.com/superexboom/simfleet/releases/tag/engine-69219ccb033d",
+  "assets": [
+    {
+      "name": "69219ccb033d-sfe2-v3.dll",
+      "sha256": "c72a8616b11bc4903b954463a24f84ce45f324bbd96e49d4a5b9bcb34e48146f",
+      "bytes": 17254912,
+      "pgo": true,
+      "upstream_features": [
+        "prepared-simulation",
+        "static-panel-metadata"
+      ],
+      "patches": [
+        "002-single-worker.patch"
+      ]
+    },
+    {
+      "name": "lib69219ccb033d-sfe2.so",
+      "sha256": "74ee1202bdc76a0359a3fc9dd1af2e8f1b7544d07ef83ded9ad14170766f88c1",
+      "bytes": 15171312,
+      "pgo": false,
+      "upstream_features": [
+        "prepared-simulation",
+        "static-panel-metadata"
+      ],
+      "patches": [
+        "002-single-worker.patch"
+      ]
+    },
+    {
+      "name": "lib69219ccb033d-sfe2-v3.so",
+      "sha256": "c6180fa7365c049e640abf99a9f05204b05e098414df40c3424f60a9c4e81547",
+      "bytes": 15264880,
+      "pgo": false,
+      "upstream_features": [
+        "prepared-simulation",
+        "static-panel-metadata"
+      ],
+      "patches": [
+        "002-single-worker.patch"
+      ]
+    },
+    {
+      "name": "lib69219ccb033d-sfe2.dylib",
+      "sha256": "bb5a005ee90041006e5c6d0021cd417caddb341ece4c4f5018e00fe42d5cd94b",
+      "bytes": 13145248,
+      "pgo": false,
+      "upstream_features": [
+        "prepared-simulation",
+        "static-panel-metadata"
+      ],
+      "patches": [
+        "002-single-worker.patch"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "platform": "windows",
+      "file": "check-v3.log",
+      "rows": 8,
+      "riven": "same"
+    },
+    {
+      "platform": "linux",
+      "file": "check-baseline.log",
+      "rows": 8,
+      "riven": "same"
+    },
+    {
+      "platform": "linux",
+      "file": "check-v3.log",
+      "rows": 8,
+      "riven": "same"
+    },
+    {
+      "platform": "macos",
+      "file": "check-baseline.log",
+      "rows": 8,
+      "riven": "same"
+    }
+  ],
+  "gpu_built": false,
+  "client_update_required": false,
+  "focused_cases": [
+    "native_context_parallel_reverse_pieces_match_the_wire",
+    "assembled_and_nested_panels_share_catalog_metadata"
+  ],
+  "feature_selection_checked": [
+    "current upstream implementation",
+    "previous local patch implementation"
+  ],
+  "deployment": {
+    "at": "2026-11-08T00:29:28.1026912+08:00",
+    "engine": "69219ccb033d",
+    "native_sha256": "c72a8616b11bc4903b954463a24f84ce45f324bbd96e49d4a5b9bcb34e48146f",
+    "cpu_only": true,
+    "gpu_built": false,
+    "gpu_modified": false,
+    "client_config_learning_unchanged": true,
+    "started_instance": false,
+    "activation": "Normal canary and current-engine selection at next startup"
+  },
+  "limitations": "No throughput A/B or long soak. No GPU build. Optional optimizer patches 004/005/006 retain upstream fallback. Client remains preview.20; production was stopped and remains stopped."
+}
