@@ -13,6 +13,14 @@ diff --git a/engine/src/data/weapons/panel.rs b/engine/src/data/weapons/panel.rs
 index 5b5f1e1f60..10d7154a74 100644
 --- a/engine/src/data/weapons/panel.rs
 +++ b/engine/src/data/weapons/panel.rs
+@@ -447,3 +447,7 @@
+     });
+ 
++    // Panels assembled or cloned for attack profiles share catalog metadata.
++    // Resolve it in this scope rather than relying on the caller's locals.
++    let raw = spec(&s.id).expect("panel metadata requires a catalog weapon");
++
+     WeaponBase {
 @@ -452,23 +452,23 @@ pub fn base_panel_assembled(
          melee_incarnon: None,
          // LEAKED ONCE so the panel can answer "what is this" and "what does it

@@ -170,6 +170,27 @@ mod tests {
         }
     }
     #[test]
+    fn assembled_and_nested_panels_share_catalog_metadata() {
+        use wfsim_engine::data::weapons::{all, base_panel, spec};
+        let nested = all().iter().find(|s| !s.attack.profiles.is_empty()).expect("nested attack profile");
+        for id in ["braton_prime", "catchmoon_primary", nested.id.as_str()] {
+            let raw = spec(id).unwrap();
+            let first = base_panel(id, false);
+            let again = base_panel(id, false);
+            assert_eq!(first.class, raw.class);
+            assert_eq!(first.slot, raw.rules_slot());
+            assert_eq!(first.summoned_by, raw.summoned_by.as_deref());
+            assert_eq!(first.mod_pools, raw.mod_pools.iter().map(String::as_str).collect::<Vec<_>>());
+            assert!(std::ptr::eq(first.class.as_ptr(), again.class.as_ptr()));
+            assert!(std::ptr::eq(first.mod_pools.as_ptr(), again.mod_pools.as_ptr()));
+            for (_, child) in &first.melee_profiles {
+                assert_eq!(child.class, first.class);
+                assert!(std::ptr::eq(child.mod_pools.as_ptr(), first.mod_pools.as_ptr()));
+            }
+        }
+    }
+
+    #[test]
     fn duplicate_or_incomplete_work_never_scores() {
         let body = json!({"request":request(),"ruler":"demolisher"}).to_string();
         unsafe {
