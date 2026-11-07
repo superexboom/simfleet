@@ -1,0 +1,98 @@
+{
+  "date": "2026-11-07",
+  "engine": "d8787cb351c5",
+  "source": "1761c310530fd4f11ef44b08398e83ed6be689cc",
+  "fix_commit": "f558c90fb4aa66000db5e3b921500f4e1d486967",
+  "actions": [
+    42336910273,
+    42338859448
+  ],
+  "conclusion": "all four native variants published and checked",
+  "url": "https://github.com/superexboom/simfleet/releases/tag/engine-d8787cb351c5",
+  "assets": [
+    {
+      "name": "d8787cb351c5-sfe2-v3.dll",
+      "sha256": "d3dd7c8b5867f0ae5f080cb749639a5b785beeac3eb0967a8ea6c443535a7a39",
+      "bytes": 17245696,
+      "pgo": true,
+      "patches": [
+        "001-prepared-board.patch",
+        "002-single-worker.patch",
+        "003-static-panel-metadata.patch"
+      ]
+    },
+    {
+      "name": "libd8787cb351c5-sfe2.so",
+      "sha256": "c88fc0ea2c8e9f1b352a34c9e90e70ac1bf64f3b66372a129ad5d0b8caddc705",
+      "bytes": 15361360,
+      "pgo": false,
+      "patches": [
+        "001-prepared-board.patch",
+        "002-single-worker.patch",
+        "003-static-panel-metadata.patch"
+      ]
+    },
+    {
+      "name": "libd8787cb351c5-sfe2-v3.so",
+      "sha256": "7235e5b9ef4e582033293095896c87587acfa10162254270421725b2533ae2da",
+      "bytes": 15449936,
+      "pgo": false,
+      "patches": [
+        "001-prepared-board.patch",
+        "002-single-worker.patch",
+        "003-static-panel-metadata.patch"
+      ]
+    },
+    {
+      "name": "libd8787cb351c5-sfe2.dylib",
+      "sha256": "8cd9ef04bb3db2b8ef87224d1010fda67abb7e78e66d70bc06d71a2b9b0a4cc0",
+      "bytes": 13310400,
+      "pgo": false,
+      "patches": [
+        "001-prepared-board.patch",
+        "002-single-worker.patch",
+        "003-static-panel-metadata.patch"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "platform": "windows",
+      "file": "check-v3.log",
+      "rows": 8,
+      "riven": "same"
+    },
+    {
+      "platform": "linux",
+      "file": "check-baseline.log",
+      "rows": 8,
+      "riven": "same"
+    },
+    {
+      "platform": "linux",
+      "file": "check-v3.log",
+      "rows": 8,
+      "riven": "same"
+    },
+    {
+      "platform": "macos",
+      "file": "check-baseline.log",
+      "rows": 8,
+      "riven": "same"
+    }
+  ],
+  "gpu_built": false,
+  "focused_regression": "board::tests::assembled_and_nested_panels_share_catalog_metadata",
+  "deployment": {
+    "at": "2026-11-07T12:32:44.1150694+08:00",
+    "engine": "d8787cb351c5",
+    "native_sha256": "d3dd7c8b5867f0ae5f080cb749639a5b785beeac3eb0967a8ea6c443535a7a39",
+    "cpu_only": true,
+    "gpu_built": false,
+    "gpu_modified": false,
+    "client_config_learning_unchanged": true,
+    "started_instance": false,
+    "activation": "Normal canary and current-engine selection at next startup"
+  },
+  "limitations": "No GPU build. Optional optimizer patches 004/005/006 skipped after upstream refactor. No throughput benchmark or long soak. Production instance was stopped and remains stopped."
+}

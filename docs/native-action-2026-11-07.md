@@ -23,3 +23,19 @@
 修复编译问题后，Action `42336910273` 的 macOS job 在 1 秒内报 `The configuration macos-14-arm64-us-default is not supported`。GitHub 官方 runner-images 清单确认 macOS 14 于 2026-11-02 退役；改用仍受支持且为 arm64 的 `macos-15`。原生构建、客户端发布和普通 CI 的三个引用一并更新，避免下次客户端发布再次遇到相同基础设施故障。
 
 Windows/Linux 已启动的构建继续完成，不取消重算；后续 run 根据缺失附件只补建未发布平台。执行器来源：https://github.com/actions/runner-images/blob/main/README.md 。
+
+## 发布阶段恢复
+
+首轮 Windows PGO 与 Linux baseline/v3 已通过构建和 WASM 核对，但创建 Release 时工作流令牌返回 HTTP 403 `Resource not accessible by integration`。构建过程中主分支加入了执行器迁移，发布目标仍是旧提交；这一情况与 GitHub 对含工作流差异的旧提交创建 release 的令牌限制相符。未修改仓库令牌权限或配置额外凭证。
+
+下载首轮已校验产物，用当前仓库登录直接发布同一文件，核对 GitHub digest、`.sha256` 和构建清单后，再启动只缺 macOS 的 Action `42338859448`。最初已排队的 `42337130346` 因尚未看到这些附件会重复编译，因此在执行前取消。首轮成功的平台没有重算。参考：https://github.com/cli/cli/issues/9514 。
+
+北京时间 12:32:44，Windows PGO v3 DLL 及官方 WASM/数据包已放入部署目录，配置、客户端和 GPU 文件未改动，程序保持停止。下次启动执行客户端原有 canary 并选择当前 CPU 引擎。
+
+## 最终结果
+
+Windows PGO v3、Linux baseline/v3、macOS Apple silicon 四份二进制及对应的 SHA-256/构建清单已全部发布。各构建均通过 8 条榜单行的分数、work、gas 与紫卡 canary 对照；下载后的 12 个附件与 GitHub digest、二进制清单一致。macOS 补建 Action `42338859448` 整体 success，自动追加附件也成功。
+
+本机验证仅增加面板内存复用这一条原生用例，未重复客户端测试或跑长期压力测试。三平台编译排除了原先的变量作用域错误，普通/组合/嵌套面板测试确认同一目录项继续复用静态元数据。未构建、替换或发布 GPU。本机仍为停止状态，首次运行加载时的客户端 canary 尚由用户下次启动执行。
+
+[引擎 Release](https://github.com/superexboom/simfleet/releases/tag/engine-d8787cb351c5) · [成功的补建 Action](https://github.com/superexboom/simfleet/actions/runs/42338859448)。详细哈希在 `experiments/native-engine/upstream-d8787cb351c5-validation.json`。

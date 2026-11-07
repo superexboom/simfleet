@@ -10,7 +10,7 @@
 
 `0.9.0-preview.16` 修复 GPU 失败记录积累后拖慢 CPU 调度的问题，避免候选筛选反复序列化和哈希请求。升级客户端即可，同一引擎版本的 CPU DLL 与 sfg3 GPU 套件可继续使用。详见 [发布说明](docs/releases/v0.9.0-preview.16.md)。
 
-2026-10-31：当前跟进上游引擎 `ea828b371375`，CPU 原生库由客户端自动下载，NVIDIA GPU 更新默认只提供 **sm120（RTX 50 系列）** 套件。带紫卡的固定构筑榜单可由 GPU 计算，紫卡增益搜索仍走 CPU。新旧引擎宽限期说明见 [本轮上游跟进与 Action 修复](docs/native-action-2026-10-31.md)，架构与安装规则见 [版本和发布规则](docs/release-versioning.md)。
+2026-11-07：当前跟进 CPU 引擎 `d8787cb351c5`，修复面板内存补丁兼容性并将退役的 macOS 14 执行器迁移至 macOS 15。三平台原生库已发布，Windows 保持 PGO v3。本轮不构建 GPU，历史 sm120 包只适用于其原引擎号。详见 [本轮 Action 修复与核对](docs/native-action-2026-11-07.md)；架构与安装规则见 [版本和发布规则](docs/release-versioning.md)。
 
 `0.9.0-preview.14` 支持 `sfg3` NVIDIA 引擎：1 KiB 写时复制页、16 位页索引和按实际状态占用学习的内存配额，在相同 8 GiB 总预算内容纳更多并行模拟。固定 240 行、8 个 CPU 线程的本机对照中，整机吞吐提高约 16.4%，GPU 分账吞吐约提高 42.6%；变化中的线上任务需以实际产出为准。客户端与 GPU 套件需配套更新，旧 sfg1/2 继续兼容。详见 [GPU 私有状态与页表优化](docs/gpu-private-pages.md)。
 
