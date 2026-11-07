@@ -19,8 +19,8 @@ jobs:
             # The oldest glibc the runners have, so the binary runs on more systems.
             runner: ubuntu-22.04
           - os: macos
-            # Apple silicon (arm64), macOS 14; the binary runs on macOS 11 and later.
-            runner: macos-14
+            # Apple silicon (arm64), macOS 15; the binary runs on macOS 11 and later.
+            runner: macos-15
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5

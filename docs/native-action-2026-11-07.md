@@ -17,3 +17,9 @@
 上游同时更改了紫卡优化器的计划和候选身份（加入固定槽位、组合部件）。旧的可选 `004/005/006` 补丁已不能套用，构建明确跳过，使用上游路径；不强行恢复旧身份规则。本轮保证 prepared-board、单线程优化器入口和内存生命周期补丁继续生效。缓存未启用可能影响紫卡吞吐，未进行跨版本性能基准。
 
 本轮没有客户端版本变化；已停止的部署实例保持停止，正式 CPU DLL 在验证后单独放入其 engines 目录。旧 GPU 包保持原引擎标识，不能用于新引擎。
+
+## 执行器退役
+
+修复编译问题后，Action `42336910273` 的 macOS job 在 1 秒内报 `The configuration macos-14-arm64-us-default is not supported`。GitHub 官方 runner-images 清单确认 macOS 14 于 2026-11-02 退役；改用仍受支持且为 arm64 的 `macos-15`。原生构建、客户端发布和普通 CI 的三个引用一并更新，避免下次客户端发布再次遇到相同基础设施故障。
+
+Windows/Linux 已启动的构建继续完成，不取消重算；后续 run 根据缺失附件只补建未发布平台。执行器来源：https://github.com/actions/runner-images/blob/main/README.md 。

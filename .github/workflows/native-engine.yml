@@ -146,7 +146,7 @@ jobs:
           - os: macos
             # Apple silicon (arm64). One build: the target's baseline is the
             # M1's own (apple-m1), and every M-series chip runs it.
-            runner: macos-14
+            runner: macos-15
             exe: target/release/simfleet
             lib: lib
             ext: dylib

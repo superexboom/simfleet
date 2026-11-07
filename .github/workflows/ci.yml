@@ -8,8 +8,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-14: Apple silicon (arm64).
-        runner: [windows-latest, ubuntu-22.04, macos-14]
+        # macos-15: Apple silicon (arm64).
+        runner: [windows-latest, ubuntu-22.04, macos-15]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
