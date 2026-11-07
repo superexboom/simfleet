@@ -8,7 +8,18 @@ use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 use wfsim_engine::fight::Shard;
+#[cfg(not(feature = "upstream-prepared"))]
 use wfsim_webapi::simfleet::PreparedBoard;
+#[cfg(feature = "upstream-prepared")]
+use wfsim_webapi::PreparedSimulation as PreparedBoard;
+
+fn run_piece(prepared: &PreparedBoard, index: u32) -> anyhow::Result<Shard> {
+    #[cfg(feature = "upstream-prepared")]
+    let shard = prepared.shard(index, 1, &mut |_, _| {}).map_err(|e| anyhow::anyhow!("{e}"))?;
+    #[cfg(not(feature = "upstream-prepared"))]
+    let shard = prepared.run(index);
+    crate::exact::carry(shard)
+}
 
 struct Row {
     request: Value,
@@ -65,7 +76,7 @@ impl Row {
         }
         let prepared = self.prepared.get_or_init(|| PreparedBoard::new(&self.request).map_err(|e| e.to_string()));
         let p = prepared.as_ref().map_err(|e| anyhow::anyhow!("{e}"))?;
-        let pieces = (from..end).map(|i| crate::exact::carry(p.run(i))).collect::<anyhow::Result<Vec<_>>>()?;
+        let pieces = (from..end).map(|i| run_piece(p, i)).collect::<anyhow::Result<Vec<_>>>()?;
         let mut s = self.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?;
         s.ready.insert(from, pieces);
         loop {
@@ -183,11 +194,21 @@ mod tests {
             assert_eq!(first.mod_pools, raw.mod_pools.iter().map(String::as_str).collect::<Vec<_>>());
             assert!(std::ptr::eq(first.class.as_ptr(), again.class.as_ptr()));
             assert!(std::ptr::eq(first.mod_pools.as_ptr(), again.mod_pools.as_ptr()));
+            for (actual, expected) in first.mod_pools.iter().zip(&raw.mod_pools) {
+                assert!(std::ptr::eq(actual.as_ptr(), expected.as_ptr()));
+            }
+            if let (Some(actual), Some(expected)) = (first.summoned_by, raw.summoned_by.as_deref()) {
+                assert!(std::ptr::eq(actual.as_ptr(), expected.as_ptr()));
+            }
             for (_, child) in &first.melee_profiles {
                 assert_eq!(child.class, first.class);
                 assert!(std::ptr::eq(child.mod_pools.as_ptr(), first.mod_pools.as_ptr()));
             }
         }
+        let raw = spec("braton").unwrap();
+        let expected = raw.mod_pools.iter().rev().find(|p| !wfsim_engine::build::rivens::pool(p).is_empty()).unwrap();
+        let actual = wfsim_engine::build::rivens::class_for_weapon("braton").unwrap();
+        assert!(std::ptr::eq(actual.as_ptr(), expected.as_ptr()));
     }
 
     #[test]

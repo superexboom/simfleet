@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 
 [features]
 fast-board = []
+upstream-prepared = ["fast-board"]
 cached-optimize = []
 
 [dependencies]

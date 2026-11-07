@@ -83,9 +83,31 @@ if ($Archive) {
     }
 }
 if (-not $found) { throw "No source commit matches served engine $Engine" }
+# Prefer public upstream replacements only when their complete source contract
+# is present. Unknown/partial migrations still hit the mandatory patch checks.
+$apiText = Get-Content -Raw -LiteralPath (Join-Path $src 'webapi/src/lib.rs')
+$simText = Get-Content -Raw -LiteralPath (Join-Path $src 'webapi/src/simulate.rs')
+$panelText = Get-Content -Raw -LiteralPath (Join-Path $src 'engine/src/data/weapons/panel.rs')
+$rivenText = Get-Content -Raw -LiteralPath (Join-Path $src 'engine/src/build/rivens/spec.rs')
+$upstreamPrepared = -not $NoPatch -and $apiText -match '(?s)pub use simulate::\{[^}]*\bPreparedSimulation\b' -and $simText.Contains('pub struct PreparedSimulation')
+$upstreamMetadata = -not $NoPatch -and @(
+    "metadata: &'static WeaponSpec", 'class: metadata.class.as_str()',
+    'slot: metadata.rules_slot()', 'summoned_by: metadata.summoned_by.as_deref()',
+    "static MOD_POOLS: crate::data::Memo<[&'static str]>",
+    'mod_pools: MOD_POOLS.get_or(&metadata.id', 'metadata.mod_pools.iter().map(String::as_str)',
+    'panel_for_spec(&child, metadata,'
+).Where({ -not $panelText.Contains($_) }).Count -eq 0 -and $rivenText -match '(?s)pub fn class_for_weapon\([^}]+\}.*?\.map\(String::as_str\)'
+$upstreamFeatures = @()
+if ($upstreamPrepared) { $upstreamFeatures += 'prepared-simulation' }
+if ($upstreamMetadata) { $upstreamFeatures += 'static-panel-metadata' }
 $applied = @()
 if (-not $NoPatch) {
     foreach ($patch in Get-ChildItem (Join-Path $root "native-engine/patches") -Filter '*.patch' | Sort-Object Name) {
+        if (($patch.Name -eq '001-prepared-board.patch' -and $upstreamPrepared) -or
+            ($patch.Name -eq '003-static-panel-metadata.patch' -and $upstreamMetadata)) {
+            Write-Output "Using upstream replacement for $($patch.Name)"
+            continue
+        }
         git -C $src apply --check -- $patch.FullName 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) {
             git -C $src apply -- $patch.FullName
@@ -130,12 +152,13 @@ try {
     $env:RUSTFLAGS = $flags -join ' '
     $env:CARGO_TARGET_DIR = $target
     $buildArgs = @('build','--release','--manifest-path',(Join-Path $crate 'Cargo.toml'))
-    if ($applied -contains '001-prepared-board.patch') { $buildArgs += @('--features','fast-board') }
+    if ($applied -contains '001-prepared-board.patch' -or $upstreamPrepared) { $buildArgs += @('--features','fast-board') }
+    if ($upstreamPrepared) { $buildArgs += @('--features','upstream-prepared') }
     if ($applied -contains '004-frozen-optimize-plan.patch') { $buildArgs += @('--features','cached-optimize') }
     if ($Jobs -gt 0) { $buildArgs += @('-j',"$Jobs") }
     $pgoInfo = $null
     if ($Pgo) {
-        if ($applied -notcontains '001-prepared-board.patch') { throw 'PGO requires the opaque board ABI patch' }
+        if ($applied -notcontains '001-prepared-board.patch' -and -not $upstreamPrepared) { throw 'PGO requires a prepared-board implementation' }
         $rustSysroot = (& rustc --print sysroot).Trim()
         $rustDetails = & rustc -vV
         $hostTriple = (($rustDetails | Where-Object { $_ -like 'host:*' }) -replace '^host:\s*','').Trim()
@@ -200,6 +223,13 @@ try {
         $patchHashes[$patchName] = Source-Hash (Join-Path $root "native-engine/patches/$patchName")
     }
     $provenance = @{ engine=$Engine; revision=$revision; source=$found; wrapper=$wrapperCommit; wrapper_files=$sourceHashes; patch_files=$patchHashes; cpu=$Cpu; sha256=$hash; patches=$applied }
+    $provenance.upstream_features = $upstreamFeatures
+    if ($upstreamFeatures.Count -gt 0) {
+        $provenance.upstream_feature_files = @{}
+        foreach ($file in @('webapi/src/lib.rs','webapi/src/simulate.rs','engine/src/data/weapons/panel.rs','engine/src/build/rivens/spec.rs')) {
+            $provenance.upstream_feature_files[$file] = Source-Hash (Join-Path $src $file)
+        }
+    }
     if ($Archive) { $provenance.archive_sha256 = Source-Hash $Archive }
     if ($pgoInfo) { $provenance.pgo = $pgoInfo }
     Write-Utf8 ($destination + '.build.json') ($provenance | ConvertTo-Json -Depth 5)
