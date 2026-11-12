@@ -234,7 +234,7 @@ jobs:
         run: |
           for cpu in $CPUS; do
             echo "== $cpu"
-            SIMFLEET_CPU=$cpu ${{ matrix.exe }} check-native --engine "$ENGINE" --wasm reference/wfsim_wasm_bg.wasm --boards .wfsim-src/site/board --weapons 1 --reference-cache reference/checked-wasm.json | tee "check-$cpu.log"
+            SIMFLEET_CPU=$cpu ${{ matrix.exe }} check-native --engine "$ENGINE" --wasm reference/wfsim_wasm_bg.wasm --boards .wfsim-src/site/board --weapons 1 --rows experiments/native-engine/negative-cadence-orders.json --reference-cache reference/checked-wasm.json | tee "check-$cpu.log"
             grep -Eq '^CHECK-NATIVE rows=[1-9][0-9]* skipped=0 riven=same' "check-$cpu.log"
           done
       - name: The files

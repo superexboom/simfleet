@@ -1,0 +1,41 @@
+[
+  {
+    "record": {
+      "weapon": "mk1_strun",
+      "mods": [
+        "toxic_barrage",
+        "riven",
+        "galvanized_hell",
+        "tainted_shell",
+        "critical_deceleration",
+        "shotgun_elementalist",
+        "shrapnel_shot",
+        "magnetic_strafe"
+      ],
+      "exilus": "galvanized_acceleration",
+      "evolutions": [
+        "mk1_strun_evo1_incarnon_form",
+        "mk1_strun_blazing_barrel",
+        "mk1_strun_rapid_reinforcement",
+        "mk1_strun_elemental_balance"
+      ],
+      "arcanes": [
+        "primary_compression"
+      ],
+      "riven_pos": [
+        "electricity",
+        "multishot",
+        "viral"
+      ],
+      "riven_neg": "fire_rate",
+      "riven_rolls": [
+        1.1,
+        1.1,
+        1.1,
+        0.9
+      ]
+    },
+    "ruler": "heavy_gunner",
+    "mode": "cycle"
+  }
+]

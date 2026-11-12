@@ -56,7 +56,9 @@ impl State {
         }
     }
     pub fn can_wait(&self, current: &Release, latest: &Release, hours: u64, now: u64) -> bool {
-        if hours == 0 || current.engine == latest.engine {
+        // Confirmed non-terminating negative-rate engine: its grace window
+        // must never postpone moving to the upstream fix, even for native PGO.
+        if hours == 0 || current.engine == latest.engine || current.engine == "c43203504fc4" {
             return false;
         }
         if !latest.protocols.is_empty()
@@ -221,6 +223,10 @@ mod tests {
         assert!(!s.can_wait(&old, &latest, 0, now));
         latest.accepted.clear();
         assert!(!s.can_wait(&old, &latest, 48, now));
+        let unsafe_old=rel("c43203504fc4");
+        latest.accepted.push(work::Accepted { engine:unsafe_old.engine.clone(),until:crate::sys::iso(now+72*3_600_000) });
+        s.observe(&unsafe_old,&latest,now);
+        assert!(!s.can_wait(&unsafe_old,&latest,48,now));
     }
     #[test]
     fn grace_expiry_and_invalid_dates_override_wait() {

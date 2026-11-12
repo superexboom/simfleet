@@ -212,6 +212,35 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "upstream-prepared")]
+    fn captured_negative_cadence_finishes_and_matches_wire() {
+        let request: Value = serde_json::from_str(include_str!("../../experiments/native-engine/negative-cadence-request.json")).unwrap();
+        let pieces = wfsim_webapi::board_rows::board_runs_json(&json!({"request":request,"from":0,"count":1000}));
+        assert_eq!(pieces["ok"], true);
+        assert_eq!(pieces["shards"].as_array().unwrap().len(), 1000);
+        let fold = wfsim_webapi::board_rows::board_fold_json(&json!({"request":request,"acc":null,"pieces":pieces["shards"]}));
+        let want = wfsim_webapi::board_rows::board_score_json(&json!({"request":request,"ruler":"heavy_gunner","acc":fold["acc"]}));
+        assert_eq!(want["ok"], true);
+        let body = json!({"request":request,"ruler":"heavy_gunner"}).to_string();
+        unsafe {
+            let ptr = sfe_board_new(body.as_ptr(),body.len());
+            assert!(!ptr.is_null());
+            let address = ptr as usize;
+            std::thread::scope(|scope| {
+                let jobs: Vec<_> = (0..1000).step_by(250).rev().map(|from| scope.spawn(move ||
+                    sfe_board_runs(address as *mut c_void,from,250))).collect();
+                for job in jobs { assert!(job.join().unwrap() >= 0); }
+            });
+            let mut len=0;
+            let out=sfe_board_score(ptr,&mut len);
+            let answer:Value=serde_json::from_slice(std::slice::from_raw_parts(out,len)).unwrap();
+            super::super::sfe_free(out,len);
+            sfe_board_drop(ptr);
+            assert_eq!(answer,want);
+        }
+    }
+
+    #[test]
     fn duplicate_or_incomplete_work_never_scores() {
         let body = json!({"request":request(),"ruler":"demolisher"}).to_string();
         unsafe {

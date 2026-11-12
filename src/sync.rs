@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub const PROTOCOL: u32 = 8;
+pub const CAPABILITIES: &[&str] = &["fixed-board-input-v1"];
 /// THE WORK SIGNAL, at the edge: an idle id reads it instead of asking.
 pub const SIGNAL_PATH: &str = "/work.json";
 /// …not believed once older than this by the server's clock (`SIGNAL_STALE_MS`).
@@ -335,6 +336,7 @@ pub fn body(
         "verifier": verifier,
         "engine": engine,
         "protocol": PROTOCOL,
+        "capabilities": CAPABILITIES,
         "consent": consent,
         "lanes": lanes.clamp(1, 256),
         "want_ms": want_ms,

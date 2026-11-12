@@ -604,6 +604,21 @@ fn native_board_canary(code: &Arc<Code>) -> Result<bool> {
     Ok(true)
 }
 
+/// A captured board task already contains the authoritative fight. Its fields
+/// must survive preparation unchanged; only legacy tasks ask the order door.
+pub fn prepare_board_task(task: &Value, legacy: impl FnOnce(Value) -> Result<Value>) -> Result<Value> {
+    let order = match task.get("fight").filter(|v| !v.is_null()) {
+        Some(fight) if fight.is_object() => json!({"ok":true,"request":fight}),
+        Some(_) => return Ok(json!({"ok":false,"error":"invalid frozen board input"})),
+        None => legacy(json!({"record":task["record"],"ruler":task["ruler"],"mode":task["mode"]}))?,
+    };
+    if order["ok"] != false && (!order["request"].is_object()
+        || !order["request"]["runs"].as_u64().is_some_and(|n| (1..=1_000_000).contains(&n))) {
+        return Ok(json!({"ok":false,"error":"invalid board run count"}));
+    }
+    Ok(order)
+}
+
 /// Protocol 8 requires finite scores and JS-safe integer work. Optional
 /// counters must also survive the browser/server's integer representation.
 pub const MAX_SAFE_WORK: u64 = (1u64 << 53) - 1;
@@ -1025,6 +1040,25 @@ mod tests {
         assert_eq!(row.done(d).unwrap().unwrap().work,1000);
         assert!(!row.retry_wasm());
     }
+    #[test]
+    fn frozen_board_input_bypasses_order_and_preserves_every_field() {
+        let frozen = json!({"weapon":"mk1_strun","runs":7,"seed":123,"duration":3.75,
+            "mode":"cycle","metric":"kpm","level":500,"formation":[{"at":[2,3]}],"future_term":{"x":0.125}});
+        let task = json!({"fight":frozen,"record":{"weapon":"different"},"ruler":"captured","mode":"base"});
+        let order = prepare_board_task(&task, |_| panic!("must not re-resolve frozen work")).unwrap();
+        assert_eq!(order["request"], frozen);
+        let mut row = BoardRun::new(&order["request"],"captured");
+        let Some(Call::Runs(body,_))=row.job(1,1) else {panic!("run expected")};
+        assert_eq!(jsnum::parse(&body).unwrap()["request"], frozen);
+        let legacy = json!({"record":{"weapon":"braton"},"ruler":"heavy_gunner","mode":"base"});
+        let order=prepare_board_task(&legacy, |body| {assert_eq!(body,legacy);Ok(json!({"ok":true,"request":frozen}))}).unwrap();
+        assert_eq!(order["request"],frozen);
+        let mut malformed=task;malformed["fight"]["runs"]=json!(0);
+        assert_eq!(prepare_board_task(&malformed, |_| panic!("no fallback for captured work")).unwrap()["ok"],false);
+        let body=crate::sync::body("id","engine",json!({}),4,None,0,&[],&[],&[],vec![],"");
+        assert_eq!(body["capabilities"],json!(["fixed-board-input-v1"]));
+    }
+
     #[test]
     fn payload_like_the_page() {
         let res = json!({ "mods": ["serration", "riven:abc", "vigilante_armaments"], "exilus": "vigilante_armaments",

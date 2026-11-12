@@ -738,6 +738,7 @@ impl Fleet {
             "verifier": g.verifier,
             "engine": self.rel.engine,
             "protocol": 7,
+            "capabilities": sync::CAPABILITIES,
             "consent": { "v": self.cfg.consent_v, "at": self.cfg.consent_at },
             "lanes": lanes,
         });
@@ -1090,10 +1091,10 @@ impl Fleet {
             (Runner::Riven(Riven::new(w["request"].clone())), label, Some(code))
         } else {
             let (ruler, mode) = (w["ruler"].as_str().unwrap_or("").to_string(), w["mode"].as_str().unwrap_or("").to_string());
-            let label = format!("{} · {ruler} · {mode}", w["record"]["weapon"].as_str().unwrap_or("?"));
+            let label = format!("{} · {ruler} · {mode}", w["fight"]["weapon"].as_str().or_else(||w["record"]["weapon"].as_str()).unwrap_or("?"));
             let backend = self.backend();
-            let body = json!({ "record": w["record"], "ruler": ruler, "mode": mode }).to_string();
-            match self.exec.api(backend, "/api/board/order", body).and_then(|t| jsnum::parse(&t)) {
+            match crate::work::prepare_board_task(&w, |body|
+                self.exec.api(backend, "/api/board/order", body.to_string()).and_then(|t| jsnum::parse(&t))) {
                 Ok(o) if o["ok"] != json!(false) => {
                     let runs = o["request"]["runs"].as_u64().unwrap_or(0);
                     self.ui.glog(gi, format!("{C_GO}[开始]{C_END} 榜单  {label}  {runs} 次模拟"));
