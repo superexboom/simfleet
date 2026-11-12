@@ -317,7 +317,7 @@ jobs:
           fi
           if [ -n "$have" ]; then
             gh release view "engine-$ENGINE" -R "$GITHUB_REPOSITORY" --json body -q .body > notes.md
-            printf '\n**Native revision sfe%s**, built by %s from %s, card text blanked and checked against the reference WASM. Build manifests record each patch hash. simfleet 0.8.1 and later prefer these files:\n\n%s' "$REVISION" "$run" "$via" "$sums" >> notes.md
+            printf '\n**Native revision sfe%s**, built by %s from %s, card text blanked and checked against the reference WASM, including the captured negative-cadence regression. Build manifests record each patch hash. simfleet 0.8.1 and later prefer these files:\n\n%s' "$REVISION" "$run" "$via" "$sums" >> notes.md
             gh release upload "engine-$ENGINE" "${up[@]}" -R "$GITHUB_REPOSITORY"
             gh release edit "engine-$ENGINE" -R "$GITHUB_REPOSITORY" --notes-file notes.md
             exit 0
@@ -328,7 +328,7 @@ jobs:
             echo "- **Builds.** Native revision \`sfe$REVISION\`: Windows publishes one PGO + ThinLTO \`$ENGINE-sfe$REVISION-v3.dll\` for x86-64-v3 CPUs (AVX2, FMA, BMI2 and the remaining v3 features). Linux publishes baseline \`lib$ENGINE-sfe$REVISION.so\` and \`lib$ENGINE-sfe$REVISION-v3.so\`; macOS publishes \`lib$ENGINE-sfe$REVISION.dylib\` for Apple silicon. simfleet 0.9.0-preview.7 and later prefer this revision. Older Windows CPUs use the official engine or WASM. Each build has a SHA-256 file and source/patch manifest; Windows also records its PGO training hashes."
             echo "- **Source.** WFSim commit [\`$COMMIT\`](https://github.com/magenie33/wfsim/tree/$COMMIT) (AGPL-3.0-or-later, by magenie33 and WFSim contributors), through $via. Built by $run."
             echo "- **No card text.** Digital Extremes' card text was blanked from WFSim's \`data/\` before the build ([tools/strip_card_text.py](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/tools/strip_card_text.py)), since WFSim grants nothing for it ([LICENSE-DATA.md](https://github.com/magenie33/wfsim/blob/main/LICENSE-DATA.md)). The engine only displays that text; no score depends on it."
-            echo "- **Checked.** Each matched the wasm built from the same commit bit for bit on 8 rows of WFSim's committed board (one weapon, every ruler and mode) (\`simfleet check-native\`), and simfleet checks the one it uses against wfsim.app's own wasm on a canary row before every use."
+            echo "- **Checked.** Each matched the wasm built from the same commit bit for bit on 8 rows of WFSim's committed board plus the captured negative-cadence regression (\`simfleet check-native\`), and simfleet checks the one it uses against wfsim.app's own wasm on a canary row before every use."
             echo "- Unofficial; not made or endorsed by WFSim or Digital Extremes. *Warframe* is a trademark of Digital Extremes Ltd."
             echo
             echo "SHA-256:"

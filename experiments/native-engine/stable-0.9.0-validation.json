@@ -1,0 +1,148 @@
+{
+  "client": {
+    "tag": "v0.9.0",
+    "prerelease": false,
+    "published": "2026-11-12T11:01:04Z",
+    "url": "https://github.com/superexboom/simfleet/releases/tag/v0.9.0",
+    "assets": [
+      {
+        "name": "simfleet-0.9.0-linux-x64.tar.gz",
+        "bytes": 4484659,
+        "sha256": "d36a83aaf68f9fa6ebbfd414f5d1fa1147f13ce4feaefed3246e1eb1a57de8ca",
+        "files": [
+          "simfleet/README.md",
+          "simfleet/NOTICE.md",
+          "simfleet/simfleet",
+          "simfleet/THIRD-PARTY-LICENSES.md",
+          "simfleet/LICENSE"
+        ]
+      },
+      {
+        "name": "simfleet-0.9.0-macos-arm64.tar.gz",
+        "bytes": 3803546,
+        "sha256": "0bc416ed07acd60434e5cdc7e6cc4eb193bee5a979866347c876b04162440d70",
+        "files": [
+          "simfleet/LICENSE",
+          "simfleet/README.md",
+          "simfleet/THIRD-PARTY-LICENSES.md",
+          "simfleet/simfleet",
+          "simfleet/NOTICE.md"
+        ]
+      },
+      {
+        "name": "simfleet-0.9.0-windows-x64.zip",
+        "bytes": 4667246,
+        "sha256": "601d2ca00ac435f1080373bddecf8e151756ed3abae329e495af23a25825c3f5",
+        "files": [
+          "LICENSE",
+          "NOTICE.md",
+          "README.md",
+          "simfleet.exe",
+          "THIRD-PARTY-LICENSES.md"
+        ]
+      }
+    ]
+  },
+  "client_action": 43204511799,
+  "client_source": "720782ec65e61bdf3a26c2c4159950847ac31765",
+  "engine": {
+    "tag": "engine-5ddb771d2cb1",
+    "published": "2026-11-12T11:15:56Z",
+    "url": "https://github.com/superexboom/simfleet/releases/tag/engine-5ddb771d2cb1",
+    "assets": [
+      {
+        "name": "5ddb771d2cb1-sfe2-v3.dll",
+        "sha256": "7280540db771dddfde1b7098124a3e1ef642929dc7bac939e6a41e834a9a2559",
+        "bytes": 18697216,
+        "source": "ad5849ddce87c2934efdb2c65edfb0c0340483c8",
+        "wrapper": "720782ec65e61bdf3a26c2c4159950847ac31765",
+        "pgo": true,
+        "patches": [
+          "002-single-worker.patch"
+        ]
+      },
+      {
+        "name": "lib5ddb771d2cb1-sfe2.so",
+        "sha256": "716f52b83714723fc012e65c1af82f650f1aa265c9f1dabbde12a06c3d270699",
+        "bytes": 15989584,
+        "source": "ad5849ddce87c2934efdb2c65edfb0c0340483c8",
+        "wrapper": "720782ec65e61bdf3a26c2c4159950847ac31765",
+        "pgo": false,
+        "patches": [
+          "002-single-worker.patch"
+        ]
+      },
+      {
+        "name": "lib5ddb771d2cb1-sfe2-v3.so",
+        "sha256": "54b19bb7d3357642a9d70355d4bdf05964bebe19b6b7607097b10659602f8b04",
+        "bytes": 16088272,
+        "source": "ad5849ddce87c2934efdb2c65edfb0c0340483c8",
+        "wrapper": "720782ec65e61bdf3a26c2c4159950847ac31765",
+        "pgo": false,
+        "patches": [
+          "002-single-worker.patch"
+        ]
+      },
+      {
+        "name": "lib5ddb771d2cb1-sfe2.dylib",
+        "sha256": "009cc71eb5a2840019389316775035cb8a0314e399dc2e4b2aaf915917cfaf74",
+        "bytes": 13839312,
+        "source": "ad5849ddce87c2934efdb2c65edfb0c0340483c8",
+        "wrapper": "720782ec65e61bdf3a26c2c4159950847ac31765",
+        "pgo": false,
+        "patches": [
+          "002-single-worker.patch"
+        ]
+      }
+    ]
+  },
+  "engine_action": 43204513178,
+  "native_verdicts": {
+    "windows_v3_pgo": "rows=9 skipped=0 riven=same",
+    "linux_baseline": "rows=9 skipped=0 riven=same",
+    "linux_v3": "rows=9 skipped=0 riven=same",
+    "macos_arm64": "rows=9 skipped=0 riven=same"
+  },
+  "captured_request": {
+    "release": "engine-5ddb771d2cb1",
+    "published_pgo_dll_sha256": "7280540db771dddfde1b7098124a3e1ef642929dc7bac939e6a41e834a9a2559",
+    "captured_runs": 1000,
+    "native_lanes": 4,
+    "exact_official_wasm_match": true,
+    "answer": {
+      "counts": {
+        "body_shots": 1000,
+        "dot_ticks": 3954,
+        "field_ticks": 0,
+        "gas": 488385487,
+        "hits": 39674,
+        "kills": 0,
+        "pellets": 35720,
+        "procs": 9752,
+        "runs": 1000,
+        "shots": 1000
+      },
+      "metric": "kpm",
+      "ok": true,
+      "score": 0.0007160834148717411,
+      "work": 424419274
+    }
+  },
+  "frozen_task": {
+    "client": "0.9.0 release executable",
+    "engine": "5ddb771d2cb1",
+    "frozen_request_preserved": true,
+    "legacy_record_deliberately_invalid": true,
+    "official_wasm_answer_equal": true,
+    "seconds": 20.991791300009936,
+    "answer": {
+      "kind": "board",
+      "score": 0.0007160834148717411,
+      "metric": "kpm",
+      "work": 424419274,
+      "compute_ms": 35
+    }
+  },
+  "server_engine_final": "5ddb771d2cb1",
+  "deployment": "No production instance was running at inspection. Production directory was not replaced or started."
+}
