@@ -221,11 +221,13 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: ${{ steps.w.outputs.rust }}
         run: |
+          # rust-cache restores target/, including auxiliary sources left by
+          # earlier builds. Keep each new source checkout outside that cache.
           foreach ($cpu in ($env:CPUS -split ' ' | ForEach-Object { if ($_ -eq 'v3') { 'x86-64-v3' } else { '' } })) {
             $label = if ($cpu) { $cpu } else { 'baseline' }
             $training = @{}
             if ($env:PGO -eq 'true') { $training = @{ Pgo = $true; TrainingLanes = 4 } }
-            ./tools/build-native-engine.ps1 -Strip -Commit $env:COMMIT -Engine $env:ENGINE -Cpu $cpu -BuildRoot (Join-Path $env:GITHUB_WORKSPACE "target/native-source-$label") @training
+            ./tools/build-native-engine.ps1 -Strip -Commit $env:COMMIT -Engine $env:ENGINE -Cpu $cpu -BuildRoot (Join-Path $env:RUNNER_TEMP "simfleet-native-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT-$label") @training
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Hold both to the reference wasm on WFSim's committed board
@@ -280,6 +282,12 @@ jobs:
       - name: Download engine artifacts with bounded network retries
         shell: bash
         run: |
+          available=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.expired == false and (.name | startswith("engine-"))) | .name')
+          if [ -z "$available" ]; then
+            echo "no platform passed; no engine artifacts"
+            exit 0
+          fi
           for attempt in 1 2 3; do
             if gh run download "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY" --pattern 'engine-*' --dir "download-$attempt"; then
               mkdir -p in

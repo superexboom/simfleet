@@ -13,7 +13,7 @@ param(
     [string]$Source = "",
     # Official GitHub source tarball for an exact Commit when Git transport fails.
     [string]$Archive = "",
-    # Dedicated empty CI location keeps Rust source paths stable across runs.
+    # Dedicated new source location, separate from restored compilation caches.
     [string]$BuildRoot = "",
     [int]$Jobs = 0,
     # Opt-in: train on offline board rows, then rebuild with PGO and ThinLTO.
