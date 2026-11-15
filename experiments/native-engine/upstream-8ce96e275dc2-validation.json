@@ -1,0 +1,131 @@
+{
+  "date_beijing": "2026-11-16",
+  "repair_commit": "e7b339117f79ff2282ce40d5657b1e48309c4afd",
+  "previous_failure": 43705909031,
+  "repair_run": 43739318918,
+  "repair_conclusion": "success",
+  "client": "0.9.0 unchanged",
+  "gpu_builds": false,
+  "live_release": {
+    "accepted": [
+      {
+        "engine": "687fcd195da2",
+        "join": true,
+        "until": "2026-11-16T02:11:42.000Z"
+      },
+      {
+        "engine": "45c72a39833c",
+        "join": true,
+        "until": "2026-11-16T07:43:19.000Z"
+      },
+      {
+        "engine": "0c3ee2cd6e0a",
+        "join": true,
+        "until": "2026-11-17T01:34:28.000Z"
+      },
+      {
+        "engine": "7bd3c7f00f18",
+        "join": true,
+        "until": "2026-11-17T06:28:15.000Z"
+      },
+      {
+        "engine": "84dd66d22de7",
+        "join": true,
+        "until": "2026-11-18T07:08:43.000Z"
+      }
+    ],
+    "commit": "dd98a815+",
+    "data": "95ae3fe8a95e",
+    "data_format": 1,
+    "engine": "8ce96e275dc2",
+    "packs": [
+      "pack.data.95ae3fe8a95e.json",
+      "pack.site.02c3991e41ac.json",
+      "pack.text.ccf8279225d2.json"
+    ],
+    "protocol": 8,
+    "protocols_served": [
+      8,
+      7,
+      6
+    ],
+    "release": "d80777e8b28f",
+    "wasm": "2e2516a2f41d"
+  },
+  "client_compatibility": {
+    "protocol_and_client_docs_unchanged": true,
+    "prepared_and_board_contract_stable": true
+  },
+  "platforms": {
+    "windows": {
+      "verdicts": [
+        "CHECK-NATIVE rows=9 skipped=0 riven=same"
+      ],
+      "isolated_source_outside_target_cache": true
+    },
+    "linux": {
+      "verdicts": [
+        "CHECK-NATIVE rows=9 skipped=0 riven=same",
+        "CHECK-NATIVE rows=9 skipped=0 riven=same"
+      ],
+      "isolated_source_outside_target_cache": true
+    },
+    "macos": {
+      "verdicts": [
+        "CHECK-NATIVE rows=9 skipped=0 riven=same"
+      ],
+      "isolated_source_outside_target_cache": true
+    }
+  },
+  "release_assets": {
+    "tag": "engine-8ce96e275dc2",
+    "published": "2026-11-15T17:27:45Z",
+    "url": "https://github.com/superexboom/simfleet/releases/tag/engine-8ce96e275dc2",
+    "assets": [
+      {
+        "name": "8ce96e275dc2-sfe2-v3.dll",
+        "sha256": "e151124790854be03e8c905b6f4486c26cab68ee181abed38cee8850033d3b2e",
+        "bytes": 18490880,
+        "source": "646f70e637d1eda1bbafaa2d080de4bfa7f5d5e7",
+        "wrapper": "e7b339117f79ff2282ce40d5657b1e48309c4afd",
+        "pgo": true,
+        "patches": [
+          "002-single-worker.patch"
+        ]
+      },
+      {
+        "name": "lib8ce96e275dc2-sfe2.so",
+        "sha256": "3c2d2127291581ab76729373550e816aac8ee97a5c94d89c18ee7e2780d59e4e",
+        "bytes": 16030544,
+        "source": "646f70e637d1eda1bbafaa2d080de4bfa7f5d5e7",
+        "wrapper": "e7b339117f79ff2282ce40d5657b1e48309c4afd",
+        "pgo": false,
+        "patches": [
+          "002-single-worker.patch"
+        ]
+      },
+      {
+        "name": "lib8ce96e275dc2-sfe2-v3.so",
+        "sha256": "8c5881ab1c35bab63c0b742f83b2c1f7d338338132f354e2d65a0e9c42236e66",
+        "bytes": 16139664,
+        "source": "646f70e637d1eda1bbafaa2d080de4bfa7f5d5e7",
+        "wrapper": "e7b339117f79ff2282ce40d5657b1e48309c4afd",
+        "pgo": false,
+        "patches": [
+          "002-single-worker.patch"
+        ]
+      },
+      {
+        "name": "lib8ce96e275dc2-sfe2.dylib",
+        "sha256": "1532a8348612795350e6b88544d3e36efa580183c591dab8f2759eaaa32d1d04",
+        "bytes": 13872352,
+        "source": "646f70e637d1eda1bbafaa2d080de4bfa7f5d5e7",
+        "wrapper": "e7b339117f79ff2282ce40d5657b1e48309c4afd",
+        "pgo": false,
+        "patches": [
+          "002-single-worker.patch"
+        ]
+      }
+    ]
+  }
+}
