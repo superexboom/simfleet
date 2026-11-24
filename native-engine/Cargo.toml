@@ -14,6 +14,7 @@ crate-type = ["cdylib"]
 fast-board = []
 upstream-prepared = ["fast-board"]
 cached-optimize = []
+split-finals = []
 
 [dependencies]
 anyhow = "1"

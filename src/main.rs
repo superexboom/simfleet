@@ -512,7 +512,7 @@ fn check_native(paths: &Paths, engine: Option<String>, wasm: Option<String>, dat
     for weapon in ["braton_prime", "dual_toxocyst", "torid", "burston_prime"].into_iter().take(weapons.clamp(1, 4)) {
         let rows = match &boards {
             Some(dir) => jsnum::parse(&std::fs::read_to_string(std::path::Path::new(dir).join(format!("{weapon}.json")))?)?,
-            None => net.get(&format!("/board/{weapon}.json"))?.body,
+            None => net.get_site(&format!("/board/{weapon}.json"))?.body,
         };
         let mut seen = std::collections::HashSet::new();
         for row in rows.as_array().into_iter().flatten() {

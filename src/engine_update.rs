@@ -91,10 +91,9 @@ pub fn remember(paths: &Paths, rel: &Release) -> Result<()> {
 }
 fn local_native(paths: &Paths, rel: &Release) -> bool {
     work::native_variants().iter().any(|v| {
-        paths
-            .engines
-            .join(work::native_lib_name(&rel.engine, v))
-            .exists()
+        work::native_lib_names(&rel.engine, v)
+            .into_iter()
+            .any(|name| paths.engines.join(name).exists())
     })
 }
 fn optimized(code: &Arc<Code>, cfg: &Config) -> bool {

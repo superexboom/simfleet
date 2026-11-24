@@ -89,6 +89,12 @@ $apiText = Get-Content -Raw -LiteralPath (Join-Path $src 'webapi/src/lib.rs')
 $simText = Get-Content -Raw -LiteralPath (Join-Path $src 'webapi/src/simulate.rs')
 $panelText = Get-Content -Raw -LiteralPath (Join-Path $src 'engine/src/data/weapons/panel.rs')
 $rivenText = Get-Content -Raw -LiteralPath (Join-Path $src 'engine/src/build/rivens/spec.rs')
+$descentText = Get-Content -Raw -LiteralPath (Join-Path $src 'optimizer/src/descent.rs')
+$optText = Get-Content -Raw -LiteralPath (Join-Path $src 'webapi/src/optimize.rs')
+$quickOptPath = Join-Path $src 'optimizer/src/quick.rs'
+$webQuickPath = Join-Path $src 'webapi/src/optimize/quick.rs'
+$preparedOptPath = Join-Path $src 'webapi/src/optimize/prepared.rs'
+$finalRoundPath = Join-Path $src 'webapi/src/optimize/final_round.rs'
 $upstreamPrepared = -not $NoPatch -and $apiText -match '(?s)pub use simulate::\{[^}]*\bPreparedSimulation\b' -and $simText.Contains('pub struct PreparedSimulation')
 $upstreamMetadata = -not $NoPatch -and @(
     "metadata: &'static WeaponSpec", 'class: metadata.class.as_str()',
@@ -97,19 +103,38 @@ $upstreamMetadata = -not $NoPatch -and @(
     'mod_pools: MOD_POOLS.get_or(&metadata.id', 'metadata.mod_pools.iter().map(String::as_str)',
     'panel_for_spec(&child, metadata,'
 ).Where({ -not $panelText.Contains($_) }).Count -eq 0 -and $rivenText -match '(?s)pub fn class_for_weapon\([^}]+\}.*?\.map\(String::as_str\)'
+$upstreamInlineOpt = -not $NoPatch -and $descentText.Contains('if threads == 1 {')
+$upstreamPreparedOpt = -not $NoPatch -and (Test-Path -LiteralPath $preparedOptPath) -and (Get-Content -Raw -LiteralPath $preparedOptPath).Contains('static LAST:')
+$quickOptText = if (Test-Path -LiteralPath $quickOptPath) { Get-Content -Raw -LiteralPath $quickOptPath } else { '' }
+$upstreamDeferredLead = -not $NoPatch -and ($quickOptText.Contains('fn defer_results') -or $quickOptText.Contains('fn has_pending_work'))
+$upstreamLeadMemo = -not $NoPatch -and (Test-Path -LiteralPath $webQuickPath) -and (Get-Content -Raw -LiteralPath $webQuickPath).Contains('struct LeadMemo')
+$upstreamSplitFinals = -not $NoPatch -and (Test-Path -LiteralPath $finalRoundPath) -and $optText.Contains('pub dispatch_finals:')
 $upstreamFeatures = @()
 if ($upstreamPrepared) { $upstreamFeatures += 'prepared-simulation' }
 if ($upstreamMetadata) { $upstreamFeatures += 'static-panel-metadata' }
+if ($upstreamInlineOpt) { $upstreamFeatures += 'inline-single-worker' }
+if ($upstreamPreparedOpt) { $upstreamFeatures += 'prepared-optimize-plan' }
+if ($upstreamDeferredLead) { $upstreamFeatures += 'deferred-lead-reports' }
+if ($upstreamLeadMemo) { $upstreamFeatures += 'bounded-lead-metadata' }
+if ($upstreamSplitFinals) { $upstreamFeatures += 'split-finals' }
 $applied = @()
 if (-not $NoPatch) {
     foreach ($patch in Get-ChildItem (Join-Path $root "native-engine/patches") -Filter '*.patch' | Sort-Object Name) {
         if (($patch.Name -eq '001-prepared-board.patch' -and $upstreamPrepared) -or
-            ($patch.Name -eq '003-static-panel-metadata.patch' -and $upstreamMetadata)) {
+            ($patch.Name -eq '002-single-worker.patch' -and $upstreamInlineOpt) -or
+            ($patch.Name -eq '003-static-panel-metadata.patch' -and $upstreamMetadata) -or
+            ($patch.Name -eq '004-frozen-optimize-plan.patch' -and $upstreamPreparedOpt) -or
+            ($patch.Name -eq '005-deferred-lead-reports.patch' -and $upstreamDeferredLead) -or
+            ($patch.Name -eq '006-bounded-lead-metadata.patch' -and $upstreamLeadMemo)) {
             Write-Output "Using upstream replacement for $($patch.Name)"
             continue
         }
-        git -C $src apply --check -- $patch.FullName 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        git -C $src apply --check -- $patch.FullName *> $null
+        $checkExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevEap
+        if ($checkExit -eq 0) {
             git -C $src apply -- $patch.FullName
             if ($LASTEXITCODE -ne 0) { throw "Patch failed: $($patch.Name)" }
             $applied += $patch.Name
@@ -137,7 +162,7 @@ foreach ($name in $names) { $previous[$name] = [Environment]::GetEnvironmentVari
 try {
     Remove-Item -LiteralPath Env:CARGO_ENCODED_RUSTFLAGS -ErrorAction SilentlyContinue
     $env:SFE_ENGINE_ID = $Engine
-    $env:SFE_INLINE_OPTIMIZER = if ($applied -contains '002-single-worker.patch') { '1' } else { '0' }
+    $env:SFE_INLINE_OPTIMIZER = if ($applied -contains '002-single-worker.patch' -or $upstreamInlineOpt) { '1' } else { '0' }
     $target = Join-Path $root 'target/native-engine'
     $suffix = ''
     $flags = @()
@@ -155,6 +180,7 @@ try {
     if ($applied -contains '001-prepared-board.patch' -or $upstreamPrepared) { $buildArgs += @('--features','fast-board') }
     if ($upstreamPrepared) { $buildArgs += @('--features','upstream-prepared') }
     if ($applied -contains '004-frozen-optimize-plan.patch') { $buildArgs += @('--features','cached-optimize') }
+    if ($upstreamSplitFinals) { $buildArgs += @('--features','split-finals') }
     if ($Jobs -gt 0) { $buildArgs += @('-j',"$Jobs") }
     $pgoInfo = $null
     if ($Pgo) {
@@ -226,8 +252,11 @@ try {
     $provenance.upstream_features = $upstreamFeatures
     if ($upstreamFeatures.Count -gt 0) {
         $provenance.upstream_feature_files = @{}
-        foreach ($file in @('webapi/src/lib.rs','webapi/src/simulate.rs','engine/src/data/weapons/panel.rs','engine/src/build/rivens/spec.rs')) {
-            $provenance.upstream_feature_files[$file] = Source-Hash (Join-Path $src $file)
+        foreach ($file in @('webapi/src/lib.rs','webapi/src/simulate.rs','engine/src/data/weapons/panel.rs','engine/src/build/rivens/spec.rs','optimizer/src/descent.rs','optimizer/src/quick.rs','webapi/src/optimize.rs','webapi/src/optimize/quick.rs','webapi/src/optimize/prepared.rs','webapi/src/optimize/final_round.rs')) {
+            $full = Join-Path $src $file
+            if (Test-Path -LiteralPath $full) {
+                $provenance.upstream_feature_files[$file] = Source-Hash $full
+            }
         }
     }
     if ($Archive) { $provenance.archive_sha256 = Source-Hash $Archive }

@@ -385,25 +385,71 @@ pub struct Signal {
     pub open: u64,
     pub urgent: u64,
     pub engine: String,
+    pub expires_ms: u64,
+}
+
+/// HTTP `Date` headers have whole-second precision; allow small positive skew
+/// so a sub-second fresh snapshot is never discarded as "in the future".
+const CLOCK_TOLERANCE_MS: u64 = 10_000;
+
+/// A fresh empty signal and explicit direct-ask mode are authoritative. An
+/// unreadable, stale, or incomplete snapshot can be retried on the other mirror.
+pub fn current_signal(v: &Value, now_ms: u64) -> bool {
+    v["v"] == 1
+        && v["at"]
+            .as_str()
+            .and_then(crate::sys::parse_iso)
+            .is_some_and(|at| at <= now_ms.saturating_add(CLOCK_TOLERANCE_MS) && now_ms.saturating_sub(at) <= SIGNAL_STALE_MS)
+        && (v["mode"] == "ask" || (v["open"].as_u64().is_some() && v["urgent"].as_u64().is_some()))
 }
 
 /// `v` read at `server_now` (ms by the server's clock): `None` when it is not
 /// v1, older than `SIGNAL_STALE_MS`, or says `mode: "ask"` — then an idle id
 /// syncs directly (`FALLBACK_MS`). Its poll and jitter dials are taken.
 pub fn signal(v: &Value, server_now: u64, dials: &mut Dials) -> Option<Signal> {
-    if v["v"] != json!(1) || v["mode"] == json!("ask") {
+    if !current_signal(v, server_now) || v["mode"] == "ask" {
         return None;
     }
     let at = v["at"].as_str().and_then(crate::sys::parse_iso)?;
-    if server_now.saturating_sub(at) > SIGNAL_STALE_MS {
-        return None;
-    }
     let mut part = json!({});
     for k in ["poll_ms", "jitter_ms", "urgent_jitter_ms"] {
         part[k] = v[k].clone();
     }
     dials.take(&part);
-    Some(Signal { open: v["open"].as_u64().unwrap_or(0), urgent: v["urgent"].as_u64().unwrap_or(0), engine: v["engine"].as_str().unwrap_or("").to_string() })
+    Some(Signal { open: v["open"].as_u64()?, urgent: v["urgent"].as_u64()?, engine: v["engine"].as_str().unwrap_or("").to_string(), expires_ms: at.saturating_add(SIGNAL_STALE_MS) })
+}
+
+/// Site-wide queue length, including assigned orders. Never use it to claim work.
+pub fn queue_count(v: &Value, now_ms: u64) -> Option<(u64, Option<Duration>)> {
+    if v["ok"] != true { return None; }
+    let ttl = if let Some(expires) = v.get("expires_at") {
+        let until = crate::sys::parse_iso(expires.as_str()?)?;
+        let sampled = crate::sys::parse_iso(v["counts_at"].as_str()?)?;
+        let published = crate::sys::parse_iso(v["at"].as_str()?)?;
+        if sampled > published || published > now_ms.saturating_add(CLOCK_TOLERANCE_MS) || now_ms >= until {
+            return None;
+        }
+        Some(Duration::from_millis(until - now_ms))
+    } else {
+        None
+    };
+    fn sum(mut counts: impl Iterator<Item = Option<u64>>) -> Option<u64> {
+        counts.try_fold(0_u64, |total, count| total.checked_add(count?))
+    }
+    let total = if let Some(queue) = v.get("queue") {
+        let total = queue["total"].as_u64()?;
+        let zones = queue["zones"].as_array()?;
+        if sum(zones.iter().map(|z| z.get(1)?.as_u64()))? != total { return None; }
+        total
+    } else if let Some(orders) = v.get("orders") {
+        sum(orders.as_array()?.iter().map(|order| order["total"].as_u64()))?
+    } else {
+        let owed = v["owed"].as_object()?;
+        let fields = ["new_builds", "rescores", "sweeps", "refreshes"];
+        if !fields.iter().any(|key| owed.contains_key(*key)) { return None; }
+        sum(fields.iter().filter_map(|key| owed.get(*key)).map(Value::as_u64))?
+    };
+    Some((total, ttl))
 }
 
 /// The wait after `failures` failed syncs in a row: a random part of 5 s, 10 s, 20 s, … 10 min.
@@ -491,12 +537,31 @@ mod tests {
         let mut d = Dials::default();
         let s = json!({ "v": 1, "at": "2026-10-15T02:17:38.831Z", "open": 4, "urgent": 0, "engine": "e", "poll_ms": 15000, "mode": "signal" });
         let at = crate::sys::parse_iso("2026-10-15T02:17:38.831Z").unwrap();
+        assert!(signal(&s, at.saturating_sub(1_800), &mut d).is_some_and(|x| x.open == 4));
         assert!(signal(&s, at + 60_000, &mut d).is_some_and(|x| x.open == 4));
         assert_eq!(d.poll_ms, 15_000);
         assert!(signal(&s, at + 91_000, &mut d).is_none());
         let mut ask = s.clone();
         ask["mode"] = json!("ask");
+        assert!(current_signal(&ask, at));
         assert!(signal(&ask, at, &mut d).is_none());
+        let mut empty = s.clone();
+        empty["open"] = json!(0);
+        assert!(current_signal(&empty, at));
+        empty.as_object_mut().unwrap().remove("open");
+        assert!(!current_signal(&empty, at));
+    }
+
+    #[test]
+    fn demand_queue_includes_assigned_rows_and_expires() {
+        let v = json!({"ok":true, "v":1, "queue":{"total":1190,"zones":[[0,1],[3,1189]]},
+            "at":"2026-11-23T03:55:31.116Z", "counts_at":"2026-11-23T03:55:31.116Z",
+            "expires_at":"2026-11-23T03:57:31.116Z", "orders":[{"total":1189,"dispatched":801}]});
+        let now = crate::sys::parse_iso("2026-11-23T03:55:31.116Z").unwrap();
+        assert_eq!(queue_count(&v, now), Some((1190, Some(Duration::from_secs(120)))));
+        assert_eq!(queue_count(&v, now + 120_000), None);
+        assert_eq!(queue_count(&json!({"ok":true,"owed":{"new_builds":4,"sweeps":2}}), now), Some((6,None)));
+        assert_eq!(queue_count(&json!({"ok":true}), now), None);
     }
 
     #[test]

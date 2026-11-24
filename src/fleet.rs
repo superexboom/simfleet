@@ -124,12 +124,20 @@ struct Riven {
     /// Where its search runs, fixed when it is given its leader: its lead's
     /// state lives there (a wasm instance, or a native lane's thread).
     backend: Backend,
+    split_finals: bool,
     request: Value,
     leader: Option<usize>,
     step: usize,
     scores: Value,
     lead_tag: Option<u64>,
-    slices: VecDeque<(usize, String)>,
+    slices: VecDeque<(usize, Call)>,
+    positions: Option<Vec<Vec<usize>>>,
+    pending_len: usize,
+    round_cpu_start: f64,
+    score_ms_per_build: f64,
+    verifying: Option<u32>,
+    receipts: Vec<Option<String>>,
+    final_receipts: Option<(u32, String)>,
     outs: Vec<Option<Value>>,
     inflight: HashMap<u64, usize>,
     want: usize,
@@ -141,16 +149,110 @@ struct Riven {
     cpu_ms: f64,
 }
 
+fn quick_score_width(total: usize, workers: usize, ms_per_build: f64) -> usize {
+    let usual = total.div_ceil(workers.saturating_mul(2).max(1)).max(1);
+    if workers <= 1 || ms_per_build.is_nan() || ms_per_build <= 0.0 || (usual as f64) * ms_per_build <= 1000.0 {
+        return usual;
+    }
+    let floor = total.div_ceil(workers.saturating_mul(8).max(1)).max(1);
+    floor.max((1000.0 / ms_per_build).floor() as usize)
+}
+
+fn quick_score_slices(items: &[Value], workers: usize, width: usize) -> Option<Vec<Vec<usize>>> {
+    const MAX_SAFE_INT: u64 = (1u64 << 53) - 1;
+    let count = items.len().div_ceil(width.max(1));
+    if workers < 2 || count <= workers {
+        return None;
+    }
+    let mut measured: Vec<(usize, u64)> = Vec::new();
+    let mut unmeasured: Vec<usize> = Vec::new();
+    let mut short_runs: Option<u64> = None;
+    for (i, item) in items.iter().enumerate() {
+        if let Some(r) = item.get("runs").filter(|v| !v.is_null()) {
+            let n = r.as_u64().filter(|&n| (1..=u64::from(u32::MAX)).contains(&n))?;
+            if item.get("shards").is_some_and(|v| !v.is_null()) || short_runs.is_some_and(|s| s != n) {
+                return None;
+            }
+            short_runs = Some(n);
+        } else if short_runs.is_some() {
+            return None;
+        }
+        let Some(shards) = item.get("shards").filter(|v| !v.is_null()) else {
+            unmeasured.push(i);
+            continue;
+        };
+        let arr = shards.as_array()?;
+        let mut weight = 0u64;
+        for carried in arr {
+            if carried.is_null() {
+                continue;
+            }
+            let gas = if let Some(s) = carried.as_str() {
+                let packed: Value = serde_json::from_str(s).ok()?;
+                let a = packed.as_array().filter(|a| a.len() >= 3 && a[0] == json!(1))?;
+                a[2].get("gas").and_then(Value::as_u64)?
+            } else {
+                carried.get("gas").and_then(Value::as_u64)?
+            };
+            if gas > MAX_SAFE_INT {
+                return None;
+            }
+            weight = weight.checked_add(gas).filter(|&w| w <= MAX_SAFE_INT)?;
+        }
+        measured.push((i, weight));
+    }
+    if unmeasured.is_empty() && measured.iter().all(|&(_, w)| w == measured[0].1) {
+        return None;
+    }
+    if measured.is_empty() && width == 1 {
+        return None;
+    }
+    let mut slices: Vec<(u64, Vec<usize>)> = vec![(0, Vec::new()); count];
+    measured.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let unknown_weight = measured.get(measured.len() / 2).map_or(0, |&(_, w)| w);
+    for (j, i) in unmeasured.into_iter().enumerate() {
+        let s = &mut slices[j % count];
+        s.1.push(i);
+        s.0 = s.0.saturating_add(unknown_weight);
+    }
+    for (i, weight) in measured {
+        let best = slices
+            .iter_mut()
+            .filter(|s| s.1.len() < width)
+            .min_by_key(|s| s.0)?;
+        best.1.push(i);
+        best.0 = best.0.saturating_add(weight);
+    }
+    slices.sort_by_key(|a| std::cmp::Reverse(a.0));
+    Some(
+        slices
+            .into_iter()
+            .map(|(_, mut ids)| {
+                ids.sort_unstable();
+                ids
+            })
+            .collect(),
+    )
+}
+
 impl Riven {
     fn new(request: Value) -> Riven {
         Riven {
             backend: Backend::Wasm,
+            split_finals: false,
             request,
             leader: None,
             step: 0,
             scores: json!([]),
             lead_tag: None,
             slices: VecDeque::new(),
+            positions: None,
+            pending_len: 0,
+            round_cpu_start: 0.0,
+            score_ms_per_build: 0.0,
+            verifying: None,
+            receipts: Vec::new(),
+            final_receipts: None,
             outs: Vec::new(),
             inflight: HashMap::new(),
             want: 0,
@@ -161,19 +263,27 @@ impl Riven {
             cpu_ms: 0.0,
         }
     }
-    fn job(&mut self, lane: usize, tag: u64) -> Option<Call> {
+    fn job(&mut self, lane: usize, tag: u64, lanes: usize) -> Option<Call> {
         if self.want == 0 {
             if self.lead_tag.is_some() || self.leader != Some(lane) {
                 return None;
             }
-            let mut lead = self.request.clone();
-            lead["quick_fleet"] = json!({ "lead": true, "fresh": self.step == 0, "scores": self.scores });
             self.lead_tag = Some(tag);
+            if let Some((gen, receipts)) = self.final_receipts.take() {
+                return Some(Call::FinishFinals(gen, receipts));
+            }
+            let mut lead = self.request.clone();
+            lead["quick_fleet"] = json!({
+                "lead": true,
+                "fresh": self.step == 0,
+                "scores": self.scores,
+                "split_finals": self.split_finals && lanes > 1,
+            });
             return Some(Call::Optimize(lead.to_string()));
         }
-        let (i, body) = self.slices.pop_front()?;
+        let (i, call) = self.slices.pop_front()?;
         self.inflight.insert(tag, i);
-        Some(Call::Optimize(body))
+        Some(call)
     }
     /// `Some` with the search's result once its lead says there is nothing pending.
     fn done(&mut self, d: Done, lanes: usize) -> Result<Option<Value>> {
@@ -181,6 +291,25 @@ impl Riven {
         if self.lead_tag == Some(d.tag) {
             self.lead_tag = None;
             let r = jsnum::parse(&d.out?)?;
+            if let Some(replays) = r["verify"].as_array().filter(|a| !a.is_empty()) {
+                let gen = u32::try_from(
+                    r["generation"]
+                        .as_u64()
+                        .ok_or_else(|| anyhow::anyhow!("missing finalist generation"))?,
+                )?;
+                self.verifying = Some(gen);
+                self.slices = replays
+                    .iter()
+                    .enumerate()
+                    .map(|(i, rep)| {
+                        let s = rep.as_str().unwrap_or("").to_string();
+                        (i, Call::VerifyFinal(gen, i as u32, s))
+                    })
+                    .collect();
+                self.want = self.slices.len();
+                self.receipts = vec![None; self.want];
+                return Ok(None);
+            }
             let pending = match r["pending"].as_array() {
                 Some(p) if truthy(&r["pending"]) => p.clone(),
                 _ => {
@@ -190,18 +319,34 @@ impl Riven {
                     return Ok(Some(out));
                 }
             };
-            // THE PAGE'S SLICING: two a lane, over the lanes it may use now.
+            // THE PAGE'S SLICING (08-checkpoint-api.js `quickScoreWidth` / `quickScoreSlices`):
+            // adaptive width and gas-balanced slices across the lanes it may use now.
             let k = lanes.min(pending.len()).max(1);
-            let size = pending.len().div_ceil(k * 2).max(1);
-            self.slices = pending
-                .chunks(size)
-                .enumerate()
-                .map(|(i, slice)| {
-                    let mut b = self.request.clone();
-                    b["quick_fleet"] = json!({ "score": slice });
-                    (i, b.to_string())
-                })
-                .collect();
+            let size = quick_score_width(pending.len(), k, self.score_ms_per_build);
+            self.positions = quick_score_slices(&pending, k, size);
+            self.pending_len = pending.len();
+            self.round_cpu_start = self.cpu_ms;
+            self.slices = if let Some(pos) = &self.positions {
+                pos.iter()
+                    .enumerate()
+                    .map(|(i, ids)| {
+                        let slice: Vec<Value> = ids.iter().map(|&idx| pending[idx].clone()).collect();
+                        let mut b = self.request.clone();
+                        b["quick_fleet"] = json!({ "score": slice, "compact_shards": 1 });
+                        (i, Call::Optimize(b.to_string()))
+                    })
+                    .collect()
+            } else {
+                pending
+                    .chunks(size)
+                    .enumerate()
+                    .map(|(i, slice)| {
+                        let mut b = self.request.clone();
+                        b["quick_fleet"] = json!({ "score": slice, "compact_shards": 1 });
+                        (i, Call::Optimize(b.to_string()))
+                    })
+                    .collect()
+            };
             self.want = self.slices.len();
             self.outs = vec![None; self.want];
             if self.want == 0 {
@@ -211,6 +356,20 @@ impl Riven {
             return Ok(None);
         }
         let Some(i) = self.inflight.remove(&d.tag) else { return Ok(None) };
+        if let Some(gen) = self.verifying {
+            let receipt = d.out?;
+            if receipt.is_empty() {
+                bail!("missing finalist measurement");
+            }
+            self.receipts[i] = Some(receipt);
+            if self.receipts.iter().all(Option::is_some) {
+                let all: Vec<String> = std::mem::take(&mut self.receipts).into_iter().flatten().collect();
+                self.verifying = None;
+                self.final_receipts = Some((gen, serde_json::to_string(&all)?));
+                self.want = 0;
+            }
+            return Ok(None);
+        }
         let v = jsnum::parse(&d.out?)?;
         if v["ok"] == json!(false) {
             bail!("{}", v["error"].as_str().unwrap_or("a worker could not score its share"));
@@ -220,7 +379,24 @@ impl Riven {
         self.outs[i] = Some(v);
         if self.outs.iter().all(Option::is_some) {
             let outs: Vec<Value> = std::mem::take(&mut self.outs).into_iter().flatten().collect();
-            self.scores = Value::Array(outs.iter().flat_map(|o| o["scores"].as_array().cloned().unwrap_or_default()).collect());
+            if self.pending_len > 0 {
+                self.score_ms_per_build = (self.cpu_ms - self.round_cpu_start).max(0.0) / self.pending_len as f64;
+            }
+            if let Some(pos) = self.positions.take() {
+                let mut ordered = vec![Value::Null; self.pending_len];
+                for (slice_idx, ids) in pos.into_iter().enumerate() {
+                    if let Some(arr) = outs.get(slice_idx).and_then(|o| o["scores"].as_array()) {
+                        for (j, id) in ids.into_iter().enumerate() {
+                            if let Some(val) = arr.get(j) {
+                                ordered[id] = val.clone();
+                            }
+                        }
+                    }
+                }
+                self.scores = Value::Array(ordered);
+            } else {
+                self.scores = Value::Array(outs.iter().flat_map(|o| o["scores"].as_array().cloned().unwrap_or_default()).collect());
+            }
             self.done_work += outs.iter().map(|o| o["work"].as_u64().unwrap_or(0)).sum::<u64>();
             self.done_fights += outs.iter().map(|o| o["fights"].as_u64().unwrap_or(0)).sum::<u64>();
             self.want = 0;
@@ -394,6 +570,8 @@ pub struct Fleet {
     signal: Option<(Instant, Option<Signal>)>,
     signal_job: Option<JoinHandle<Option<Value>>>,
     signal_next: Instant,
+    demand_next: Instant,
+    demand_job: Option<JoinHandle<Instant>>,
     /// Board results of this run another computer confirmed (`states`).
     board_confirmed: u64,
     journals_at: Instant,
@@ -511,6 +689,8 @@ impl Fleet {
             dials: Dials::default(),
             signal: None,
             signal_job: None,
+            demand_next: Instant::now(),
+            demand_job: None,
             signal_next: Instant::now(),
             board_confirmed: 0,
             journals_at: Instant::now(),
@@ -1246,20 +1426,34 @@ impl Fleet {
         if wanted && self.signal_job.is_none() && now >= self.signal_next {
             self.signal_next = now + sync::jittered(self.dials.poll_ms);
             let net = self.net.clone();
-            self.signal_job = Some(std::thread::spawn(move || net.get_timeout(&net.public_file(sync::SIGNAL_PATH),Duration::from_secs(5)).ok().filter(|r| r.status == 200).map(|r| r.body)));
+            self.signal_job = Some(std::thread::spawn(move || net.work_signal()));
         }
+    }
+
+    fn signal_counts(&self, now: Instant) -> Option<(u64, u64)> {
+        let (read_at, sample) = self.signal.as_ref()?;
+        let signal = sample.as_ref()?;
+        let max_age = Duration::from_millis(self.dials.poll_ms.saturating_mul(3));
+        if now.saturating_duration_since(*read_at) >= max_age || self.net.server_now_ms() > signal.expires_ms {
+            return None;
+        }
+        Some((signal.open, signal.urgent))
     }
 
     /// WHETHER AN ID HOLDING NOTHING SYNCS FOR WORK now: `None` until a signal
     /// has been read lately; with work showing, once its jitter has passed;
     /// with no signal to believe, every `FALLBACK_MS` or so.
     fn idle_go(&mut self, gi: usize, now: Instant) -> Option<bool> {
-        let read = self.signal.as_ref().filter(|(t, _)| now.duration_since(*t) < Duration::from_millis(3 * self.dials.poll_ms))?;
+        self.signal.as_ref()?;
+        let counts = self.signal_counts(now);
         let g = &mut self.groups[gi];
-        Some(match &read.1 {
-            None => g.last_sync.is_none() || now >= g.fallback_at,
-            Some(s) if s.urgent > 0 || s.open > 0 => {
-                let wait = if s.urgent > 0 { self.dials.urgent_jitter_ms } else { self.dials.jitter_ms };
+        Some(match counts {
+            None => {
+                g.go_at = None;
+                g.last_sync.is_none() || now >= g.fallback_at
+            }
+            Some((open, urgent)) if urgent > 0 || open > 0 => {
+                let wait = if urgent > 0 { self.dials.urgent_jitter_ms } else { self.dials.jitter_ms };
                 now >= *g.go_at.get_or_insert_with(|| now + Duration::from_millis((sys::random_unit() * wait as f64) as u64))
             }
             Some(_) => {
@@ -1435,7 +1629,7 @@ impl Fleet {
                 g.failures += 1;
                 g.retry_at = now + sync::backoff(g.failures);
                 // A body the server cannot read is this client's to fix: said, not only tried again.
-                if why.starts_with("HTTP 400") || g.failures == 3 {
+                if why.starts_with("HTTP 400") || (g.failures >= 3 && g.failures % 6 == 3) {
                     self.ui.glog(gi, format!("{C_BAD}[同步]{C_END} 同步失败（{why}），稍后重试；算完的结果存在本地，不会丢"));
                 }
                 self.ui.status(|st| st.state = "连不上服务器，稍后重试".into());
@@ -1871,6 +2065,7 @@ impl Fleet {
                         .min_by_key(|l|self.pool.pending(*l));
                     if let Some(l)=r.leader {taken.push(l);}
                     r.backend = b;
+                    r.split_finals = self.pool.code().can_split_finals(b);
                 }
             }
         }
@@ -1920,7 +2115,7 @@ impl Fleet {
                     // Never on a leader's lane: its next lead step must not wait.
                     Runner::Board(b) if owner.is_none() => b.job_on(tag, share, lane, local).map(|c| (b.backend(backend), c)),
                     Runner::Riven(r) if (owner.is_none() || mine)
-                        && (local || r.leader.is_none_or(|l| crate::placement::same_domain(l,lane))) => r.job(lane, tag).map(|c| (r.backend, c)),
+                        && (local || r.leader.is_none_or(|l| crate::placement::same_domain(l,lane))) => r.job(lane, tag, share).map(|c| (r.backend, c)),
                     _ => None,
                 };
                 if let Some((backend, call)) = job {
@@ -2370,8 +2565,7 @@ impl Fleet {
         } else {
             (HELD_LOW, HELD_FULL, HELD_HIGH)
         };
-        let signal_work=self.signal.as_ref().is_some_and(|(at,s)|now.duration_since(*at)<Duration::from_millis(3*self.dials.poll_ms)
-            && s.as_ref().is_some_and(|s|s.open>0 || s.urgent>0));
+        let signal_work = self.signal_counts(now).is_some_and(|(open, urgent)| open > 0 || urgent > 0);
         let capacity_waiting = (0..self.open).any(|gi| {
             let g=&self.groups[gi];
             let held=self.tasks.iter().any(|t|t.group==gi)||self.packs.iter().any(|p|p.group==gi);
@@ -2414,14 +2608,42 @@ impl Fleet {
             if now<g.not_before{return format!("{} {}s",g.wait_reason,left(g.not_before));}
             if let Some(at)=g.go_at.filter(|at|*at>now){return format!("领取错峰 {}s",left(at));}
             if self.signal_job.is_some() && self.signal.is_none(){return "读取任务信号".into();}
-            if let Some((_,signal))=&self.signal {
-                if signal.is_none() && now<g.fallback_at{return format!("信号不可用，直询 {}s",left(g.fallback_at));}
-                if signal.as_ref().is_some_and(|s|s.open==0 && s.urgent==0){return "信号暂无可派任务".into();}
+            if self.signal.is_some() {
+                match self.signal_counts(now) {
+                    Some((0, 0)) => return "信号暂无可派任务".into(),
+                    None if now < g.fallback_at => return format!("信号不可用，直询 {}s", left(g.fallback_at)),
+                    _ => {}
+                }
             }
         }
         "等待任务响应".into()
     }
+    // Demand snapshots expire sooner than account statistics. Refresh only
+    // this public file at expiry; polling the task signal remains independent.
+    fn refresh_demand(&mut self) {
+        if self.offline { return; }
+        let retry = Duration::from_secs(30);
+        if let Some(job) = &self.demand_job {
+            if !job.is_finished() { return; }
+            self.demand_next = self.demand_job.take().unwrap().join().unwrap_or_else(|_| Instant::now() + retry);
+        }
+        if Instant::now() < self.demand_next { return; }
+        let (net, ui) = (self.net.clone(), self.ui.clone());
+        self.demand_job = Some(std::thread::spawn(move || {
+            let sample = net.demand_snapshot(STATS_EVERY);
+            let now = Instant::now();
+            let Some((demand, total, ttl)) = sample else { return now + retry };
+            ui.status(|s| {
+                s.queued = Some((total, now + ttl));
+                s.computing_now = demand["computing"].as_u64();
+                s.per_hour = demand["per_hour"]["volunteers"].as_u64().zip(demand["per_hour"]["official"].as_u64());
+            });
+            now + ttl.clamp(Duration::from_secs(10), STATS_EVERY)
+        }));
+    }
+
     fn show(&mut self) {
+        self.refresh_demand();
         let (lanes, idle, open) = (self.lanes(), self.idle(), self.open);
         let (max_groups, held_secs) = (if self.cfg.slots > 0 { self.cfg.slots.min(self.max_groups()) } else { self.max_groups() }, self.held_secs());
         let running = |id: u64| self.lane_job.iter().filter(|l| **l == Some(id)).count();
@@ -2470,8 +2692,11 @@ impl Fleet {
         // BOARD RESULTS' STANDING, protocol 8: those taken and not settled yet
         // wait; protocol 7's is asked of `/api/board/mine` (`refresh_stats`).
         let board = (self.proto == 8).then(|| (self.board_confirmed, self.groups.iter().map(|g| g.journal.pending.len() as u64).sum::<u64>()));
+        let open_rows = self.signal_counts(now).map(|(open, _)| open);
         self.ui.status(|s| {
             s.state = state;
+            s.relayed = self.net.relayed();
+            s.open_rows = open_rows;
             s.kept_rows = kept_rows;
             s.kept_work = kept_work;
             if let Some(b) = board {
@@ -2840,7 +3065,7 @@ impl Fleet {
         if self.release_read.is_none() && !self.offline && self.release_at.elapsed() >= RELEASE_EVERY {
             self.release_at = Instant::now();
             let net = self.net.clone();
-            self.release_read = Some(std::thread::spawn(move || net.get("/release.json").ok().filter(|r| r.status == 200).map(|r| r.body)));
+            self.release_read = Some(std::thread::spawn(move || net.get_site("/release.json").ok().filter(|r| r.status == 200).map(|r| r.body)));
         }
         if self.engine_load.as_ref().is_some_and(|(_, h)| h.is_finished()) {
             let (engine, h) = self.engine_load.take().expect("checked above");
@@ -2977,16 +3202,6 @@ impl Fleet {
                 }
             }
             let dev = net.session.as_ref().map(|_| account::devices(&net));
-            // THE SITE'S SIDE - who is computing, what is owed, the week's ranking -
-            // read as the page reads it: files on the CDN, the worker's endpoint
-            // where a file is not reached (docs/BOARD.md §"The public stats").
-            let demand = net
-                .get(&net.public_file(DEMAND_FILE))
-                .ok()
-                .map(|r| r.body)
-                .filter(|b| b["ok"] == json!(true) && b["v"] == json!(1))
-                .or_else(|| net.get("/api/board/demand").ok().map(|r| r.body))
-                .filter(|b| b["ok"] == json!(true));
             // Signed in, the worker's ranking marks this account's row.
             let file = net.session.is_none().then(|| ranking_file(&net)).flatten();
             let top = file
@@ -3047,12 +3262,6 @@ impl Fleet {
                         s.account_points = None;
                     }
                 }
-                if let Some(d) = &demand {
-                    s.computing_now = d["computing"].as_u64();
-                    s.relayed = net.relayed();
-                    s.owed = Some(["new_builds", "rescores", "sweeps", "refreshes"].iter().map(|k| d["owed"][k].as_u64().unwrap_or(0)).sum());
-                    s.per_hour = Some((d["per_hour"]["volunteers"].as_u64().unwrap_or(0), d["per_hour"]["official"].as_u64().unwrap_or(0)));
-                }
                 if let Some(t) = &top {
                     s.ranking_total = t["total"].as_u64();
                     s.ranking = rows
@@ -3083,7 +3292,6 @@ impl Fleet {
 /// THE PUBLIC FILES the page reads before the worker (docs/BOARD.md §"The
 /// public stats", §"Demand"): what is owed and who is computing, and the
 /// rankings, each period's, written by the worker's cron.
-const DEMAND_FILE: &str = "/demand.json";
 const RANKING_FILE: &str = "/stats/contributors.json";
 /// …the ranking passed over once older than this by the server's clock, or of another day (its keys are that day's).
 const RANKING_STALE_MS: u64 = 30 * 60_000;
@@ -3238,5 +3446,58 @@ mod tests {
         // Past the window the oldest sightings go, but one is always kept.
         let r = paces(&seen, &at(4000, 50), t0 + Duration::from_secs(4000));
         assert!(r[0].is_some());
+    }
+
+    #[test]
+    fn quick_score_slicing_balances_heavy_candidates_and_preserves_order() {
+        let packed = |gas: u64| json!({ "shards": [json!([1, "k", { "gas": gas }]).to_string()] });
+        let items = vec![
+            packed(900),
+            packed(850),
+            packed(10),
+            packed(10),
+            packed(10),
+            packed(10),
+            json!({ "runs": 2 }),
+            json!({ "runs": 2 }),
+        ];
+        let width = quick_score_width(items.len(), 2, 450.0);
+        assert_eq!(width, 2);
+        assert_eq!(quick_score_width(items.len(), 2, 800.0), 1);
+        let pos = quick_score_slices(&items, 2, width).expect("heterogeneous gas slices");
+        assert_eq!(pos.len(), 4);
+        assert!(pos.iter().all(|ids| ids.windows(2).all(|w| w[0] < w[1])));
+        assert!(!pos.iter().any(|ids| ids.contains(&0) && ids.contains(&1)), "top two heavy items split apart");
+        let mut flat: Vec<usize> = pos.into_iter().flatten().collect();
+        flat.sort_unstable();
+        assert_eq!(flat, (0..items.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn riven_split_finals_dispatches_across_lanes_and_finishes_on_leader() {
+        let mut r = Riven::new(json!({ "weapon": "braton_prime", "strategy": "quick" }));
+        r.leader = Some(0);
+        r.split_finals = true;
+        let Some(Call::Optimize(lead_body)) = r.job(0, 1, 4) else { panic!("lead optimize") };
+        assert_eq!(jsnum::parse(&lead_body).unwrap()["quick_fleet"]["split_finals"], json!(true));
+        let lead_reply = json!({ "ok": true, "verify": [r#"{"runs":2,"a":0}"#, r#"{"runs":2,"a":1}"#], "generation": 9, "runs": 2 });
+        assert!(r.done(Done { tag: 1, lane: 0, ms: 2.0, out: Ok(lead_reply.to_string()) }, 4).unwrap().is_none());
+        let Some(Call::VerifyFinal(9, 0, rep0)) = r.job(1, 2, 4) else { panic!("verify 0") };
+        let Some(Call::VerifyFinal(9, 1, rep1)) = r.job(2, 3, 4) else { panic!("verify 1") };
+        assert_eq!(rep0, r#"{"runs":2,"a":0}"#);
+        assert_eq!(rep1, r#"{"runs":2,"a":1}"#);
+        assert!(r.job(0, 4, 4).is_none());
+        // Out-of-order finalist completion preserves original index slots.
+        assert!(r.done(Done { tag: 3, lane: 2, ms: 3.0, out: Ok("[9,1,{\"Measured\":[1,0,1,1,1,1,50]}]".into()) }, 4).unwrap().is_none());
+        assert!(r.done(Done { tag: 2, lane: 1, ms: 3.0, out: Ok("[9,0,{\"Measured\":[2,0,2,2,2,2,60]}]".into()) }, 4).unwrap().is_none());
+        assert!(r.job(1, 5, 4).is_none(), "finish_finals must run on the leader");
+        let Some(Call::FinishFinals(9, receipts)) = r.job(0, 6, 4) else { panic!("finish_finals") };
+        let parsed: Vec<String> = serde_json::from_str(&receipts).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert!(parsed[0].starts_with("[9,0,"));
+        assert!(parsed[1].starts_with("[9,1,"));
+        let fin = json!({ "ok": true, "results": [{ "mods": ["serration"], "kill_progress": 2.0 }], "final_work": 110 });
+        let done = r.done(Done { tag: 6, lane: 0, ms: 1.0, out: Ok(fin.to_string()) }, 4).unwrap().expect("settled");
+        assert_eq!(done["work"], json!(110));
     }
 }

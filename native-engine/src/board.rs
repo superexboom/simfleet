@@ -79,16 +79,20 @@ impl Row {
         let pieces = (from..end).map(|i| run_piece(p, i)).collect::<anyhow::Result<Vec<_>>>()?;
         let mut s = self.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?;
         s.ready.insert(from, pieces);
+        let mut merged_any = false;
         loop {
             let next = s.next;
             let Some(pieces) = s.ready.remove(&next) else { break };
             for piece in pieces {
                 s.acc.get_or_insert_with(Shard::default).merge(&piece);
                 s.next += 1;
+                merged_any = true;
             }
         }
-        if let Some(acc) = &mut s.acc {
-            crate::exact::carry_acc(acc)?;
+        if merged_any {
+            if let Some(acc) = &mut s.acc {
+                crate::exact::carry_acc(acc)?;
+            }
         }
         Ok(s.next)
     }

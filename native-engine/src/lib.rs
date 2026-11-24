@@ -33,6 +33,77 @@ fn optimize_plan(v: serde_json::Value) -> Result<wfsim_webapi::OptimizePlan, ser
     wfsim_webapi::parse_optimize(&v)
 }
 
+#[cfg(feature = "split-finals")]
+mod finals {
+    use serde_json::{json, Value};
+    use std::cell::{Cell, RefCell};
+    use wfsim_webapi::{FinalRound, FinalScore};
+
+    thread_local! {
+        static GENERATION: Cell<u32> = const { Cell::new(0) };
+        static ROUND: RefCell<Option<(u32, FinalRound)>> = const { RefCell::new(None) };
+    }
+
+    pub fn clear() {
+        ROUND.with(|r| r.borrow_mut().take());
+    }
+
+    pub fn dispatch(round: FinalRound) -> Value {
+        let id = GENERATION.with(|g| {
+            let next = g.get().wrapping_add(1);
+            g.set(next);
+            next
+        });
+        let runs = round.replays().next().expect("multiple finalists")["runs"]
+            .as_u64()
+            .expect("replay runs");
+        let requests: Vec<String> = round.replays().map(Value::to_string).collect();
+        ROUND.with(|r| r.replace(Some((id, round))));
+        json!({ "ok": true, "verify": requests, "generation": id, "runs": runs })
+    }
+
+    pub fn verify(generation: u32, index: u32, replay: &str) -> String {
+        let replay: Value = match serde_json::from_str(replay) {
+            Ok(v) => v,
+            Err(_) => return String::new(),
+        };
+        let score = FinalScore::simulate(&replay, &mut |_, _| {});
+        serde_json::to_string(&(generation, index, score)).expect("finalist receipt")
+    }
+
+    fn collect(generation: u32, count: usize, receipts: &str) -> Option<Vec<FinalScore>> {
+        let raw: Vec<String> = serde_json::from_str(receipts).ok()?;
+        if raw.len() != count {
+            return None;
+        }
+        let mut slots: Vec<_> = (0..count).map(|_| None).collect();
+        for receipt in raw {
+            let (id, index, score): (u32, usize, FinalScore) = serde_json::from_str(&receipt).ok()?;
+            if id != generation || slots.get_mut(index)?.replace(score).is_some() {
+                return None;
+            }
+        }
+        slots.into_iter().collect()
+    }
+
+    pub fn finish(generation: u32, receipts: &str) -> String {
+        ROUND
+            .with(|r| {
+                let mut r = r.borrow_mut();
+                if r.as_ref().is_none_or(|(id, _)| *id != generation) {
+                    return wfsim_webapi::err_json("stale finalist round");
+                }
+                let (_, round) = r.take().expect("checked round");
+                let count = round.replays().len();
+                match collect(generation, count, receipts) {
+                    Some(scores) => round.measured(scores),
+                    None => wfsim_webapi::err_json("invalid or incomplete finalist receipts"),
+                }
+            })
+            .to_string()
+    }
+}
+
 #[cfg(feature = "fast-board")]
 mod board;
 #[cfg(feature = "fast-board")]
@@ -54,7 +125,9 @@ pub extern "C" fn sfe_engine_id() -> *const c_char {
 
 #[no_mangle]
 pub extern "C" fn sfe_capabilities() -> u32 {
-    u32::from(cfg!(feature = "fast-board")) | (u32::from(option_env!("SFE_INLINE_OPTIMIZER") == Some("1")) << 1)
+    u32::from(cfg!(feature = "fast-board"))
+        | (u32::from(option_env!("SFE_INLINE_OPTIMIZER") == Some("1")) << 1)
+        | (u32::from(cfg!(feature = "split-finals")) << 2)
 }
 
 /// `api(path, body)` as the wasm build has it; the answer is owned by the
@@ -94,10 +167,26 @@ pub unsafe extern "C" fn sfe_optimize(body: *const u8, body_len: usize, out_len:
         if let Some(o) = v.as_object_mut() {
             o.insert("threads".into(), serde_json::json!(1));
         }
-        let plan = match optimize_plan(v) {
+        #[cfg(feature = "split-finals")]
+        let (lead, fresh, split_finals) = (
+            v["quick_fleet"]["lead"] == true,
+            v["quick_fleet"]["fresh"] == true,
+            v["quick_fleet"]["split_finals"] == true,
+        );
+        #[allow(unused_mut)]
+        let mut plan = match optimize_plan(v) {
             Ok(p) => p,
             Err(e) => return e.to_string(),
         };
+        #[cfg(feature = "split-finals")]
+        if lead {
+            if fresh {
+                finals::clear();
+            }
+            if split_finals {
+                plan.dispatch_finals = Some(finals::dispatch);
+            }
+        }
         // THE WASM BUILD'S CALL (wasm/src/lib.rs `optimize_inner`), its
         // observers here doing nothing: what they see is display only.
         let state = wfsim_optimizer::FunnelState::default();
@@ -112,6 +201,33 @@ pub unsafe extern "C" fn sfe_optimize(body: *const u8, body_len: usize, out_len:
         )
         .to_string()
     });
+    hand_out(r, out_len)
+}
+
+#[cfg(feature = "split-finals")]
+#[no_mangle]
+pub unsafe extern "C" fn sfe_verify_final(
+    generation: u32,
+    index: u32,
+    replay: *const u8,
+    replay_len: usize,
+    out_len: *mut usize,
+) -> *mut u8 {
+    let replay = String::from_utf8_lossy(std::slice::from_raw_parts(replay, replay_len));
+    let r = std::panic::catch_unwind(move || finals::verify(generation, index, &replay));
+    hand_out(r, out_len)
+}
+
+#[cfg(feature = "split-finals")]
+#[no_mangle]
+pub unsafe extern "C" fn sfe_finish_finals(
+    generation: u32,
+    receipts: *const u8,
+    receipts_len: usize,
+    out_len: *mut usize,
+) -> *mut u8 {
+    let receipts = String::from_utf8_lossy(std::slice::from_raw_parts(receipts, receipts_len));
+    let r = std::panic::catch_unwind(move || finals::finish(generation, &receipts));
     hand_out(r, out_len)
 }
 

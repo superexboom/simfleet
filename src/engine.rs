@@ -42,6 +42,7 @@ pub struct WasmCode {
     /// The release's data pack, installed into every instance; None for a
     /// release that names none (or a reference module that embeds its data).
     pack: Option<Arc<Vec<u8>>>,
+    pub has_split_finals: bool,
 }
 
 fn config() -> Config {
@@ -137,7 +138,9 @@ impl WasmCode {
                     .map_err(we)?;
             }
         }
-        Ok(WasmCode { engine, module, linker, pack: None })
+        let has_export = |n: &str| module.exports().any(|e| e.name() == n);
+        let has_split_finals = has_export("verify_final") && has_export("finish_finals");
+        Ok(WasmCode { engine, module, linker, pack: None, has_split_finals })
     }
 
     /// The data pack every instance of this module is given first.
@@ -147,6 +150,8 @@ impl WasmCode {
     }
 }
 
+type FinishFinalsWasm = TypedFunc<(u32, u32, u32), (u32, u32)>;
+
 pub struct WasmInst {
     store: Store<Host>,
     mem: Memory,
@@ -154,6 +159,8 @@ pub struct WasmInst {
     free: TypedFunc<(u32, u32, u32), ()>,
     api: TypedFunc<(u32, u32, u32, u32), (u32, u32)>,
     optimize: Option<Func>,
+    verify_final: Option<Func>,
+    finish_finals: Option<FinishFinalsWasm>,
 }
 
 impl WasmInst {
@@ -175,6 +182,8 @@ impl WasmInst {
             free: inst.get_typed_func(&mut store, "__wbindgen_free").map_err(we)?,
             api: inst.get_typed_func(&mut store, "api").map_err(we)?,
             optimize: inst.get_func(&mut store, "optimize"),
+            verify_final: inst.get_func(&mut store, "verify_final"),
+            finish_finals: inst.get_typed_func(&mut store, "finish_finals").ok(),
             mem,
             store,
         };
@@ -226,10 +235,40 @@ impl WasmInst {
         let (p, n) = (out[0].unwrap_i32() as u32, out[1].unwrap_i32() as u32);
         self.take(p, n)
     }
+
+    pub fn verify_final(&mut self, generation: u32, index: u32, replay: &str) -> Result<String> {
+        let f = self.verify_final.context("engine exports no verify_final")?;
+        let rp = self.put(replay)?;
+        let args = [
+            Val::I32(generation as i32),
+            Val::I32(index as i32),
+            Val::I32(rp as i32),
+            Val::I32(replay.len() as i32),
+            Val::ExternRef(None),
+        ];
+        let mut out = [Val::I32(0), Val::I32(0)];
+        f.call(&mut self.store, &args, &mut out).map_err(we)?;
+        let (p, n) = (out[0].unwrap_i32() as u32, out[1].unwrap_i32() as u32);
+        self.take(p, n)
+    }
+
+    pub fn finish_finals(&mut self, generation: u32, receipts: &str) -> Result<String> {
+        let f = self.finish_finals.clone().context("engine exports no finish_finals")?;
+        let rp = self.put(receipts)?;
+        let (p, n) = f.call(&mut self.store, (generation, rp, receipts.len() as u32)).map_err(we)?;
+        self.take(p, n)
+    }
 }
 
 type ApiFn = unsafe extern "C" fn(*const u8, usize, *const u8, usize, *mut usize) -> *mut u8;
 type OptimizeFn = unsafe extern "C" fn(*const u8, usize, *mut usize) -> *mut u8;
+type VerifyFinalFn = unsafe extern "C" fn(u32, u32, *const u8, usize, *mut usize) -> *mut u8;
+type FinishFinalsFn = unsafe extern "C" fn(u32, *const u8, usize, *mut usize) -> *mut u8;
+#[derive(Clone, Copy)]
+struct FinalsApi {
+    verify: VerifyFinalFn,
+    finish: FinishFinalsFn,
+}
 /// `wfsim_install_data(body, body_len, &len) -> ptr` (abi 2), the answer "" or why.
 type InstallFn = unsafe extern "C" fn(*const u8, usize, *mut usize) -> *mut u8;
 type FreeFn = unsafe extern "C" fn(*mut u8, usize);
@@ -358,6 +397,7 @@ pub struct NativeLib {
     _lib: LibHandle,
     api: ApiFn,
     optimize: Option<OptimizeFn>,
+    finals: Option<FinalsApi>,
     board: Option<BoardApi>,
     pub board_checked: std::sync::atomic::AtomicBool,
     inline_optimizer: bool,
@@ -384,6 +424,15 @@ impl NativeLib {
             let id: IdFn = *lib.lib().get::<IdFn>(b"sfe_engine_id\0")?;
             let optimize = lib.lib().get::<OptimizeFn>(b"sfe_optimize\0").ok().map(|f| *f);
             let capabilities = lib.lib().get::<unsafe extern "C" fn() -> u32>(b"sfe_capabilities\0").ok().map(|f| f()).unwrap_or(0);
+            let finals = (|| -> Option<FinalsApi> {
+                if capabilities & 4 == 0 {
+                    return None;
+                }
+                Some(FinalsApi {
+                    verify: *lib.lib().get::<VerifyFinalFn>(b"sfe_verify_final\0").ok()?,
+                    finish: *lib.lib().get::<FinishFinalsFn>(b"sfe_finish_finals\0").ok()?,
+                })
+            })();
             let board = (|| -> Option<BoardApi> {
                 let abi = lib.lib().get::<unsafe extern "C" fn() -> u32>(b"sfe_board_abi\0").ok()?;
                 if abi() != 1 { return None; }
@@ -399,6 +448,7 @@ impl NativeLib {
                 _lib: lib,
                 api,
                 optimize,
+                finals,
                 board,
                 board_checked: Default::default(),
                 inline_optimizer: capabilities & 2 != 0,
@@ -442,6 +492,7 @@ impl NativeLib {
                 _lib: lib,
                 api,
                 optimize: None,
+                finals: None,
                 board: None,
                 board_checked: Default::default(),
                 inline_optimizer: false,
@@ -497,6 +548,10 @@ impl NativeLib {
         self.riven_state()
     }
 
+    pub fn has_split_finals(&self) -> bool {
+        self.finals.is_some()
+    }
+
     /// `optimize(body)`, as the wasm's, on the calling thread (a quick_fleet
     /// lead's state is that thread's, so a lead always runs on one lane).
     pub fn optimize(&self, body: &str) -> Result<String> {
@@ -506,6 +561,26 @@ impl NativeLib {
             let mut n = 0usize;
             let p = f(body.as_ptr(), body.len(), &mut n);
             self.take(p, n, "optimize")
+        }
+    }
+
+    pub fn verify_final(&self, generation: u32, index: u32, replay: &str) -> Result<String> {
+        let Some(f) = self.finals else { bail!("this native engine has no split finals") };
+        // SAFETY: as `api`.
+        unsafe {
+            let mut n = 0usize;
+            let p = (f.verify)(generation, index, replay.as_ptr(), replay.len(), &mut n);
+            self.take(p, n, "verify_final")
+        }
+    }
+
+    pub fn finish_finals(&self, generation: u32, receipts: &str) -> Result<String> {
+        let Some(f) = self.finals else { bail!("this native engine has no split finals") };
+        // SAFETY: as `api`.
+        unsafe {
+            let mut n = 0usize;
+            let p = (f.finish)(generation, receipts.as_ptr(), receipts.len(), &mut n);
+            self.take(p, n, "finish_finals")
         }
     }
 
@@ -528,6 +603,15 @@ pub struct Code {
     pub native: Option<NativeLib>,
 }
 
+impl Code {
+    pub fn can_split_finals(&self, backend: Backend) -> bool {
+        match backend {
+            Backend::Native => self.native.as_ref().is_some_and(|n| n.can_optimize() && n.has_split_finals()),
+            Backend::Wasm => self.wasm.has_split_finals,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Backend {
     Wasm,
@@ -537,6 +621,8 @@ pub enum Backend {
 pub enum Call {
     Api(&'static str, String),
     Optimize(String),
+    VerifyFinal(u32, u32, String),
+    FinishFinals(u32, String),
     /// A board row's runs (`/api/board/runs`, so many of them): the answer is
     /// its shards, read on the lane as the page reads them (work.rs `shards_text`).
     Runs(String, u32),
@@ -573,11 +659,39 @@ impl Exec {
         match call {
             Call::Api(path, body) => self.door(backend, Some(path), body),
             Call::Optimize(body) => self.door(backend, None, body),
+            Call::VerifyFinal(gen, idx, replay) => self.finals(backend, *gen, Some(*idx), replay),
+            Call::FinishFinals(gen, receipts) => self.finals(backend, *gen, None, receipts),
             Call::Runs(body, count) => crate::work::shards_text(&self.door(backend, Some("/api/board/runs"), body)?, *count),
             Call::Fold(body) => crate::work::acc_text(&self.door(backend, Some("/api/board/fold"), body)?),
             Call::NativeRuns(row, from, count) => row.runs(*from, *count),
             Call::NativeScore(row) => row.score(),
         }
+    }
+    fn finals(&mut self, backend: Backend, generation: u32, index: Option<u32>, body: &str) -> Result<String> {
+        if let (Backend::Native, Some(n)) = (backend, &self.code.native) {
+            if n.can_optimize() && n.has_split_finals() {
+                if self.wasm.is_some() && self.wasm_at.elapsed() >= WASM_IDLE {
+                    self.wasm = None;
+                }
+                return match index {
+                    Some(i) => n.verify_final(generation, i, body),
+                    None => n.finish_finals(generation, body),
+                };
+            }
+        }
+        if self.wasm.is_none() {
+            self.wasm = Some(WasmInst::new(&self.code.wasm)?);
+        }
+        let w = self.wasm.as_mut().unwrap();
+        let r = match index {
+            Some(i) => w.verify_final(generation, i, body),
+            None => w.finish_finals(generation, body),
+        };
+        self.wasm_at = Instant::now();
+        if r.is_err() {
+            self.wasm = None;
+        }
+        r
     }
     /// `api(path, body)`, or `optimize(body)` with no path.
     fn door(&mut self, backend: Backend, path: Option<&str>, body: &str) -> Result<String> {

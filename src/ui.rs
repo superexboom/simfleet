@@ -116,9 +116,9 @@ pub struct Status {
     pub computing_now: Option<u64>,
     /// The board's work by the Hong Kong relay (net.rs `road`), not direct.
     pub relayed: bool,
-    /// Board rows the site owes (`/api/board/demand`), and the rows done an
-    /// hour by volunteers and by the official machines.
-    pub owed: Option<u64>,
+    /// All queued tasks and the expiry of the published count.
+    pub queued: Option<(u64, Instant)>,
+    pub open_rows: Option<u64>,
     pub per_hour: Option<(u64, u64)>,
     pub ranking: Vec<Ranked>,
     pub ranking_total: Option<u64>,
@@ -1382,7 +1382,8 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
         }
     }
 
-    if visible("site") && yy + 3 < end && (s.computing_now.is_some() || s.owed.is_some()) {
+    let queued = s.queued.filter(|(_, until)| Instant::now() < *until).map(|(total, _)| total);
+    if visible("site") && yy + 3 < end && (s.computing_now.is_some() || queued.is_some() || s.open_rows.is_some()) {
         header(c, x, yy, w, " 全站 ", "", HDR);
         yy += 1;
         if let Some(n) = s.computing_now {
@@ -1390,8 +1391,10 @@ fn side(c: &mut Canvas, x: usize, y: usize, w: usize, h: usize, f: &Frame) {
             kv(c, x, yy, w, "在线", &n.to_string(), &ph);
             yy += 1;
         }
-        if let (Some(o), true) = (s.owed, yy < end) {
-            kv(c, x, yy, w, "待算", &format!("{} 行", group(o)), "  榜单");
+        if yy < end {
+            let total = queued.map(group).unwrap_or_else(|| "—".into());
+            let open = s.open_rows.map(group).unwrap_or_else(|| "—".into());
+            kv(c, x, yy, w, "队列", &total, &format!("  全站可派 {open}"));
             yy += 1;
         }
         if yy < end {
@@ -1633,7 +1636,7 @@ mod tests {
             device_points: Some(0),
             today_points: Some(21_388),
             computing_now: Some(37),
-            owed: Some(23_320),
+            queued: Some((23_320, Instant::now() + Duration::from_secs(60))),
             per_hour: Some((1212, 77)),
             ranking: (1..=12)
                 .map(|i| Ranked {

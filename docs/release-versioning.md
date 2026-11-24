@@ -4,8 +4,8 @@
 
 | 层 | Release / 文件示例 | 版本改变的条件 |
 |---|---|---|
-| 客户端 | `v0.9.0`；`simfleet-0.9.0-windows-x64.zip` | 界面、调度、协议、回退和资源管理改变 |
-| CPU 引擎 | `engine-3194962a0af7`；`3194962a0af7-sfe2-v3.dll` | 上游引擎哈希；本地包装和构建修订；CPU 指令级别 |
+| 客户端 | `v0.9.1`；`simfleet-0.9.1-windows-x64.zip` | 界面、调度、协议、回退和资源管理改变 |
+| CPU 引擎 | `engine-95e3884615ee`；`95e3884615ee-sfe3-v3.dll` | 上游引擎哈希；本地包装和构建修订；CPU 指令级别 |
 | GPU 引擎 | `gpu-3194962a0af7-sfg3`；`simfleet-gpu-3194962a0af7-sfg3-sm120-windows-x64.zip` | 上游引擎哈希；GPU 包格式/实现修订；GPU 架构 |
 
 上游引擎标识不能拿客户端版本号代替。`sfe2` 将 Windows 默认构建切为 PGO＋ThinLTO v3，并保留新文件名避免覆盖已发布的 sfe1；Linux 仍构建 baseline/v3，macOS 构建 Apple silicon。`sfg3` 是 GPU 包的协议/实现修订，使用 1 KiB 私有页和 16 位页索引，需要 preview.14 或更新客户端。`v3` 指 x86-64-v3 主机指令集，`sm75` / `sm89` / `sm120` 指 NVIDIA GPU 架构，两者不能混称。GPU 包内的 `wire.dll` 也需要 x86-64-v3。

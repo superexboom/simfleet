@@ -57,7 +57,7 @@ pub fn protocols_of(v: &Value) -> Vec<u32> {
 }
 
 pub fn fetch_release(net: &Net) -> Result<Release> {
-    let r = net.get("/release.json")?;
+    let r = net.get_site("/release.json")?;
     parse_release(&r.body)
 }
 pub fn parse_release(body: &Value) -> Result<Release> {
@@ -73,6 +73,16 @@ pub fn parse_release(body: &Value) -> Result<Release> {
 /// `variant` is "" for the baseline build, or a CPU level ("-v3").
 pub fn native_lib_name(engine: &str, variant: &str) -> String {
     legacy_native_lib_name(&format!("{engine}-sfe{}", include_str!("../native-engine/revision").trim()), variant)
+}
+
+pub fn native_lib_names(engine: &str, variant: &str) -> Vec<String> {
+    let rev = include_str!("../native-engine/revision").trim().parse::<u32>().unwrap_or(1);
+    let mut out: Vec<String> = (2..=rev)
+        .rev()
+        .map(|r| legacy_native_lib_name(&format!("{engine}-sfe{r}"), variant))
+        .collect();
+    out.push(legacy_native_lib_name(engine, variant));
+    out
 }
 
 fn legacy_native_lib_name(engine: &str, variant: &str) -> String {
@@ -225,23 +235,26 @@ pub fn build_code(net: &Net, paths: &Paths, cfg: &Config, ui: &Ui, rel: &Release
     let mut code = Code { wasm, native: None };
     // The best build this CPU runs that is here (or published) and passes.
     let variants = if cfg.native_engine { native_variants() } else { vec![] };
-    for (variant, name) in [true, false].into_iter().flat_map(|current| {
-        variants.iter().map(move |&variant| (variant, if current { native_lib_name(&rel.engine, variant) } else { legacy_native_lib_name(&rel.engine, variant) }))
-    }) {
-        let lib = paths.engines.join(name);
-        if !lib.exists() && (cfg.native_engine_url.is_empty() || !fetch_native(net, cfg, ui, rel, &lib)) {
-            continue;
-        }
-        match NativeLib::open(&lib) {
-            Ok(mut n) if n.engine_id == rel.engine => {
-                n.variant = variant;
-                code = held_to_wasm(code, n, ui, format!("原生引擎 {}{}", rel.engine, variant_label(variant)))?;
-                if code.native.is_some() {
-                    break;
-                }
+    let tiers = variants.iter().map(|&v| native_lib_names(&rel.engine, v).len()).max().unwrap_or(0);
+    'search: for tier in 0..tiers {
+        for &variant in &variants {
+            let names = native_lib_names(&rel.engine, variant);
+            let Some(name) = names.get(tier) else { continue };
+            let lib = paths.engines.join(name);
+            if !lib.exists() && (cfg.native_engine_url.is_empty() || !fetch_native(net, cfg, ui, rel, &lib)) {
+                continue;
             }
-            Ok(n) => ui.log(format!("{C_GO}[引擎]{C_END} {} 的引擎号是 {}，不是 {}；不使用", lib.display(), n.engine_id, rel.engine)),
-            Err(e) => ui.log(format!("{C_BAD}[引擎]{C_END} 原生引擎{}加载失败：{}", variant_label(variant), load_failure(&e))),
+            match NativeLib::open(&lib) {
+                Ok(mut n) if n.engine_id == rel.engine => {
+                    n.variant = variant;
+                    code = held_to_wasm(code, n, ui, format!("原生引擎 {}{}", rel.engine, variant_label(variant)))?;
+                    if code.native.is_some() {
+                        break 'search;
+                    }
+                }
+                Ok(n) => ui.log(format!("{C_GO}[引擎]{C_END} {} 的引擎号是 {}，不是 {}；不使用", lib.display(), n.engine_id, rel.engine)),
+                Err(e) => ui.log(format!("{C_BAD}[引擎]{C_END} 原生引擎{}加载失败：{}", variant_label(variant), load_failure(&e))),
+            }
         }
     }
     // NONE OF SIMFLEET'S YET: WFSim's own library, for board rows (a riven gain
@@ -416,8 +429,10 @@ pub fn fetch_official(net: &Net, ui: &Ui, rel: &Release, lib: &std::path::Path) 
 pub fn ours_published(net: &Net, cfg: &Config, rel: &Release) -> bool {
     !cfg.native_engine_url.is_empty()
         && native_variants().iter().any(|v| {
-            let name = native_lib_name(&rel.engine, v);
-            net.download(&format!("{}/engine-{}/{name}.sha256", cfg.native_engine_url.trim_end_matches('/'), rel.engine), |_, _| {}).is_ok()
+            native_lib_names(&rel.engine, v).into_iter().any(|name| {
+                net.download(&format!("{}/engine-{}/{name}.sha256", cfg.native_engine_url.trim_end_matches('/'), rel.engine), |_, _| {})
+                    .is_ok()
+            })
         })
 }
 
@@ -498,16 +513,26 @@ pub fn call(exec: &mut Exec, backend: Backend, path: &'static str, body: String)
 fn riven_canary(code: &Arc<Code>) -> Result<()> {
     let start = |slots: Value, fixed: Value| json!({ "slots": slots, "evolutions": [], "arcane": [], "fixed": fixed });
     let three = json!([{ "kind": "mods", "idx": 0 }, { "kind": "mods", "idx": 1 }, { "kind": "mods", "idx": 2 }]);
+    let split = code.wasm.has_split_finals && code.native.as_ref().is_some_and(NativeLib::has_split_finals);
     // Three cards pinned, so the descent is short; ten-run screening, so the
-    // rough items travel the fleet too.
+    // rough items travel the fleet too; two starts when split_finals is present
+    // so parallel finalist verification is exercised end-to-end.
+    let starts = if split {
+        vec![
+            start(json!(["hellfire", "infected_clip", "stormbringer"]), three.clone()),
+            start(json!(["cryo_rounds", "infected_clip", "hellfire"]), three),
+        ]
+    } else {
+        vec![start(json!(["hellfire", "infected_clip", "stormbringer"]), three)]
+    };
     let req = json!({
         "weapon": "braton_prime", "enemy": "thrax_centurion", "level": 100,
-        "duration": 2.0, "runs": 2, "finalists": 1, "candidate_runs": 10, "strategy": "quick",
-        "starts": [start(json!(["hellfire", "infected_clip", "stormbringer"]), three)],
+        "duration": 2.0, "runs": 2, "finalists": if split { 2 } else { 1 }, "candidate_runs": 10, "strategy": "quick",
+        "starts": starts,
     });
     let search = |native: bool| -> Result<Value> {
         let mut exec = Exec::new(code.clone());
-        let mut step = |body: &Value| -> Result<Value> {
+        let step = |exec: &mut Exec, body: &Value| -> Result<Value> {
             let s = body.to_string();
             let out = match (native, &code.native) {
                 (true, Some(n)) => n.optimize(&s)?,
@@ -519,17 +544,45 @@ fn riven_canary(code: &Arc<Code>) -> Result<()> {
         let (mut scores, mut work, mut fights) = (json!([]), 0u64, 0u64);
         for n in 0..500 {
             let mut lead = req.clone();
-            lead["quick_fleet"] = json!({ "lead": true, "fresh": n == 0, "scores": scores });
-            let r = step(&lead)?;
+            lead["quick_fleet"] = json!({ "lead": true, "fresh": n == 0, "scores": scores, "split_finals": split });
+            let mut r = step(&mut exec, &lead)?;
+            if let Some(replays) = r["verify"].as_array().filter(|a| !a.is_empty()).cloned() {
+                let gen = u32::try_from(r["generation"].as_u64().context("missing finalist generation")?)?;
+                let mut receipts = Vec::with_capacity(replays.len());
+                for (idx, replay) in replays.iter().enumerate().rev() {
+                    let s = replay.as_str().context("finalist replay must be string")?;
+                    let receipt = match (native, &code.native) {
+                        (true, Some(n)) => n.verify_final(gen, idx as u32, s)?,
+                        (true, None) => bail!("no native engine"),
+                        (false, _) => exec.run(Backend::Wasm, &Call::VerifyFinal(gen, idx as u32, s.to_string()))?,
+                    };
+                    if receipt.is_empty() {
+                        bail!("empty finalist receipt");
+                    }
+                    receipts.push(receipt);
+                }
+                let raw = serde_json::to_string(&receipts)?;
+                let finished = match (native, &code.native) {
+                    (true, Some(n)) => n.finish_finals(gen, &raw)?,
+                    (true, None) => bail!("no native engine"),
+                    (false, _) => exec.run(Backend::Wasm, &Call::FinishFinals(gen, raw))?,
+                };
+                r = jsnum::parse(&finished)?;
+            }
             let pending = match r["pending"].as_array() {
                 Some(p) if truthy(&r["pending"]) => p.clone(),
-                _ => return Ok(json!({ "results": r["results"], "final_work": r["final_work"], "work": work, "fights": fights })),
+                _ => {
+                    if r["ok"] == json!(false) {
+                        bail!("{}", r["error"].as_str().unwrap_or("optimize failed"));
+                    }
+                    return Ok(json!({ "results": r["results"], "final_work": r["final_work"], "work": work, "fights": fights }));
+                }
             };
             let mut got = Vec::new();
             for part in pending.chunks(pending.len().div_ceil(2).max(1)) {
                 let mut b = req.clone();
-                b["quick_fleet"] = json!({ "score": part });
-                let o = step(&b)?;
+                b["quick_fleet"] = json!({ "score": part, "compact_shards": 1 });
+                let o = step(&mut exec, &b)?;
                 work += o["work"].as_u64().unwrap_or(0);
                 fights += o["fights"].as_u64().unwrap_or(0);
                 got.extend(o["scores"].as_array().cloned().unwrap_or_default());
@@ -538,7 +591,7 @@ fn riven_canary(code: &Arc<Code>) -> Result<()> {
         }
         bail!("the search never settled")
     };
-    let a=crate::reference_cache::compute(&json!({"riven_canary":req}),||search(false))?;
+    let a = crate::reference_cache::compute(&json!({ "riven_canary": req, "split": split, "compact": 1 }), || search(false))?;
     let mut b=search(true)?;
     if a["results"].as_array().is_none_or(|r| r.is_empty()) {
         bail!("the wasm found nothing");
@@ -1067,5 +1120,13 @@ mod tests {
             "rivens": { "riven:abc": { "riven_pos": ["critical_chance"], "riven_neg": "zoom" } } });
         let b = board_payload(&res, &ctx);
         assert_eq!(b.to_string(), r#"{"benchmark":"standard_single_target","weapon":"braton","mode":"base","mods":["serration","riven"],"riven_pos":["critical_chance"],"riven_neg":"zoom","evolutions":["e1"],"arcanes":["primary_merciless"],"valence":"","exilus":"vigilante_armaments"}"#);
+    }
+
+    #[test]
+    fn native_lib_names_prefer_current_revision_then_fallback() {
+        let names = native_lib_names("95e3884615ee", "-v3");
+        assert_eq!(names[0], native_lib_name("95e3884615ee", "-v3"));
+        assert!(names.iter().any(|n| n.contains("95e3884615ee-sfe2-v3.")));
+        assert_eq!(names.last().unwrap(), &legacy_native_lib_name("95e3884615ee", "-v3"));
     }
 }
